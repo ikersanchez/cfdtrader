@@ -1,0 +1,3 @@
+- Tasks are github issues, one at a time
+- Read the acceptance criteria before starting and before closing
+- Commit regurarly
