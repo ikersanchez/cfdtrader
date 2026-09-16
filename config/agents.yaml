@@ -1,0 +1,4 @@
+# Agentes — pesos, umbrales y activación.
+#
+# Vacío a propósito. Fase 3 (`_docs/plan.md` §7). El gate de decisión no se
+# configura aquí: es una función pura en `src/cfdtrader/decision/gate.py`.

@@ -1,0 +1,7 @@
+# Calendario — festivos de EE. UU., medias sesiones y cambios de horario (DST).
+#
+# Vacío a propósito. La tarea #4 construye el módulo de calendario con la librería
+# `holidays` y las reglas de `plan.md` §8.3; el esquema lo define Pydantic.
+#
+# Regla que condiciona todo lo demás: la hora de referencia interna es
+# `America/New_York` (nunca una hora local fija) y todo se guarda en UTC.

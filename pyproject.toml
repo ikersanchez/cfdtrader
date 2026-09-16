@@ -1,0 +1,129 @@
+[project]
+name = "cfdtrader"
+version = "0.1.0"
+description = "Sistema multiagente de apoyo a la decisión intradía sobre un CFD del S&P 500"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # ── HTTP e ingesta ──────────────────────────────────────────────────────
+    # Un solo cliente HTTP para FRED, ECB, GDELT, RSS y Telegram (tech_stack.md §3.3.4)
+    "httpx>=0.27,<1",
+    "tenacity>=8.2,<10",
+    # ── Fuentes de datos ────────────────────────────────────────────────────
+    "yfinance>=0.2.40,<1",
+    "holidays>=0.50,<1",
+    # ── Almacenamiento ──────────────────────────────────────────────────────
+    "duckdb>=1.0,<2",
+    "pyarrow>=16.0,<30",
+    # ── Procesamiento ───────────────────────────────────────────────────────
+    "polars>=1.0,<2",
+    "numpy>=1.26,<3",
+    # pandas solo donde una librería lo exija (arch, quantstats) — tech_stack.md §4.4
+    "pandas>=2.2,<4",
+    "scipy>=1.13,<2",
+    # ── Validación y configuración ──────────────────────────────────────────
+    "pydantic>=2.7,<3",
+    "pydantic-settings>=2.3,<3",
+    "pandera>=0.20,<1",
+    "PyYAML>=6.0,<7",
+    # ── Machine learning ────────────────────────────────────────────────────
+    "scikit-learn>=1.5,<2",
+    "lightgbm>=4.3,<5",
+    "arch>=7.2,<9",
+    # ── Backtest ────────────────────────────────────────────────────────────
+    "quantstats>=0.0.60,<0.1",
+    # ── Observabilidad ──────────────────────────────────────────────────────
+    "loguru>=0.7,<1",
+]
+
+# Fase 0–2: stack mínimo viable (tech_stack.md §5.1).
+# Nada de §5.2 (openai, langgraph, feedparser, gdeltdoc, streamlit, …) hasta que
+# la fase que lo pide lo requiera.
+[dependency-groups]
+dev = [
+    "ruff>=0.6",
+    "pyright>=1.1.380",
+    "pytest>=8.2,<10",
+    "pytest-cov>=5,<8",
+    "hypothesis>=6.100,<7",
+    "pre-commit>=3.7,<5",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cfdtrader"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ruff — lint y formato (tech_stack.md §4.1)
+# ─────────────────────────────────────────────────────────────────────────────
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+extend-exclude = [
+    "_docs",          # documentación
+    "data",           # datos locales, nunca versionados
+    "runs",           # experimentos de backtest
+    "notebooks",      # exploración
+    "setup_github.py", # herramienta de arranque de un solo uso, ya ejecutada
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
+    "RUF", # reglas propias de ruff
+    "S",   # flake8-bandit (higiene de seguridad)
+]
+# RUF001–RUF003 marcan caracteres "ambiguos". Se permiten los que usa la prosa
+# técnica en español; el resto de confundibles sigue avisando.
+allowed-confusables = ["–", "—", "≈", "≤", "≥", "×", "·", "→", "⭐", "⚠"]
+# `assert` es el mecanismo de los tests, no un error de seguridad
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["cfdtrader"]
+
+[tool.ruff.format]
+quote-style = "double"
+docstring-code-format = true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# pyright — tipado estático en modo estricto (tech_stack.md §4.1)
+# ─────────────────────────────────────────────────────────────────────────────
+[tool.pyright]
+include = ["src", "tests"]
+exclude = ["**/node_modules", "**/__pycache__", ".venv", "_docs", "data", "runs", "notebooks"]
+typeCheckingMode = "strict"
+pythonVersion = "3.12"
+venvPath = "."
+venv = ".venv"
+# Varias fuentes del stack (yfinance, quantstats) no publican stubs. Se relaja
+# solo esto: el resto del modo estricto sigue activo.
+reportMissingTypeStubs = false
+
+# ─────────────────────────────────────────────────────────────────────────────
+# pytest y cobertura (tech_stack.md §4.14)
+# ─────────────────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers", "--strict-config"]
+
+[tool.coverage.run]
+branch = true
+source = ["cfdtrader"]
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:"]

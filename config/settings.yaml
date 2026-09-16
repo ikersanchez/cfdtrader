@@ -1,0 +1,8 @@
+# Configuración del sistema — bróker, tier, umbrales, capital.
+#
+# Todavía NO hay esquema: lo define Pydantic en la tarea que use cada valor
+# (tech_stack.md §4.2: un error de configuración debe fallar al arrancar, no a
+# mitad del pipeline).
+#
+# Este fichero está vacío a propósito. No se inventan valores: los umbrales, el
+# bróker y el capital son decisiones abiertas (tech_stack.md §11 bis).

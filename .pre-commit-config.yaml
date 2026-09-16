@@ -1,0 +1,48 @@
+# Hooks locales de calidad (tech_stack.md §4.1 y §4.14).
+# El CI llega más adelante; de momento la barrera es local.
+#
+#   uv run pre-commit install
+#
+default_language_version:
+  python: python3.12
+
+repos:
+  # ── ruff desde el entorno del proyecto ─────────────────────────────────────
+  # Se invoca con `uv run` a propósito: así el linter que usan los hooks es
+  # exactamente el que fija `uv.lock`, sin deriva de versiones.
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --fix --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+  # ── higiene general ────────────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+        args: [--maxkb=512]
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: detect-private-key
+
+  # ── detección de secretos ──────────────────────────────────────────────────
+  # La clave del LLM tiene valor económico: no puede acabar en un commit.
+  # `.env.example` se excluye por diseño: es una plantilla con claves vacías.
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        exclude: ^\.env\.example$

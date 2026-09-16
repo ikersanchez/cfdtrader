@@ -4,17 +4,19 @@ Sistema multiagente de apoyo a la decisión para operar **intradía un CFD sobre
 
 > ⚠️ **Este repositorio es un proyecto de ingeniería, no asesoramiento financiero.** Los CFDs son productos apalancados de alto riesgo y la mayoría de las cuentas minoristas pierde dinero operando con ellos. Nada de lo que hay aquí debe interpretarse como una recomendación de inversión.
 
-**Estado actual: especificación completa, sin código.** El proyecto está en Fase 0 (medición de viabilidad).
+**Estado actual: especificación completa y repositorio Python instalable (tarea #1 hecha).** El proyecto está en Fase 0 (medición de viabilidad): todavía no hay datos ni mediciones.
 
 ---
 
 ## Documentos
 
+Todos los documentos viven en `_docs/`.
+
 | Documento | Qué contiene |
 |---|---|
-| [`plan.md`](plan.md) | **Fuente de verdad funcional.** Qué se construye: definición del problema, arquitectura, agentes, riesgo, protocolo de evaluación, roadmap. |
-| [`tech_stack.md`](tech_stack.md) | **Especificación técnica.** Con qué se construye: stack por capa, licencias, control de coste del LLM, operación en local y modelo de persistencia. Especificación **cerrada** (v2.0). |
-| [`tasks.md`](tasks.md) | **Backlog.** 48 tareas de una sesión cada una, agrupadas en 6 fases, con puertas de salida. |
+| [`plan.md`](_docs/plan.md) | **Fuente de verdad funcional.** Qué se construye: definición del problema, arquitectura, agentes, riesgo, protocolo de evaluación, roadmap. |
+| [`tech_stack.md`](_docs/tech_stack.md) | **Especificación técnica.** Con qué se construye: stack por capa, licencias, control de coste del LLM, operación en local y modelo de persistencia. Especificación **cerrada** (v2.0). |
+| [`tasks.md`](_docs/tasks.md) | **Backlog.** 48 tareas de una sesión cada una, agrupadas en 6 fases, con puertas de salida. |
 
 ### Cómo se relacionan
 
@@ -38,7 +40,23 @@ Ante conflicto: `plan.md` manda sobre el comportamiento y `tech_stack.md` sobre 
 
 ---
 
-## Puesta en marcha
+## Desarrollo
+
+Entorno gestionado con `uv` (Python 3.12). `uv.lock` está commiteado: es la garantía de reproducibilidad.
+
+```bash
+uv sync                                  # instala el entorno (stack mínimo viable, Fase 0–2)
+uv run pre-commit install                # hooks locales: ruff + detección de secretos
+uv run pytest                            # suite completa
+uv run ruff check . && uv run ruff format --check .
+uv run pyright                           # tipado estático en modo estricto
+```
+
+Las dependencias se declaran en `pyproject.toml` y **no se añade ninguna sin justificarla**: `tech_stack.md` §5.2 prohíbe instalar el stack completo antes de que la fase que lo necesita lo pida. Secretos: copiar `.env.example` a `.env` (ignorado por git) y `chmod 600 .env`.
+
+---
+
+## Puesta en marcha del repositorio remoto
 
 El repositorio remoto y las issues se crean con un único script:
 
@@ -64,4 +82,4 @@ El script es **idempotente** y lee `tasks.md` en cada ejecución, así que las i
 
 ## Licencia
 
-Sin licencia por el momento: **todos los derechos reservados**. Al no existir código propio todavía, no hay nada que licenciar; se decidirá cuando lo haya.
+Sin licencia por el momento: **todos los derechos reservados**. Solo hay esqueleto de código (tarea #1); se decidirá licencia cuando haya código con entidad suficiente.

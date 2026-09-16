@@ -2,8 +2,11 @@
 # Datos: NUNCA al repositorio  (plan.md §2.11, tech_stack.md §12)
 # Los datos de mercado no son redescargables de forma idéntica y son la base
 # del backtest. Viven solo en local y en su backup.
+#
+# ⚠️ Anclado con `/` a propósito: `data/` sin anclar se tragaría también
+# `src/cfdtrader/data/`, que es código y sí se versiona.
 # ─────────────────────────────────────────────────────────────────────────────
-data/
+/data/
 *.parquet
 *.duckdb
 *.duckdb.wal
@@ -12,8 +15,8 @@ data/
 
 # Cuerpo de artículos de prensa: prohibido por derechos de uso y por volumen
 # (tech_stack.md §12.7). Solo titular + URL + published_at + hash.
-data/raw/news/*.txt
-data/raw/news/*.html
+/data/raw/news/*.txt
+/data/raw/news/*.html
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Secretos
