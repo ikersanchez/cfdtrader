@@ -35,6 +35,7 @@ Formato que espera de `tasks.md`
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -52,7 +53,7 @@ REPO_DESCRIPTION = (
     "medición, backtest con purga y embargo, gate determinista. Diseño, sin código todavía."
 )
 
-TASKS_FILE = Path("tasks.md")
+TASKS_FILE = Path(__file__).resolve().parent / "tasks.md"
 IGNORED_DIRS = {".git"}
 
 # Marcas transversales que no se deducen del parseo (cuidado si se renumera)
@@ -466,6 +467,10 @@ def main() -> int:
     parser.add_argument("--show-body", type=int, metavar="N",
                         help="imprime el cuerpo que se generaría para la tarea N y sale")
     args = parser.parse_args()
+
+    # Todos los comandos de git y gh deben correr en la raíz del repositorio,
+    # con independencia del directorio desde el que se lance el script.
+    os.chdir(Path(__file__).resolve().parent)
 
     if args.show_body is not None:
         tasks = parse_tasks(TASKS_FILE)
