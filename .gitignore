@@ -1,0 +1,86 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Datos: NUNCA al repositorio  (plan.md §2.11, tech_stack.md §12)
+# Los datos de mercado no son redescargables de forma idéntica y son la base
+# del backtest. Viven solo en local y en su backup.
+# ─────────────────────────────────────────────────────────────────────────────
+data/
+*.parquet
+*.duckdb
+*.duckdb.wal
+*.db
+*.sqlite
+
+# Cuerpo de artículos de prensa: prohibido por derechos de uso y por volumen
+# (tech_stack.md §12.7). Solo titular + URL + published_at + hash.
+data/raw/news/*.txt
+data/raw/news/*.html
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Secretos
+# ─────────────────────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Entorno Python
+# ─────────────────────────────────────────────────────────────────────────────
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# NOTA: uv.lock SÍ se commitea. Es la garantía de reproducibilidad
+# (plan.md §2.10 y tech_stack.md §3.3). No lo añadas aquí.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Artefactos de modelo y experimentos
+# Solo se conservan los binarios de modelos que llegaron a producción
+# (tech_stack.md §12.6). Los de experimentos descartados, no.
+# ─────────────────────────────────────────────────────────────────────────────
+runs/
+artifacts/
+*.joblib
+*.onnx
+*.pkl
+*.h5
+*.pt
+*.ckpt
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Caché de respuestas del LLM
+# Es un artefacto de coste, no de verdad (tech_stack.md §4.9). No se versiona,
+# se respalda aparte.
+# ─────────────────────────────────────────────────────────────────────────────
+.llm_cache/
+diskcache/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cuadernos: permitidos como exploración, sin salidas versionadas
+# (regla absoluta: notebook = exploración, nunca lógica de producción)
+# ─────────────────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+__marimo__/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Editor y sistema
+# ─────────────────────────────────────────────────────────────────────────────
+.vscode/*
+!.vscode/settings.json.example
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*~
