@@ -2,10 +2,10 @@
 
 | Campo | Valor |
 |---|---|
-| **Versión** | **2.0** · instrumento S&P 500 |
+| **Versión** | **2.1** · instrumento S&P 500 |
 | **Fecha** | 2026-09-16 |
 | **Estado** | ✅ **Especificación cerrada.** Cambios posteriores solo mediante entrada en el registro y motivo medido |
-| **Documento padre** | `plan.md` v2.1 (fuente de verdad funcional) |
+| **Documento padre** | `plan.md` v2.2 (fuente de verdad funcional) |
 | **Ámbito** | Stack técnico del sistema descrito en `plan.md` |
 | **Instrumento** | **SPX500:CFD**, horario definido en `America/New_York` y presentado en `Europe/Madrid` |
 | **Restricciones rectoras** | Ejecución en **PC propio** · prioridad a **software libre y open source** · coste marginal objetivo **≈0 €** |
@@ -117,7 +117,7 @@ Como el entorno actual es Linux, **especificamos todo asumiendo Linux + systemd*
 
 ### 2.3 Modo de ejecución
 
-- **Ejecución batch diaria**, no servicio permanente. El pipeline arranca a las **08:00 ET**, entrega el informe a las **09:30 ET** y el proceso de decisión muere ahí. El registro de cierre se ejecuta a las **16:15 ET** en una invocación aparte y más ligera; Madrid solo se usa para presentar horarios.
+- **Ejecución batch diaria**, no servicio permanente. El pipeline arranca a las **08:00 ET**, entrega el informe a las **09:00 ET** (30 minutos antes de la subasta de apertura) y el proceso de decisión muere ahí. El registro de cierre se ejecuta a las **16:15 ET** en una invocación aparte y más ligera; Madrid solo se usa para presentar horarios.
 - **Nada corriendo 24/7.** Sin daemons, sin servidores web, sin workers a la escucha.
 - **Modo offline parcial:** todo el cálculo de features, el backtest, el entrenamiento y el gate de decisión funcionan **sin conexión**. Solo requieren red la ingesta de datos y la **capa LLM (API)**.
 - **Consecuencia de diseño:** el sistema debe poder ejecutarse con la capa LLM desactivada y producir una recomendación válida. El overlay de noticias **mejora** la decisión; no la habilita. Esto es lo que permite retrotestear el núcleo sin el LLM (`plan.md` §6.2).
@@ -442,7 +442,7 @@ Esta separación es la palanca de coste más importante: no tiene sentido pagar 
 | Trazas del pipeline | **JSONL** por ejecución + `manifest.json` | — | SQLite | Con hashes, versiones y duraciones |
 | Calidad de datos | **pandera** + checks propios | MIT | — | Ver `plan.md` §8.4 |
 | Alertas de fallo | Mensaje a Telegram si el pipeline falla | — | — | El **silencio es el peor modo de fallo** |
-| *Heartbeat* | Alerta si a las 08:50 no ha llegado el informe | — | — | Detecta el fallo silencioso |
+| *Heartbeat* | Alerta si a las 09:05 ET no ha llegado el informe | — | — | Detecta el fallo silencioso |
 | Errores no capturados | **Sentry** (tier gratuito) | *freemium* | fichero + alerta | Opcional. Prioridad a la alerta propia, que es gratuita y suficiente |
 | Monitorización de recursos | `psutil` (BSD-3) | BSD-3 | — | Opcional |
 
@@ -1006,3 +1006,4 @@ Como el sistema decide **una vez al día**, los artefactos de decisión son **un
 | 2026-09-16 | 1.3 | **Revisión del documento.** Correcciones: principio 9 duplicado, entrada duplicada en el registro de cambios, afirmación imprecisa sobre `Type=oneshot`, recuento de paquetes en §5.1, fila residual en §9, celda confusa en §11, y "100 % del stack" en §3.1. Nuevo: principio 11 y **§8.4 guardia de obsolescencia**; comparación de **jurisdicción y residencia de datos** por proveedor (§3.2.d); **capacidades de salida estructurada dispares** entre proveedores (§4.9); corrección del uso de *embeddings* (§4.9); y **§11 bis: qué NO se puede decidir todavía** | Auditoría solicitada por el usuario |
 | 2026-09-16 | 1.4 | ✅ **CIERRE DE LA ESPECIFICACIÓN.** Nuevo **§12 Modelo de persistencia**, normativo: principio de irreversibilidad (§12.1), las cuatro clases de dato (§12.2), escala real (§12.3), esquemas por capa —investigación, diario, operacional— (§12.4–12.6), **política de retención consolidada** (§12.7), lo que NO se persiste (§12.8) y la **prueba anual de reconstrucción** (§12.9). La política de retención sale de §6.3 punto 3, que pasa a ser un puntero, para tener una sola fuente de verdad. La entrega de noticias pasa de "texto completo opcional" a **prohibición de guardar el cuerpo del artículo** | Pregunta del usuario sobre qué persistir. El análisis mostró que (a) el principio correcto es "persistir lo irreversible", que no estaba enunciado; (b) cuatro datasets no aparecían en la política de retención; (c) guardar el cuerpo de artículos de prensa tiene riesgo de derechos de autor, no solo de disco |
 | 2026-09-16 | **2.0** | ⚠️ **REVISIÓN POR CAMBIO DE INSTRUMENTO A CFD DEL S&P 500.** Cambian: título y cabecera. §2.1 desglose de disco (tickers y ETFs sectoriales americanos). §2.3 horario del pipeline (13:30 → informe 15:00 → registro 22:15). §4.5 fuentes: **FRED pasa a primaria** y ECB a contexto, se añaden `^GSPC`/`ES=F`/`SPY`/`^VIX`/ETFs sectoriales, calendario de resultados de mega-caps. §4.11 y §8.1: **el scheduler se ancla a `America/New_York` en lugar de `Europe/Madrid`**, con timer de registro de cierre. §5.1, §6.1, §6.2, §8.4, §11 y §12.4 actualizados. **No cambia** el modelo de persistencia (§12), ni la arquitectura, ni la capa LLM, ni el resto del stack | **Decisión del usuario: operar el CFD del S&P 500.** El anclaje del scheduler a la hora de Nueva York es el cambio técnico más importante: anclar a hora local produciría una ejecución una hora tarde durante ~4 semanas al año |
+| 2026-09-16 | **2.1** | 🔧 **Corrección de dos horas heredadas del flujo matinal, tras fijar el calendario canónico en `plan.md` v2.2.** §2.3: la entrega del informe pasa de 09:30 a **09:00 ET** (09:30 ET es la apertura, no una hora de entrega). §4.13: el *heartbeat* pasa de 08:50 a **09:05 ET**, que es cuando el informe ya debería estar entregado | Al cerrar el calendario en `plan.md` §4.1 aparecieron dos horas incoherentes con él. **Queda pendiente una tercera, ajena a este cambio:** el registro de cierre es **16:15 ET** en `plan.md` §4.1/§13 y aquí §2.3, pero **16:20 ET** en el ejemplo de §8.1 y en las tareas #41 y #43. Se unifica cuando la tarea #41 implemente los timers |
