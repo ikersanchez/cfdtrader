@@ -70,6 +70,13 @@ artifacts/
 diskcache/
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Zona de trabajo temporal: sondas de QA, cuerpos de comentarios largos, etc.
+# No es un artefacto del proyecto y se puede borrar en cualquier momento.
+# Anclado con `/` por el mismo motivo que `/data/`.
+# ─────────────────────────────────────────────────────────────────────────────
+/.scratch/
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Cuadernos: permitidos como exploración, sin salidas versionadas
 # (regla absoluta: notebook = exploración, nunca lógica de producción)
 # ─────────────────────────────────────────────────────────────────────────────
