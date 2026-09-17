@@ -5,7 +5,7 @@
 | **Versión** | **2.1** |
 | **Fecha** | 2026-09-16 |
 | **Instrumento** | **SPX500:CFD**, horario definido en `America/New_York` · diferencial declarado 0,0042 % |
-| **Documentos de referencia** | `plan.md` v2.2 (qué construir) · `tech_stack.md` v2.1 (con qué) |
+| **Documentos de referencia** | `plan.md` v2.2 (qué construir) · `tech_stack.md` v2.2 (con qué) |
 | **Total de tareas** | 48, agrupadas en 6 fases |
 
 ---
