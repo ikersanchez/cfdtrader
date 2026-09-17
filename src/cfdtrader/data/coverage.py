@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -190,9 +190,7 @@ def render_markdown(report: CoverageReport) -> str:
         "",
     ]
     for blocker in report.blockers:
-        follow_up = (
-            f" (seguimiento: #{blocker.follow_up_issue})" if blocker.follow_up_issue else ""
-        )
+        follow_up = f" (seguimiento: #{blocker.follow_up_issue})" if blocker.follow_up_issue else ""
         lines.append(f"> **BLOQUEO `{blocker.code}`** — `{blocker.series_id}`{follow_up}")
         lines.append(f"> {blocker.detail}")
         lines.append("")
@@ -286,12 +284,35 @@ def _bid_ask(spec: SeriesSpec) -> str:
 
 
 def _span_ok(spec: SeriesSpec, span_start: str | None) -> bool:
-    """``True`` si la ventana obtenida alcanza el ``min_start`` declarado."""
-    if spec.min_start is None:
-        return span_start is not None
+    """``True`` si la ventana obtenida alcanza el ``min_start`` declarado.
+
+    ``min_start`` es una fecha de **calendario**, pero la serie guarda
+    **sesiones**: exigir que la primera barra sea del 2005-01-01 es imposible
+    —ese día no hubo sesión, fue sábado y festivo— y dejaba el indicador en
+    ``false`` para todas las series con ese ``min_start``, fuese cual fuese el
+    dato obtenido. Un indicador que nunca puede valer ``true`` no informa de nada
+    (A17).
+
+    El listón es el **primer día laborable a partir de ``min_start``**: una cota
+    *inferior* del conjunto de sesiones (toda sesión cae en día laborable, pero no
+    al revés). Al ser inferior, el listón es más exigente que la primera sesión
+    real, así que el indicador puede quedarse corto pero **nunca** afirma una
+    cobertura que no tiene. Los festivos no se clasifican aquí (A13): los huecos
+    se siguen reportando de forma descriptiva, sin importar el calendario de #4.
+    """
     if span_start is None:
         return False
-    return span_start[:10] <= spec.min_start.isoformat()
+    if spec.min_start is None:
+        return True
+    return span_start[:10] <= _first_business_day(spec.min_start).isoformat()
+
+
+def _first_business_day(day: date) -> date:
+    """Primer día laborable a partir de esa fecha, o la misma si ya lo es."""
+    candidate = day
+    while candidate.weekday() >= 5:  # 5 = sábado, 6 = domingo
+        candidate += timedelta(days=1)
+    return candidate
 
 
 def _window_limited(spec: SeriesSpec, span_start: str | None) -> bool:

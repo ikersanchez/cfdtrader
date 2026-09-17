@@ -571,7 +571,28 @@ def test_sql_view_shows_one_row_per_identity_without_losing_the_history(store: S
     assert (before["value"][0], before["version"][0]) == (308.4, 1)
 
 
-def test_tests_do_not_write_into_the_repository_data_directory() -> None:
-    for layer in ("raw", "derived"):
-        directory = REPO_ROOT / "data" / layer
-        assert not directory.exists() or not list(directory.rglob("*.parquet"))
+def test_the_data_directory_guard_detects_a_write(tmp_path: Path) -> None:
+    """#54: el guardián de A22 tiene que detectar de verdad una escritura.
+
+    Un guardián que no ve nada no vigila nada. Se comprueba sobre un directorio
+    de prueba que la huella cambia al crear, modificar y borrar un fichero. El
+    guardián real (la sesión no toca `data/`) vive en `tests/conftest.py`; antes
+    se comprobaba exigiendo que `data/` no tuviera Parquet, lo que hacía fallar
+    la puerta en cuanto se ejecutaba la ingesta real de A14 sin que ningún test
+    hubiera escrito nada.
+    """
+    from conftest import fingerprint
+
+    (tmp_path / "raw").mkdir()
+    (tmp_path / "raw" / "part-1.parquet").write_bytes(b"uno")
+    before = fingerprint(tmp_path)
+
+    (tmp_path / "raw" / "part-2.parquet").write_bytes(b"dos")
+    with_two = fingerprint(tmp_path)
+    assert set(with_two) - set(before) == {"raw/part-2.parquet"}
+
+    (tmp_path / "raw" / "part-1.parquet").write_bytes(b"otro")
+    assert fingerprint(tmp_path)["raw/part-1.parquet"] != before["raw/part-1.parquet"]
+
+    (tmp_path / "raw" / "part-2.parquet").unlink()
+    assert set(with_two) - set(fingerprint(tmp_path)) == {"raw/part-2.parquet"}

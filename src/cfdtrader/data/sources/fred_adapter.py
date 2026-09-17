@@ -47,8 +47,8 @@ __all__ = [
     "FRED_OBSERVATIONS_URL",
     "FredAdapter",
     "MacroFetchResult",
-    "MacroSeriesSpec",
     "MacroSeriesRegistry",
+    "MacroSeriesSpec",
 ]
 
 #: Endpoint de observaciones. ALFRED (los *vintages*) es el mismo endpoint con
@@ -148,7 +148,9 @@ class FredAdapter:
         self._client = client
         self._api_key = api_key
 
-    def fetch(self, spec: MacroSeriesSpec, *, now: datetime, realtime: date | None = None) -> MacroFetchResult:
+    def fetch(
+        self, spec: MacroSeriesSpec, *, now: datetime, realtime: date | None = None
+    ) -> MacroFetchResult:
         """Descarga una serie y la normaliza a ``(as_of, value, published_at)``.
 
         Parameters
@@ -194,9 +196,7 @@ class FredAdapter:
         try:
             cached = self._client.get(FRED_OBSERVATIONS_URL, params=params, now=now)
         except SourceError as error:
-            return _failed(
-                spec, _status_for(error), str(error), attempts=error.attempts
-            )
+            return _failed(spec, _status_for(error), str(error), attempts=error.attempts)
 
         payload = _as_json(cached.response.json())
         if payload is None:
@@ -319,8 +319,10 @@ def _normalize(payload: dict[str, Any], *, spec: MacroSeriesSpec) -> tuple[pl.Da
         previous = first.get(day)
         # Se prefiere la vintage más antigua **con valor**: una vintage con `.`
         # no es una publicación, es un hueco.
-        if previous is None or (previous[1] is None and value is not None) or (
-            value is not None and previous[1] is not None and release and release < previous[0]
+        if (
+            previous is None
+            or (previous[1] is None and value is not None)
+            or (value is not None and previous[1] is not None and release and release < previous[0])
         ):
             first[day] = (release, value)
 

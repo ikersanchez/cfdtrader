@@ -39,9 +39,9 @@ from cfdtrader.data.sources.base import (
 
 __all__ = [
     "ACCEPTED_CONTENT_TYPES",
+    "LOCK_DETECTOR",
     "CachedHttpClient",
     "CachedResponse",
-    "LOCK_DETECTOR",
 ]
 
 #: Content-types que se aceptan como "formato de datos". Cualquier otra cosa se
@@ -72,7 +72,7 @@ LOCK_DETECTOR: tuple[bytes, ...] = (
 _TRANSPORT_HEADERS: frozenset[str] = frozenset({"content-encoding", "content-length"})
 
 
-class _RetryableFailure(Exception):
+class _RetryableError(Exception):
     """Fallo transitorio (``429`` o red): se reintenta y, al agotar, se tipa."""
 
     def __init__(self, message: str, *, attempts: int) -> None:
@@ -197,7 +197,7 @@ class CachedHttpClient:
                 min=self._backoff_seconds,
                 max=max(self._backoff_seconds, 8.0),
             ),
-            retry=retry_if_exception_type(_RetryableFailure),
+            retry=retry_if_exception_type(_RetryableError),
             reraise=True,
         )
         try:
@@ -205,7 +205,7 @@ class CachedHttpClient:
                 with attempt:
                     self._attempts_used = attempt.retry_state.attempt_number
                     return self._send(url, params=params, headers=headers)
-        except _RetryableFailure as failure:
+        except _RetryableError as failure:
             raise SourceRateLimitedError(
                 str(failure), source=self._source, attempts=failure.attempts
             ) from failure
@@ -226,15 +226,15 @@ class CachedHttpClient:
         params: Mapping[str, str | int] | None,
         headers: Mapping[str, str] | None,
     ) -> httpx.Response:
-        """Una petición. Los fallos transitorios se convierten en ``_RetryableFailure``."""
+        """Una petición. Los fallos transitorios se convierten en ``_RetryableError``."""
         try:
             response = self._client.get(url, params=params, headers=headers)
         except httpx.HTTPError as error:
-            raise _RetryableFailure(
+            raise _RetryableError(
                 f"error de red pidiendo {url}: {error}", attempts=self._attempts_used
             ) from error
         if response.status_code == 429 or response.status_code >= 500:
-            raise _RetryableFailure(
+            raise _RetryableError(
                 f"{url} respondió {response.status_code}", attempts=self._attempts_used
             )
         return response

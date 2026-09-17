@@ -33,8 +33,8 @@ from cfdtrader.data.sources.base import AssetClass, SeriesSpec
 from cfdtrader.data.sources.frames import SESSION_CLOSE_ET, SESSION_OPEN_ET
 
 __all__ = [
-    "STALE_RUN",
     "CROSS_SOURCE_TOLERANCE_BP",
+    "STALE_RUN",
     "QualityIssue",
     "QualityReport",
     "compare_sources",

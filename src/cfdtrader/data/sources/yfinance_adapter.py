@@ -203,9 +203,12 @@ class YFinanceAdapter(SourceAdapter):
                 with attempt:
                     self._attempts_used = attempt.retry_state.attempt_number
                     return strategy(request), self._attempts_used
-        except Exception as error:  # noqa: BLE001 - se traduce a error tipado
+        except Exception as error:
             raise _as_source_error(
-                error, source=self.name, series_id=request.spec.series_id, attempts=self._attempts_used
+                error,
+                source=self.name,
+                series_id=request.spec.series_id,
+                attempts=self._attempts_used,
             ) from error
         raise SourceUnavailableError(  # pragma: no cover - defensivo
             f"{request.spec.series_id}: la estrategia no devolvió nada",
@@ -224,7 +227,9 @@ def _as_source_error(
     message = f"{series_id}: {type(error).__name__}: {error}"
     lowered = message.lower()
     if "429" in lowered or "too many requests" in lowered or "rate limit" in lowered:
-        return SourceRateLimitedError(message, source=source, series_id=series_id, attempts=attempts)
+        return SourceRateLimitedError(
+            message, source=source, series_id=series_id, attempts=attempts
+        )
     return SourceUnavailableError(message, source=source, series_id=series_id, attempts=attempts)
 
 

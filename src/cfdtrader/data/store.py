@@ -10,9 +10,9 @@ Contrato de columnas obligatorias
 
 Todo registro, en `raw` y en `derived`, tiene estas seis columnas:
 
-===============  ===========================  =========  ============================================
+===============  ===========================  =========  ===========================================
 Columna          Tipo                         Obligat.   Regla
-===============  ===========================  =========  ============================================
+===============  ===========================  =========  ===========================================
 ``source``       ``str`` no vacío             sí         Quién produjo el dato. En `raw`, el
                                                          adaptador (``yfinance``, ``fred``); en
                                                          `derived`, el módulo que lo calculó
@@ -35,7 +35,7 @@ Columna          Tipo                         Obligat.   Regla
                                                          identidad. 1 = primer valor visto; 2, 3…
                                                          = revisiones posteriores. **No** es la
                                                          versión del esquema (#49).
-===============  ===========================  =========  ============================================
+===============  ===========================  =========  ===========================================
 
 Cualquier columna adicional es *payload* del dataset y la declara la tarea que
 lo ingesta o lo calcula: el esquema concreto de cada dataset (``market_daily``,
@@ -132,14 +132,14 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal, TypeAlias, cast, final
+from typing import Literal, cast, final
 
 import duckdb
 import polars as pl
 
 __all__ = [
-    "InvalidRecordError",
     "ImmutableWriteError",
+    "InvalidRecordError",
     "Layer",
     "Record",
     "StorageError",
@@ -149,10 +149,10 @@ __all__ = [
 ]
 
 #: Capas del almacén. `raw` es inmutable; `derived` es recalculable.
-Layer: TypeAlias = Literal["raw", "derived"]
+type Layer = Literal["raw", "derived"]
 
 #: Un registro de entrada: columnas obligatorias más el *payload* del dataset.
-Record: TypeAlias = Mapping[str, object]
+type Record = Mapping[str, object]
 
 LAYERS: tuple[Layer, ...] = ("raw", "derived")
 
@@ -254,7 +254,8 @@ def _content_key(values: Mapping[str, object]) -> tuple[str, ...]:
     """Huella del contenido: todo menos ``version`` y ``fetched_at``."""
     parts = [f"{name}={_canonical(values.get(name))}" for name in _CONTENT_COLUMNS]
     parts.extend(
-        f"{name}={_canonical(values[name])}" for name in sorted(k for k in values if k not in _RESERVED)
+        f"{name}={_canonical(values[name])}"
+        for name in sorted(k for k in values if k not in _RESERVED)
     )
     return tuple(parts)
 
@@ -326,7 +327,8 @@ def _require_text(values: Mapping[str, object], *, field: str) -> str:
     value = values.get(field)
     if not isinstance(value, str):
         raise InvalidRecordError(
-            f"'{field}' es obligatoria y debe ser str, no {type(value).__name__} (registro: {field})"
+            f"'{field}' es obligatoria y debe ser str, no {type(value).__name__} "
+            f"(registro: {field})"
         )
     if not value.strip():
         raise InvalidRecordError(f"'{field}' no puede estar vacía (registro: {field})")
@@ -457,10 +459,13 @@ class Store:
     def append_revision(
         self, layer: Layer, dataset: str, record: Record | Sequence[Record]
     ) -> WriteOutcome:
-        """Escribe una revisión de la fuente sobre una identidad existente (``version = max + 1``)."""
+        """Escribe una revisión de la fuente sobre una identidad existente
+        (``version = max + 1``)."""
         return self._write(layer, dataset, record, mode="revision")
 
-    def replace(self, layer: Layer, dataset: str, record: Record | Sequence[Record]) -> WriteOutcome:
+    def replace(
+        self, layer: Layer, dataset: str, record: Record | Sequence[Record]
+    ) -> WriteOutcome:
         """Recalcula un valor de ``derived``. En ``raw`` siempre falla."""
         return self._write(layer, dataset, record, mode="replace")
 
@@ -549,7 +554,8 @@ class Store:
             if mode == "append":
                 raise ImmutableWriteError(
                     f"'{layer}.{dataset}' ya tiene contenido distinto para la identidad "
-                    f"(source={item.source!r}, series_id={item.series_id!r}, as_of={item.as_of!r}). "
+                    f"(source={item.source!r}, series_id={item.series_id!r}, "
+                    f"as_of={item.as_of!r}). "
                     "Un dato crudo no se sobrescribe: usa 'append_revision' si la fuente lo revisó."
                 )
             planned.append(dataclasses.replace(item, version=_stored_version(stored) + 1))
@@ -753,10 +759,7 @@ class Store:
         """Ejecuta una consulta y devuelve el resultado como DataFrame de Polars."""
         connection = self._connect()
         try:
-            if params:
-                ret = connection.execute(query, list(params))
-            else:
-                ret = connection.sql(query)
+            ret = connection.execute(query, list(params)) if params else connection.sql(query)
             return ret.pl()
         finally:
             connection.close()
@@ -782,9 +785,7 @@ def _to_frame(records: Sequence[PreparedRecord]) -> pl.DataFrame:
     """Construye el DataFrame con el esquema explícito del contrato."""
     names = list(records[0].as_values())
     columns = [record.as_values() for record in records]
-    data: dict[str, list[object]] = {
-        name: [column[name] for column in columns] for name in names
-    }
+    data: dict[str, list[object]] = {name: [column[name] for column in columns] for name in names}
 
     as_of_type: pl.DataType = pl.Date() if _as_of_is_date(records[0]) else pl.Datetime("us", "UTC")
     dtypes: dict[str, pl.DataType] = {
@@ -797,9 +798,12 @@ def _to_frame(records: Sequence[PreparedRecord]) -> pl.DataFrame:
     }
     for name in names:
         if name not in _RESERVED and all(value is None for value in data[name]):
-            # Polars inferiría `Null` y Parquet no tiene ese tipo: se fija String y el valor es NULL.
+            # Polars inferiría `Null` y Parquet no tiene ese tipo: se fija String
+            # y el valor es NULL.
             dtypes[name] = pl.String()
-    return pl.DataFrame(data).with_columns(pl.col(name).cast(dtype) for name, dtype in dtypes.items())
+    return pl.DataFrame(data).with_columns(
+        pl.col(name).cast(dtype) for name, dtype in dtypes.items()
+    )
 
 
 def _read_parquet_expr(paths: Sequence[Path]) -> str:

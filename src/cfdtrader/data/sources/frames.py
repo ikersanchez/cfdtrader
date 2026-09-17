@@ -20,9 +20,9 @@ import polars as pl
 from cfdtrader.data.sources.base import CANONICAL_COLUMNS
 
 __all__ = [
+    "CANONICAL_DTYPES",
     "EASTERN",
     "MADRID",
-    "CANONICAL_DTYPES",
     "empty_canonical_frame",
     "session_close_utc",
     "session_open_utc",

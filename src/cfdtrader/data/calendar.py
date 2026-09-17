@@ -44,10 +44,10 @@ from cfdtrader.data.settings import ConfigurationError
 __all__ = [
     "DEFAULT_CALENDAR_PATH",
     "EASTERN",
+    "HALF_SESSION_CLOSE_ET",
     "MADRID",
     "SESSION_CLOSE_ET",
     "SESSION_OPEN_ET",
-    "HALF_SESSION_CLOSE_ET",
     "CalendarConfig",
     "MarketCalendar",
     "SessionInfo",
@@ -128,7 +128,9 @@ class MarketCalendar:
         equivocada, que es justo lo que este módulo existe para evitar.
     """
 
-    def __init__(self, config: CalendarConfig | None = None, *, years: tuple[int, ...] | None = None) -> None:
+    def __init__(
+        self, config: CalendarConfig | None = None, *, years: tuple[int, ...] | None = None
+    ) -> None:
         self._config = config or CalendarConfig()
         current = datetime.now(UTC).year
         self._years = years or tuple(range(current - 30, current + 11))
@@ -259,7 +261,8 @@ class MarketCalendar:
         return self.to_madrid(open_utc), self.to_madrid(close_utc)
 
     def session_offset_hours(self, day: date) -> int:
-        """Horas de diferencia con Madrid ese día: 6 h normalmente, 5 h en las ventanas de desfase."""
+        """Horas de diferencia con Madrid ese día: 6 h normalmente, 5 h en las
+        ventanas de desfase."""
         instant = self.open_utc(day)
         et_offset = instant.astimezone(EASTERN).utcoffset() or timedelta()
         madrid_offset = instant.astimezone(MADRID).utcoffset() or timedelta()
@@ -267,7 +270,8 @@ class MarketCalendar:
 
     # ── DST ──────────────────────────────────────────────────────────────────
     def us_dst_transitions(self, year: int) -> tuple[date, date]:
-        """EE. UU.: entra en horario de verano el 2.º domingo de marzo y sale el 1.º de noviembre."""
+        """EE. UU.: entra en horario de verano el 2.º domingo de marzo y sale el 1.º
+        de noviembre."""
         return _nth_weekday(year, 3, 6, 2), _nth_weekday(year, 11, 6, 1)
 
     def eu_dst_transitions(self, year: int) -> tuple[date, date]:
@@ -315,9 +319,7 @@ class MarketCalendar:
         Se marcan como evento para que un cambio de contrato no se confunda con
         un movimiento de mercado (``plan.md`` §8.3).
         """
-        return tuple(
-            _nth_weekday(year, month, 4, 3) for month in (3, 6, 9, 12)
-        )
+        return tuple(_nth_weekday(year, month, 4, 3) for month in (3, 6, 9, 12))
 
     def is_es_roll(self, day: date) -> bool:
         """``True`` si ese día vence el futuro ES (roll trimestral)."""
@@ -383,7 +385,9 @@ def _last_weekday(year: int, month: int, weekday: int) -> date:
     return occurrences[-1]
 
 
-def load_calendar(path: Path | str | None = None, *, years: tuple[int, ...] | None = None) -> MarketCalendar:
+def load_calendar(
+    path: Path | str | None = None, *, years: tuple[int, ...] | None = None
+) -> MarketCalendar:
     """Carga ``config/calendar.yaml`` y devuelve el calendario listo para usar.
 
     Un fichero mal formado falla **al arrancar**, con el motivo, y no a mitad del

@@ -8,7 +8,7 @@ e intradía declarando el límite rodante del proveedor (A18).
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import polars as pl
@@ -57,6 +57,7 @@ def _spec(
     interval: str = "1d",
     history_window_limit_days: int | None = None,
     lookback_period: str | None = None,
+    min_start: date | None = None,
 ) -> SeriesSpec:
     """Especificación de serie con la fuente `fake`."""
     return SeriesSpec(
@@ -66,7 +67,7 @@ def _spec(
         granularity=granularity,
         interval=interval,
         primary="fake",
-        min_start=None,
+        min_start=min_start,
         lookback_period=lookback_period,
         history_window_limit_days=history_window_limit_days,
     )
@@ -162,6 +163,51 @@ def test_report_has_one_row_per_series_and_source(tmp_path: Path) -> None:
     assert row.gaps == ()
     assert row.span_ok is True
     assert row.notes
+
+
+def test_span_ok_uses_the_first_business_day_not_the_calendar_date(tmp_path: Path) -> None:
+    """A17: `min_start` es una fecha de calendario y la serie guarda sesiones.
+
+    2005-01-01 fue sábado **y** festivo, así que exigir que la primera barra sea
+    de ese día es imposible: `^GSPC` decía `span_ok: no` con la ventana completa,
+    y el indicador no podía valer `true` para ninguna serie con ese `min_start`.
+    El listón pasa a ser el primer día laborable (2005-01-03, el día que abrió el
+    mercado). Una serie cuyo primer dato es **posterior** sigue siendo `false`,
+    con las fechas reales.
+    """
+    complete = SeriesRegistry(version=1, series=(_spec(min_start=date(2005, 1, 1)),))
+    report = _run(
+        tmp_path / "a",
+        registry=complete,
+        frames={"^GSPC": _frame([datetime(2005, 1, 3, 21, 0, tzinfo=UTC)])},
+    )
+    assert report.daily[0].span_ok is True
+
+    late = SeriesRegistry(version=1, series=(_spec("XLRE", min_start=date(2015, 10, 1)),))
+    late_report = _run(
+        tmp_path / "b",
+        registry=late,
+        frames={"XLRE": _frame([datetime(2015, 10, 8, 20, 0, tzinfo=UTC)])},
+    )
+    assert late_report.daily[0].span_ok is False
+    assert late_report.daily[0].span_start is not None
+    assert late_report.daily[0].span_start.startswith("2015-10-08")
+
+    weekend = SeriesRegistry(version=1, series=(_spec(min_start=date(2005, 1, 2)),))
+    weekend_report = _run(
+        tmp_path / "c",
+        registry=weekend,
+        frames={"^GSPC": _frame([datetime(2005, 1, 3, 21, 0, tzinfo=UTC)])},
+    )
+    assert weekend_report.daily[0].span_ok is True
+
+    no_floor = SeriesRegistry(version=1, series=(_spec(min_start=None),))
+    no_floor_report = _run(
+        tmp_path / "d",
+        registry=no_floor,
+        frames={"^GSPC": _frame([datetime(2005, 1, 3, 21, 0, tzinfo=UTC)])},
+    )
+    assert no_floor_report.daily[0].span_ok is True
 
 
 def test_rows_written_matches_the_store_and_ok_never_has_zero_rows(tmp_path: Path) -> None:

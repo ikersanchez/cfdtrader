@@ -138,7 +138,9 @@ def _parse_csv(text: str, *, spec: SeriesSpec) -> pl.DataFrame:
     nulas. Rellenarlas con el ``close`` sería inventar un dato.
     """
     try:
-        raw = pl.read_csv(StringIO(text), columns=["Date", "Open", "High", "Low", "Close", "Volume"])
+        raw = pl.read_csv(
+            StringIO(text), columns=["Date", "Open", "High", "Low", "Close", "Volume"]
+        )
     except (pl.exceptions.PolarsError, KeyError) as error:
         raise SourceUnavailableError(
             f"el CSV de Stooq no se pudo parsear: {error}",

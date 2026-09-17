@@ -63,12 +63,16 @@ packages = ["src/cfdtrader"]
 target-version = "py312"
 line-length = 100
 src = ["src", "tests"]
+# ⚠️ Anclados con `/` a propósito: un patrón sin anclar casa con **cualquier**
+# componente de la ruta. `"data"` excluía también `src/cfdtrader/data/`, el
+# paquete de datos entero, y `ruff check .` decía «All checks passed!» sin
+# haberlo mirado (#55). El `.gitignore` ya documenta esta misma trampa.
 extend-exclude = [
-    "_docs",          # documentación
-    "data",           # datos locales, nunca versionados
-    "runs",           # experimentos de backtest
-    "notebooks",      # exploración
-    "setup_github.py", # herramienta de arranque de un solo uso, ya ejecutada
+    "/_docs",          # documentación
+    "/data",           # datos locales, nunca versionados
+    "/runs",           # experimentos de backtest
+    "/notebooks",      # exploración
+    "setup_github.py", # herramienta de arranque de un solo uso, ya ejecutada (fichero suelto)
 ]
 
 [tool.ruff.lint]
@@ -91,6 +95,13 @@ allowed-confusables = ["–", "—", "≈", "≤", "≥", "×", "·", "→", "�
 # `assert` es el mecanismo de los tests, no un error de seguridad
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101"]
+# El almacén no ejecuta SQL de terceros: compone la consulta con valores que ya
+# ha validado (`_literal` escapa cadenas y rechaza separadores de ruta) y con
+# rutas Parquet internas. La regla se silencia donde se compone, no en el fichero,
+# para que un `execute()` nuevo con datos de fuera siga avisando.
+"src/cfdtrader/data/store.py" = ["S608"]
+"src/cfdtrader/data/market.py" = ["S608"]
+"src/cfdtrader/data/macro.py" = ["S608"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["cfdtrader"]

@@ -60,8 +60,8 @@ __all__ = [
     "EXIT_CONFIG_ERROR",
     "EXIT_MISSING_API_KEY",
     "EXIT_OK",
-    "MacroRow",
     "MacroReport",
+    "MacroRow",
     "ingest",
     "load_macro_series",
     "main",
@@ -181,8 +181,10 @@ def ingest(
             {str(key): value for key, value in item.items()} for item in registry.european_context
         ),
         notes=(
-            "`rows_written` son las filas vigentes en `raw.macro` para esa serie; `rows_new`, las de esta ejecución.",
-            "El contexto europeo (ECB SDW, Eurostat) está declarado como no implementado: no es la columna vertebral.",
+            "`rows_written` son las filas vigentes en `raw.macro` para esa serie; "
+            "`rows_new`, las de esta ejecución.",
+            "El contexto europeo (ECB SDW, Eurostat) está declarado como no "
+            "implementado: no es la columna vertebral.",
         ),
     )
     if reports_dir is not None:
@@ -201,7 +203,7 @@ def _ingest_series(
             spec=spec,
             status=result.status,
             attempts=result.attempts,
-            notes=tuple((*result.notes, result.error or result.status.value)),
+            notes=(*result.notes, result.error or result.status.value),
         )
 
     # Una observación cuyo instante de publicación todavía no ha llegado no se
@@ -220,7 +222,7 @@ def _ingest_series(
             attempts=result.attempts,
             discarded_unpublished=discarded,
             missing_values=missing,
-            notes=tuple((*result.notes, "no quedó ninguna observación publicada con valor")),
+            notes=(*result.notes, "no quedó ninguna observación publicada con valor"),
         )
 
     records: list[dict[str, object]] = [
@@ -283,8 +285,7 @@ def _stored_payload(
         # Dataset todavía inexistente: no hay nada guardado que comparar.
         return {}
     return {
-        row["as_of"]: tuple(row[name] for name in columns)
-        for row in frame.iter_rows(named=True)
+        row["as_of"]: tuple(row[name] for name in columns) for row in frame.iter_rows(named=True)
     }
 
 
