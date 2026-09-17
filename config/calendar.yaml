@@ -1,7 +1,31 @@
 # Calendario — festivos de EE. UU., medias sesiones y cambios de horario (DST).
 #
-# Vacío a propósito. La tarea #4 construye el módulo de calendario con la librería
-# `holidays` y las reglas de `plan.md` §8.3; el esquema lo define Pydantic.
+# Esquema: `src/cfdtrader/data/calendar.py` (Pydantic, validado al arrancar).
 #
 # Regla que condiciona todo lo demás: la hora de referencia interna es
 # `America/New_York` (nunca una hora local fija) y todo se guarda en UTC.
+#
+# Los festivos y las medias sesiones **no se enumeran aquí**: se deducen.
+#   · Festivos        -> calendario NYSE de la librería `holidays` (aplica las
+#                        reglas de traslado: el 2026-07-03 es el festivo observado).
+#   · Medias sesiones -> cierre a las 13:00 ET el día después de Acción de
+#                        Gracias, el 24 de diciembre y el 3 de julio, siempre que
+#                        sean día laborable y no sean ya festivo.
+#
+# Este fichero existe para las **excepciones que ninguna regla deduce**: cierres
+# por luto nacional o cierres anticipados anunciados con poca antelación. Se
+# declaran con fecha explícita, que es lo único auditable.
+
+reference_timezone: America/New_York
+presentation_timezone: Europe/Madrid
+
+# Cierres decretados que no están en el calendario NYSE (fecha ISO `AAAA-MM-DD`).
+extra_holidays: []
+
+# Cierres anticipados a las 13:00 ET anunciados fuera de la regla (misma forma).
+extra_half_days: []
+
+notes:
+  - "Los festivos españoles no entran aquí: solo afectan a la disponibilidad del operador, no al mercado."
+  - "Las medias sesiones duran 3,5 h; el NOTHING por defecto de esos días lo decide el gate, no el calendario."
+  - "Las dos ventanas anuales de desfase entre el DST americano y el europeo las calcula el módulo, no se declaran aquí."
