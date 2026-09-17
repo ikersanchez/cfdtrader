@@ -1,0 +1,85 @@
+# Series macro americanas — tarea #5.
+#
+# FRED es la **fuente macro primaria** del proyecto (tech_stack.md §4.5). Este
+# fichero declara, por serie, qué es y —lo que de verdad importa— **cuándo se
+# publica**: sin eso el *point-in-time* es decorativo.
+#
+#   · `publication_from_realtime_start: true` -> la fecha de publicación la da la
+#     *vintage* de ALFRED (`realtime_start`), que es la fecha real del comunicado
+#     (CPI y empleo del BLS, PCE del BEA: **08:30 ET**).
+#   · `publication_from_realtime_start: false` -> el valor se conoce el día al que
+#     se refiere, con el desplazamiento declarado (series que fija el mercado).
+#
+# `release_time_et` está en `America/New_York`, nunca en hora local fija: en las
+# dos ventanas anuales de desfase con Europa, la hora de Madrid se adelanta.
+
+version: 1
+dataset: macro
+
+series:
+  # ── Tipos ──────────────────────────────────────────────────────────────────
+  - series_id: DFF
+    name: "Fed funds efectivo (diario)"
+    unit: percent
+    # El tipo efectivo de un día lo publica el NY Fed al día siguiente (~09:00 ET).
+    release_time_et: "09:00"
+    publication_offset_days: 1
+    min_start: 2005-01-01
+    notes: "Serie diaria. El valor de D no se conoce hasta D+1 por la mañana."
+  - series_id: DGS2
+    name: "Treasury a 2 años (rendimiento diario)"
+    unit: percent
+    # El Tesoro publica los rendimientos al cierre de la sesión (~15:30 ET).
+    release_time_et: "15:30"
+    min_start: 2005-01-01
+  - series_id: DGS10
+    name: "Treasury a 10 años (rendimiento diario)"
+    unit: percent
+    release_time_et: "15:30"
+    min_start: 2005-01-01
+  - series_id: T10Y2Y
+    name: "Pendiente 2s10s (10 años − 2 años)"
+    unit: percent
+    release_time_et: "15:30"
+    min_start: 2005-01-01
+    notes: "FRED la publica ya calculada: no se deriva a mano para evitar dos definiciones."
+
+  # ── Inflación ──────────────────────────────────────────────────────────────
+  - series_id: CPIAUCSL
+    name: "CPI, todos los urbanos, todos los artículos (desestacionalizado)"
+    unit: index_1982_84
+    seasonal_adjustment: seasonally_adjusted
+    release_time_et: "08:30"
+    publication_from_realtime_start: true
+    min_start: 2005-01-01
+    notes: "BLS, 08:30 ET. La fecha la da la vintage de ALFRED, no el periodo observado."
+  - series_id: PCEPI
+    name: "PCE, índice de precios en cadena"
+    unit: index_2017_100
+    release_time_et: "08:30"
+    publication_from_realtime_start: true
+    min_start: 2005-01-01
+    notes: "BEA, 08:30 ET junto con el informe de renta personal."
+
+  # ── Empleo ─────────────────────────────────────────────────────────────────
+  - series_id: PAYEMS
+    name: "Nóminas no agrícolas (NFP)"
+    unit: thousands_of_persons
+    seasonal_adjustment: seasonally_adjusted
+    release_time_et: "08:30"
+    publication_from_realtime_start: true
+    min_start: 2005-01-01
+    notes: "BLS, Employment Situation, primer viernes a las 08:30 ET."
+
+# Contexto europeo: **opcional** y NO implementado en esta tarea (tech_stack.md
+# §4.5). Se declara aquí, en vez de olvidarlo en silencio: el papel protagonista
+# de tipos y macro lo tiene FRED, y ECB SDW / Eurostat solo aportarían contexto
+# de la sesión europea previa. Se implementará cuando una feature lo pida
+# (tarea #22), no antes.
+european_context:
+  - source: ecb_sdw
+    status: not_implemented
+    reason: "Contexto europeo opcional: solo tendría sentido como feature de la sesión previa (#22)."
+  - source: eurostat
+    status: not_implemented
+    reason: "Igual que ECB SDW: no es la columna vertebral del proyecto."
