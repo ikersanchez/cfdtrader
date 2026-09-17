@@ -103,6 +103,15 @@ y el *challenge* no genera issue de seguimiento.
   series que fija el mercado usan el día al que se refieren más el
   desplazamiento declarado (Treasury a las 15:30 ET; fed funds efectivo al día
   siguiente a las 09:00 ET). Cuando no se puede determinar, queda `NULL`.
+- **Las series de calendario piden la ventana de *vintages* completa**
+  (`realtime_start = min_start`, `realtime_end = 9999-12-31`) y se guarda la
+  **primera publicación** de cada observación. Comprobado contra la API el
+  2026-09-17: sin pedirla, FRED devuelve la última vintage y cada observación trae
+  `realtime_start` = el día de la consulta, de modo que las 260 observaciones de
+  `CPIAUCSL` desde 2005 quedarían publicadas «hoy» y el *point-in-time* sería
+  decorativo. El coste de pedirla es pequeño (0,1 MB para CPI, 1.367 filas) y el
+  valor guardado es el **primer publicado**, que es el que movió el mercado; una
+  vintage con `.` no es una publicación y no adelanta la fecha.
 - **Requisito:** clave gratuita (`FRED_API_KEY`). Sin ella **no se ingesta nada**:
   cada serie se declara `unavailable` y el proceso sale con código 3, para que
   «no hay clave» no se confunda con «ya está ingestado».
