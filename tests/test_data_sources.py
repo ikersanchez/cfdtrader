@@ -7,6 +7,7 @@ Ningún test abre red: el cliente HTTP se inyecta con ``httpx.MockTransport`` y
 
 from __future__ import annotations
 
+import gzip
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -266,6 +267,35 @@ def test_cache_avoids_the_second_request(tmp_path: Path) -> None:
     assert second.from_cache is True
     assert calls == 1
     assert second.text.startswith("Date,Open")
+
+
+def test_a_compressed_response_survives_the_cache_round_trip(tmp_path: Path) -> None:
+    """La caché guarda el cuerpo **ya descomprimido**: releerla no puede descomprimir dos veces.
+
+    FRED responde con `content-encoding: gzip`. Guardar esa cabecera tal cual hacía
+    que la segunda lectura reventara con `DecodingError`, y solo se veía usando la
+    API de verdad.
+    """
+    body = b"Date,Open,Close\n2024-06-10,1.0,2.0\n"
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/csv", "content-encoding": "gzip"},
+            content=gzip.compress(body),
+        )
+
+    cache_root = tmp_path / "cache"
+    first = _client(handler, cache_root=cache_root).get("https://example.test/gz", now=NOW)
+    second = _client(handler, cache_root=cache_root).get("https://example.test/gz", now=NOW)
+
+    assert calls == 1
+    assert first.text == body.decode()
+    assert second.from_cache is True
+    assert second.text == body.decode()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -38,6 +38,7 @@ from cfdtrader.data.sources.base import (
 )
 
 __all__ = [
+    "ACCEPTED_CONTENT_TYPES",
     "CachedHttpClient",
     "CachedResponse",
     "LOCK_DETECTOR",
@@ -64,6 +65,11 @@ LOCK_DETECTOR: tuple[bytes, ...] = (
     b"<script",
     b"__verify",
 )
+
+#: Cabeceras que describen el **transporte** y no el contenido. El cuerpo que se
+#: guarda en la caché ya está descomprimido, así que `content-encoding` no se
+#: conserva: reenviarla haría que `httpx` descomprimiera dos veces.
+_TRANSPORT_HEADERS: frozenset[str] = frozenset({"content-encoding", "content-length"})
 
 
 class _RetryableFailure(Exception):
@@ -280,7 +286,14 @@ class CachedHttpClient:
             return None
         response = httpx.Response(
             status_code=int(payload["status_code"]),
-            headers={str(k): str(v) for k, v in payload["headers"].items()},
+            # El cuerpo guardado ya está descomprimido: `content-encoding` se
+            # descarta **también al leer**, para que una entrada escrita por una
+            # versión anterior no rompa la lectura.
+            headers={
+                str(name): str(value)
+                for name, value in payload["headers"].items()
+                if str(name).lower() not in _TRANSPORT_HEADERS
+            },
             content=base64.b64decode(str(payload["body_b64"])),
         )
         return response, int(payload["attempts"])
@@ -294,7 +307,15 @@ class CachedHttpClient:
             "source": self._source,
             "day": now.date().isoformat(),
             "status_code": response.status_code,
-            "headers": dict(response.headers),
+            # ⚠️ `response.content` ya viene **descomprimido**: si se guarda
+            # `content-encoding` tal cual, al releer la caché `httpx` intenta
+            # descomprimir otra vez y revienta con `DecodingError`. Se guarda el
+            # `Content-Type` y lo demás, pero no la codificación del transporte.
+            "headers": {
+                name: value
+                for name, value in response.headers.items()
+                if name.lower() not in _TRANSPORT_HEADERS
+            },
             "body_b64": base64.b64encode(response.content).decode("ascii"),
             "attempts": self._attempts_used,
         }
