@@ -9,6 +9,7 @@ import hashlib
 import importlib
 import subprocess
 import sys
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
@@ -229,6 +230,68 @@ def test_batch_write_uses_one_file_per_partition(store: Store) -> None:
 
     assert store.read_pit("raw", "market_daily", READ_NOW).height == 2
     assert len(_files(store.root)) == 1
+
+
+def test_identity_check_reads_once_per_partition_not_once_per_record(
+    store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#53: comprobar la identidad costaba una lectura del almacén **por registro**.
+
+    Cada comprobación abría conexión y volvía a registrar la vista de *todos* los
+    datasets: medido sobre el almacén real, ~76-103 ms por fila. Escribir una serie
+    de 21 años son ~5.000 filas, o sea horas para meter lo que cabe en un fichero.
+    La comprobación se agrupa por partición, así que el número de lecturas depende
+    del número de particiones y **no** del número de registros.
+    """
+    records = [
+        _bar(
+            series_id="^GSPC",
+            as_of=SESSION_CLOSE + timedelta(days=offset),
+            fetched_at=SESSION_CLOSE + timedelta(days=offset, hours=1),
+            close=5000.0 + offset,
+        )
+        for offset in range(60)
+    ]
+    assert store.append("raw", "market_daily", records) is WriteOutcome.CREATED
+
+    reads: list[str] = []
+    # Es una prueba de regresión de rendimiento: hay que contar lecturas reales.
+    original_fetch = Store._fetch  # pyright: ignore[reportPrivateUsage]
+
+    def spy(self: Store, query: str, params: Sequence[object]) -> pl.DataFrame:
+        reads.append(query)
+        return original_fetch(self, query, params)
+
+    monkeypatch.setattr(Store, "_fetch", spy)
+    # El mismo contenido: la comprobación recorre los 60 registros y no escribe nada.
+    assert store.append("raw", "market_daily", records) is WriteOutcome.UNCHANGED
+
+    assert len(reads) == 1, f"60 registros de una partición deben ser 1 lectura, no {len(reads)}"
+
+
+def test_identity_check_spans_every_year_partition_of_the_batch(store: Store) -> None:
+    """Un lote de 21 años cae en 21 particiones: todas deben comprobarse.
+
+    Si la comprobación mirase solo la partición del primer registro, reescribir el
+    histórico de una serie pasaría como si estuviera vacío.
+    """
+    years = list(range(2005, 2025))
+    records = [
+        _series(
+            as_of=date(year, 1, 1),
+            published_at=datetime(year, 2, 1, 13, 30, tzinfo=UTC),
+            fetched_at=datetime(year, 2, 1, 13, 31, tzinfo=UTC),
+            value=float(year),
+        )
+        for year in years
+    ]
+    assert store.append("raw", "macro", records) is WriteOutcome.CREATED
+
+    assert store.append("raw", "macro", records) is WriteOutcome.UNCHANGED
+    # Un cambio en el último año (el de la última partición) también se detecta.
+    changed = [*records[:-1], {**records[-1], "value": 1.0}]
+    with pytest.raises(ImmutableWriteError):
+        store.append("raw", "macro", changed)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

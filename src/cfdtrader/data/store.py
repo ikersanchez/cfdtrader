@@ -240,6 +240,16 @@ def _canonical(value: object) -> str:
     return f"{type(value).__name__}:{value!r}"
 
 
+def _identity_key(source: str, series_id: str, as_of: date | datetime) -> tuple[str, str, str]:
+    """Clave de identidad comparable entre un registro y una fila releída del almacén.
+
+    Se usa la forma canónica de ``as_of`` en lugar del valor: el mismo instante
+    vuelve del almacén como ``date`` (series macro) o como ``datetime`` con zona
+    UTC (barras), y comparar objetos de distinto tipo no sirve.
+    """
+    return (source, series_id, _canonical(as_of))
+
+
 def _content_key(values: Mapping[str, object]) -> tuple[str, ...]:
     """Huella del contenido: todo menos ``version`` y ``fetched_at``."""
     parts = [f"{name}={_canonical(values.get(name))}" for name in _CONTENT_COLUMNS]
@@ -525,10 +535,12 @@ class Store:
 
         prepared = self._prepare_batch(layer, dataset, record)
         self._validate_as_of_kind(layer, dataset, prepared)
+        stored_by_identity = self._latest_rows(prepared)
 
         planned: list[PreparedRecord] = []
         for item in prepared:
-            stored = self._latest_row(item)
+            identity = _identity_key(item.source, item.series_id, item.as_of)
+            stored = stored_by_identity.get(identity)
             if stored is None:
                 planned.append(dataclasses.replace(item, version=1))
                 continue
@@ -607,20 +619,51 @@ class Store:
                 temporary.unlink(missing_ok=True)
                 raise
 
-    def _latest_row(self, record: PreparedRecord) -> dict[str, object] | None:
-        """Última revisión almacenada de una identidad, sin filtro de visibilidad."""
-        paths = self._parquet_files(record.layer, record.dataset, source=record.source, year=record.year)
-        if not paths:
-            return None
-        query = (
-            f"SELECT * FROM {_read_parquet_expr(paths)} "
-            "WHERE source = ? AND series_id = ? AND as_of = ? "
-            "ORDER BY version DESC LIMIT 1"
-        )
-        frame = self._fetch(query, [record.source, record.series_id, record.as_of])
-        if frame.height == 0:
-            return None
-        return frame.to_dicts()[0]
+    def _latest_rows(
+        self, records: Sequence[PreparedRecord]
+    ) -> dict[tuple[str, str, str], dict[str, object]]:
+        """Última revisión almacenada de cada identidad del lote, sin filtro de visibilidad.
+
+        Comprobar la identidad era el coste dominante de escribir, porque se hacía
+        **registro a registro** y cada comprobación abría conexión y volvía a
+        registrar la vista de *todos* los datasets del almacén. Medido sobre una
+        copia del almacén real (352 ficheros Parquet): ~76-103 ms por fila.
+        Escribir una serie de 21 años son ~5.000 filas, es decir horas para añadir
+        lo mismo que cabe en un fichero.
+
+        Aquí se agrupa por partición —``source`` y año de ``as_of``, exactamente lo
+        que va a escribir `_write_rows`— y cada partición se resuelve con **una**
+        consulta que ya devuelve la revisión vigente de cada identidad (la ventana
+        de ``version`` máxima, la misma que usan las vistas SQL y `read_pit`).
+
+        Returns
+        -------
+        dict[tuple[str, str, str], dict[str, object]]
+            Identidad canónica → fila vigente. Si una identidad no aparece, es que
+            no está almacenada.
+        """
+        groups: dict[tuple[Layer, str, str, int], list[PreparedRecord]] = {}
+        for record in records:
+            key = (record.layer, record.dataset, record.source, record.year)
+            groups.setdefault(key, []).append(record)
+
+        stored: dict[tuple[str, str, str], dict[str, object]] = {}
+        for (layer, dataset, source, year), group in groups.items():
+            paths = self._parquet_files(layer, dataset, source=source, year=year)
+            if not paths:
+                continue
+            series = sorted({item.series_id for item in group})
+            placeholders = ", ".join("?" for _ in series)
+            query = (
+                "WITH ranked AS (SELECT *, "
+                f"{_CURRENT_ROW_WINDOW} AS pit_rank FROM {_read_parquet_expr(paths)} "
+                f"WHERE series_id IN ({placeholders})) "
+                "SELECT * EXCLUDE (pit_rank) FROM ranked WHERE pit_rank = 1"
+            )
+            for row in self._fetch(query, list(series)).to_dicts():
+                key = _identity_key(str(row["source"]), str(row["series_id"]), row["as_of"])
+                stored[key] = row
+        return stored
 
     def _stored_as_of_is_date(self, layer: Layer, dataset: str) -> bool | None:
         """Tipo de ``as_of`` ya almacenado en el dataset, o ``None`` si está vacío."""
