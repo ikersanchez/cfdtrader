@@ -30,9 +30,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
-import polars as pl
 import duckdb
 import httpx
+import polars as pl
 from loguru import logger
 
 from cfdtrader.data.coverage import CoverageReport, SeriesOutcome, build_report, write_report
@@ -65,6 +65,25 @@ PAYLOAD_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
     "sectors": ("open", "high", "low", "close", "volume", "adj_close"),
     "market_intraday": ("open", "high", "low", "close", "volume", "interval", "bid", "ask"),
 }
+
+#: Columnas que la fuente **recalcula** y no reproduce bit a bit entre ejecuciones.
+#:
+#: Yahoo recalcula ``adj_close`` (precio ajustado por dividendos y splits) en cada
+#: petición y devuelve un valor distinto en los últimos ULP de ``float32``: #56.
+#: Medido sobre 34.728 filas revisadas de 8 series (SPY y los ETF sectoriales, las
+#: que reparten dividendo), la diferencia relativa va de ``6e-08`` a ``1,4e-06``,
+#: y **solo** cambia ``adj_close``: ``open``, ``high``, ``low``, ``close`` y
+#: ``volume`` son idénticos en el 100 % de esas filas. Índices y futuros, donde
+#: ``adj_close == close``, no se ven afectados.
+NOISY_COLUMNS: Final[tuple[str, ...]] = ("adj_close",)
+
+#: Tolerancia relativa para `NOISY_COLUMNS`: 10 partes por millón.
+#:
+#: Son 7× el peor ruido medido (``1,4e-06``) y 300× menos que un ajuste real: un
+#: dividendo de SPY mueve todo el histórico ~0,3 % (3.000 ppm). Por debajo de esta
+#: tolerancia no hay dato que conservar, solo aritmética de coma flotante; por
+#: encima, la fuente ha revisado de verdad y el almacén guarda ``version = 2``.
+NOISY_TOLERANCE: Final[float] = 1e-5
 
 
 def ingest(
@@ -121,9 +140,7 @@ def _ingest_series(
             notes.append(f"{source}: {result.status.value} — {last_error}")
             continue
 
-        outcome = _write_result(
-            result, store=store, now=now, attempts=attempts, notes=tuple(notes)
-        )
+        outcome = _write_result(result, store=store, now=now, attempts=attempts, notes=tuple(notes))
         if outcome is not None:
             return outcome
         notes.append(f"{source}: sin filas utilizables tras el control de calidad")
@@ -135,7 +152,7 @@ def _ingest_series(
         source=spec.primary,
         status=status,
         attempts=max(attempts, 1),
-        notes=tuple((*notes, last_error or "no se intentó ninguna fuente")),
+        notes=(*notes, last_error or "no se intentó ninguna fuente"),
     )
 
 
@@ -166,7 +183,7 @@ def _write_result(
             discarded_open_session=discarded,
             rejected_rows=quality.rejected_rows,
             issue_codes=quality.issue_codes,
-            notes=tuple((*notes, "todas las filas se rechazaron en el control de calidad")),
+            notes=(*notes, "todas las filas se rechazaron en el control de calidad"),
         )
 
     records = _records(frame, spec=spec, source=result.source, now=now, dataset=dataset)
@@ -199,7 +216,7 @@ def _write_result(
         rejected_rows=quality.rejected_rows,
         issue_codes=quality.issue_codes,
         issues=tuple(_issue_payload(quality)),
-        notes=tuple((*notes, *quality.notes, f"escritura={outcome}")),
+        notes=(*notes, *quality.notes, f"escritura={outcome}"),
     )
 
 
@@ -249,8 +266,7 @@ def _stored_payload(
         # Dataset todavía inexistente: no hay nada guardado que comparar.
         return {}
     return {
-        row["as_of"]: tuple(row[name] for name in columns)
-        for row in frame.iter_rows(named=True)
+        row["as_of"]: tuple(row[name] for name in columns) for row in frame.iter_rows(named=True)
     }
 
 
@@ -263,7 +279,9 @@ def _split(
 
     Se comparan **todas** las columnas que se envían: una diferencia en cualquiera
     de ellas es contenido distinto para el almacén, y dejarla fuera sería perder
-    una revisión silenciosamente.
+    una revisión silenciosamente. La única excepción son las columnas de
+    `NOISY_COLUMNS`, donde la fuente no es reproducible bit a bit y se exige
+    igualdad **económica** en lugar de igualdad binaria (#56).
     """
     new: list[dict[str, object]] = []
     revised: list[dict[str, object]] = []
@@ -271,9 +289,35 @@ def _split(
         previous = stored.get(record["as_of"])
         if previous is None:
             new.append(record)
-        elif tuple(record[name] for name in columns) != previous:
+            continue
+        changed = any(
+            not _same_value(previous[index], record[name], column=name)
+            for index, name in enumerate(columns)
+        )
+        if changed:
             revised.append(record)
     return new, revised
+
+
+def _same_value(previous: object, current: object, *, column: str) -> bool:
+    """¿La fuente ha cambiado de verdad este valor?
+
+    En una columna de `NOISY_COLUMNS` basta con que coincida dentro de
+    `NOISY_TOLERANCE`; en cualquier otra, cualquier diferencia es una revisión.
+    """
+    if previous == current:
+        return True
+    if column not in NOISY_COLUMNS:
+        return False
+    if isinstance(previous, bool) or isinstance(current, bool):
+        return False
+    if not isinstance(previous, (int, float)) or not isinstance(current, (int, float)):
+        # Un valor que aparece o desaparece no es ruido: es contenido distinto.
+        return False
+    scale = max(abs(previous), abs(current))
+    if scale == 0.0:
+        return True
+    return abs(current - previous) / scale <= NOISY_TOLERANCE
 
 
 def _write(

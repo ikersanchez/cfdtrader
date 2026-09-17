@@ -433,6 +433,71 @@ def test_a_revised_bar_is_stored_as_version_two(tmp_path: Path) -> None:
     assert store.sql("SELECT * FROM raw.market_daily").height == 1
 
 
+def test_float_noise_in_adj_close_is_not_a_revision(tmp_path: Path) -> None:
+    """#56: Yahoo recalcula `adj_close` en cada ejecución y cambia los últimos ULP.
+
+    Medido sobre el almacén real: entre ``6e-08`` y ``1,4e-06`` relativo, en el
+    100 % de las filas de `SPY` y los 11 ETF sectoriales (las que reparten
+    dividendo). Versionar eso añadía ~50.000 filas de revisión al día, ~264
+    ficheros y ~730 MB/año, sin que la fuente hubiera revisado nada.
+    """
+    spec = _spec()
+    frame = _frame([_bar(FRIDAY, 5000.0)])
+    noisy = frame.with_columns((pl.col("adj_close") * (1.0 + 1e-6)).alias("adj_close"))
+
+    first = ingest(
+        registry=_registry(spec),
+        data_root=tmp_path,
+        adapters={"fake": FakeAdapter({"^TEST": frame})},
+        now=MONDAY_BEFORE_CLOSE,
+    )
+    files = sorted((tmp_path / "raw").rglob("*.parquet"))
+    second = ingest(
+        registry=_registry(spec),
+        data_root=tmp_path,
+        adapters={"fake": FakeAdapter({"^TEST": noisy})},
+        now=MONDAY_BEFORE_CLOSE,
+    )
+
+    assert _row(first, "^TEST").rows_new == 1
+    assert _row(second, "^TEST").rows_new == 0
+    assert any("unchanged" in note for note in _row(second, "^TEST").notes)
+    assert sorted((tmp_path / "raw").rglob("*.parquet")) == files
+    assert Store(tmp_path).sql("SELECT version FROM raw.market_daily").to_series().to_list() == [1]
+
+
+def test_a_real_dividend_adjustment_is_still_a_revision(tmp_path: Path) -> None:
+    """#56: la tolerancia no puede tapar un ajuste de verdad.
+
+    Un dividendo de `SPY` mueve todo el histórico ~0,3 % (3.000 ppm), 300× por
+    encima de la tolerancia de 10 ppm: eso **sí** es una revisión de la fuente y
+    se guarda como `version = 2`.
+    """
+    spec = _spec()
+    frame = _frame([_bar(FRIDAY, 5000.0)])
+    adjusted = frame.with_columns((pl.col("adj_close") * 0.997).alias("adj_close"))
+
+    ingest(
+        registry=_registry(spec),
+        data_root=tmp_path,
+        adapters={"fake": FakeAdapter({"^TEST": frame})},
+        now=MONDAY_BEFORE_CLOSE,
+    )
+    report = ingest(
+        registry=_registry(spec),
+        data_root=tmp_path,
+        adapters={"fake": FakeAdapter({"^TEST": adjusted})},
+        now=datetime(2024, 6, 11, 6, 0, tzinfo=UTC),
+    )
+    store = Store(tmp_path)
+
+    assert _row(report, "^TEST").rows_new == 0
+    assert _row(report, "^TEST").rows_written == 1
+    current = store.sql("SELECT version, adj_close FROM raw.market_daily").to_dicts()
+    assert current[0]["version"] == 2
+    assert current[0]["adj_close"] == 5000.0 * 0.997
+
+
 def test_a_source_that_fails_does_not_create_an_empty_dataset(tmp_path: Path) -> None:
     """A7 y A14: una serie que no entrega datos no aparece con 0 filas, y no aborta."""
     good = _spec("^GOOD")
