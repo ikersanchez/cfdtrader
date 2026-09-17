@@ -1,0 +1,276 @@
+# Fuentes de datos de mercado — tarea #3.
+#
+# Declaración **por serie** de: dataset destino en el almacén, clase de activo,
+# granularidad, fuente primaria, respaldos y cobertura mínima exigida
+# (`_docs/plan.md` §8.1, `_docs/tech_stack.md` §4.5 y §12.4).
+#
+# Reglas que este fichero hace cumplir:
+#
+# - El respaldo **no sustituye en silencio**: la fila guardada lleva el `source`
+#   que entregó el dato de verdad y el informe de cobertura lo dice.
+# - `SPX500:CFD` **no se sustituye** por `^GSPC`, `ES=F` ni `SPY`: no hay ninguna
+#   entrada de `series:` que lo mapee. Su ausencia de fuente se documenta en
+#   `_docs/data_sources.md` y en el bloque `unavailable:` de aquí abajo.
+# - No se contrata ni se inventa ninguna fuente nueva en esta tarea.
+
+version: 1
+
+series:
+  # ── Índice y su referencia real ───────────────────────────────────────────
+  - series_id: "^GSPC"
+    dataset: market_daily
+    asset_class: index
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: [stooq]
+    min_start: 2005-01-01
+    volume_expected: false
+  - series_id: "ES=F"
+    dataset: market_daily
+    asset_class: future
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: []
+    min_start: 2005-01-01
+  - series_id: "SPY"
+    dataset: market_daily
+    asset_class: etf
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: []
+    min_start: 2005-01-01
+  - series_id: "^VIX"
+    dataset: market_daily
+    asset_class: index
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: []
+    min_start: 2005-01-01
+    volume_expected: false
+
+  # ── Sectores: 11 ETFs SPDR contra el sesgo de supervivencia (plan.md §7.1) ─
+  - series_id: "XLK"
+    dataset: sectors
+    asset_class: sector
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: []
+    min_start: 2005-01-01
+  - series_id: "XLF"
+    dataset: sectors
+    asset_class: sector
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: []
+    min_start: 2005-01-01
+  - series_id: "XLE"
+    dataset: sectors
+    asset_class: sector
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: []
+    min_start: 2005-01-01
+  - series_id: "XLV"
+    dataset: sectors
+    asset_class: sector
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: []
+    min_start: 2005-01-01
+  - series_id: "XLY"
+    dataset: sectors
+    asset_class: sector
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: []
+    min_start: 2005-01-01
+  - series_id: "XLP"
+    dataset: sectors
+    asset_class: sector
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: []
+    min_start: 2005-01-01
+  - series_id: "XLI"
+    dataset: sectors
+    asset_class: sector
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: []
+    min_start: 2005-01-01
+  - series_id: "XLU"
+    dataset: sectors
+    asset_class: sector
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: []
+    min_start: 2005-01-01
+  - series_id: "XLB"
+    dataset: sectors
+    asset_class: sector
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: []
+    min_start: 2005-01-01
+  - series_id: "XLRE"
+    dataset: sectors
+    asset_class: sector
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: []
+    # XLRE nació en octubre de 2015 (el sector inmobiliario se separó entonces).
+    min_start: 2015-10-01
+  - series_id: "XLC"
+    dataset: sectors
+    asset_class: sector
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: []
+    # XLC nació en junio de 2018 (el sector de comunicaciones se separó entonces).
+    min_start: 2018-06-01
+
+  # ── Contexto europeo, asiático, divisa y materias primas (plan.md §8.1) ────
+  - series_id: "^GDAXI"
+    dataset: market_daily
+    asset_class: index
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: []
+    min_start: 2005-01-01
+    volume_expected: false
+  - series_id: "^FTSE"
+    dataset: market_daily
+    asset_class: index
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: []
+    min_start: 2005-01-01
+    volume_expected: false
+  - series_id: "^STOXX50E"
+    dataset: market_daily
+    asset_class: index
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: []
+    min_start: 2005-01-01
+    volume_expected: false
+  - series_id: "^N225"
+    dataset: market_daily
+    asset_class: index
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: []
+    min_start: 2005-01-01
+    volume_expected: false
+  - series_id: "^HSI"
+    dataset: market_daily
+    asset_class: index
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: []
+    min_start: 2005-01-01
+    volume_expected: false
+  - series_id: "DX-Y.NYB"
+    dataset: market_daily
+    asset_class: fx
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: []
+    min_start: 2005-01-01
+    volume_expected: false
+  - series_id: "EURUSD=X"
+    dataset: market_daily
+    asset_class: fx
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: []
+    min_start: 2005-01-01
+    volume_expected: false
+  - series_id: "BZ=F"
+    dataset: market_daily
+    asset_class: commodity
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: []
+    min_start: 2005-01-01
+  - series_id: "CL=F"
+    dataset: market_daily
+    asset_class: commodity
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: []
+    min_start: 2005-01-01
+  - series_id: "GC=F"
+    dataset: market_daily
+    asset_class: commodity
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: []
+    min_start: 2005-01-01
+
+  # ── Intradía 5m: etiquetado y ejecución (plan.md §8.1) ────────────────────
+  # El límite rodante del proveedor se declara (`history_window_limit_days`) y se
+  # pide la ventana máxima disponible: la barra de 5m solo se sirve ~60 días.
+  - series_id: "^GSPC"
+    dataset: market_intraday
+    asset_class: index
+    granularity: intraday
+    interval: "5m"
+    primary: yfinance
+    fallbacks: []
+    lookback_period: "60d"
+    history_window_limit_days: 60
+    volume_expected: false
+  - series_id: "ES=F"
+    dataset: market_intraday
+    asset_class: future
+    granularity: intraday
+    interval: "5m"
+    primary: yfinance
+    fallbacks: []
+    lookback_period: "60d"
+    history_window_limit_days: 60
+
+# ── Series sin fuente: se declaran, no se sustituyen ────────────────────────
+# `SPX500:CFD` es el instrumento del proyecto y NO se puede mapear a `^GSPC`,
+# `ES=F` ni `SPY`: son instrumentos distintos (plan.md §3.1). El bloqueo de la
+# Fase 1 se declara con `phase1_ready: false` y `blockers[].code =
+# "cfd_source_missing"`.
+unavailable:
+  - series_id: "SPX500:CFD"
+    status: unavailable
+    bid_ask: false
+    reason: >-
+      No hay fuente pública gratuita del intradía histórico del SPX500:CFD ni de
+      su bid/ask. Comprobado el 2026-09-17: Yahoo sirve el índice (^GSPC) y el
+      futuro (ES=F) con yfinance, pero ninguno es el CFD; Stooq responde con un
+      challenge JavaScript, no CSV. Sustituirlo por ^GSPC o ES=F falsearía la
+      medición de coste y de tracking difference.
+    checked_on: 2026-09-17
+    follow_up_issue: 50
+    documentation: "_docs/data_sources.md"

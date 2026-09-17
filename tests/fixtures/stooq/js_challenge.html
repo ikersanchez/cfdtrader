@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Verifying your browser</title>
+</head>
+<body>
+  <p>Verifying your browser before continuing…</p>
+  <form method="POST" action="/__verify">
+    <input type="hidden" name="token" value="00000000000000000000000000000000">
+    <noscript>Please enable JavaScript.</noscript>
+    <script>
+      /* El challenge real de Stooq: sin ejecutar JS no hay CSV. */
+      window.location.reload();
+    </script>
+  </form>
+</body>
+</html>
