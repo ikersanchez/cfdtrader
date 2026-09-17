@@ -71,6 +71,11 @@ EXIT_OK: Final[int] = 0
 EXIT_CONFIG_ERROR: Final[int] = 1
 EXIT_MISSING_API_KEY: Final[int] = 3
 
+#: Columnas cuyo valor decide si una observación ya almacenada está **revisada**.
+#: Se incluye ``published_at``: si cambia la fecha de publicación del mismo periodo,
+#: para el almacén es otro contenido y hay que guardar la revisión.
+_PAYLOAD_COLUMNS: Final[tuple[str, ...]] = ("value", "unit", "name", "published_at")
+
 
 class MacroSecrets(BaseSettings):
     """Claves del entorno y del ``.env`` (que está en ``.gitignore``)."""
@@ -232,8 +237,16 @@ def _ingest_series(
         for row in writable.iter_rows(named=True)
     ]
     before = _count(store, series_id=spec.series_id, source=result.source)
-    revisions = _write(store, records)
+    stored = _stored_payload(
+        store, series_id=spec.series_id, source=result.source, columns=_PAYLOAD_COLUMNS
+    )
+    new_rows, revised_rows = _split(records, stored)
+    revisions = _write(store, new=new_rows, revised=revised_rows)
     written, span, published = _stats(store, series_id=spec.series_id, source=result.source)
+
+    notes = [*result.notes, f"dataset={spec.dataset}"]
+    if not new_rows and not revised_rows:
+        notes.append("sin cambios: nada nuevo ni revisado")
 
     return _Outcome(
         spec=spec,
@@ -246,11 +259,61 @@ def _ingest_series(
         missing_values=missing,
         discarded_unpublished=discarded,
         revisions=revisions,
-        notes=tuple((*result.notes, f"dataset={spec.dataset}")),
+        notes=tuple(notes),
     )
 
 
-def _write(store: Store, records: list[dict[str, object]]) -> int:
+def _stored_payload(
+    store: Store, *, series_id: str, source: str, columns: Sequence[str]
+) -> dict[object, tuple[object, ...]]:
+    """Estado vigente de la serie en ``raw.macro``: ``as_of`` → columnas de *payload*.
+
+    Una sola consulta por serie. DFF tiene 7.928 observaciones y la ejecución diaria
+    las reenviaría enteras solo para que el almacén descubriera que ya están: la
+    comprobación de identidad del almacén es registro a registro, no por lote.
+    """
+    selected = ", ".join(("as_of", *columns))
+    query = (
+        f"SELECT {selected} FROM raw.macro "
+        f"WHERE series_id = {_literal(series_id)} AND source = {_literal(source)}"
+    )
+    try:
+        frame = store.sql(query)
+    except (UnknownDatasetError, duckdb.Error):
+        # Dataset todavía inexistente: no hay nada guardado que comparar.
+        return {}
+    return {
+        row["as_of"]: tuple(row[name] for name in columns)
+        for row in frame.iter_rows(named=True)
+    }
+
+
+def _split(
+    records: Sequence[dict[str, object]], stored: dict[object, tuple[object, ...]]
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Separa las observaciones nuevas de las que la fuente ha **revisado**.
+
+    Se comparan todas las columnas que se envían (valor, unidad, nombre y fecha de
+    publicación): una diferencia en cualquiera de ellas es contenido distinto para
+    el almacén, y omitirla sería perder una revisión.
+    """
+    new: list[dict[str, object]] = []
+    revised: list[dict[str, object]] = []
+    for record in records:
+        previous = stored.get(record["as_of"])
+        if previous is None:
+            new.append(record)
+        elif tuple(record[name] for name in _PAYLOAD_COLUMNS) != previous:
+            revised.append(record)
+    return new, revised
+
+
+def _write(
+    store: Store,
+    *,
+    new: Sequence[dict[str, object]],
+    revised: Sequence[dict[str, object]],
+) -> int:
     """Escribe en ``raw.macro``; las revisiones de la fuente van con ``append_revision``.
 
     FRED revisa CPI, PCE y NFP: es el caso de uso para el que existe
@@ -259,35 +322,20 @@ def _write(store: Store, records: list[dict[str, object]]) -> int:
     Returns
     -------
     int
-        Número de registros escritos como revisión.
+        Número de observaciones escritas como revisión.
     """
-    try:
-        store.append("raw", "macro", records)
-        return 0
-    except ImmutableWriteError:
-        revisions = _count_revisions(store, records)
-        logger.info("macro: {} observaciones revisadas por la fuente", revisions)
-        store.append_revision("raw", "macro", records)
-        return revisions
-
-
-def _count_revisions(store: Store, records: list[dict[str, object]]) -> int:
-    """Cuántas observaciones **cambian** un valor ya almacenado.
-
-    No basta con mirar si la identidad existe: reenviar el mismo valor es un
-    no-op, y contarlo como revisión inflaría el informe.
-    """
-    try:
-        stored = store.sql("SELECT series_id, as_of, value FROM raw.macro").to_dicts()
-    except (UnknownDatasetError, duckdb.Error):
-        return 0
-    current = {(str(row["series_id"]), str(row["as_of"])): row["value"] for row in stored}
-    changed = 0
-    for record in records:
-        key = (str(record["series_id"]), str(record["as_of"]))
-        if key in current and current[key] != record["value"]:
-            changed += 1
-    return changed
+    if new:
+        try:
+            store.append("raw", "macro", list(new))
+        except ImmutableWriteError:
+            # Otro proceso escribió la misma identidad entre la comparación y la
+            # escritura: la vía correcta es la revisión, no perder el dato.
+            logger.info("macro: identidad escrita por otro proceso; se escribe como revisión")
+            store.append_revision("raw", "macro", list(new))
+    if revised:
+        logger.info("macro: {} observaciones revisadas por la fuente", len(revised))
+        store.append_revision("raw", "macro", list(revised))
+    return len(revised)
 
 
 def _count(store: Store, *, series_id: str, source: str) -> int:

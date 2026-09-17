@@ -328,7 +328,53 @@ def test_a_second_identical_run_is_a_noop(tmp_path: Path) -> None:
     assert first.rows[0].rows_new == 2
     assert second.rows[0].rows_new == 0
     assert second.rows[0].rows_written == 2
+    assert second.rows[0].revisions == 0
+    assert any("sin cambios" in note for note in second.rows[0].notes)
     assert sorted((tmp_path / "raw").rglob("*.parquet")) == files
+
+
+def test_second_run_does_not_send_the_history_to_the_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """La ingesta diaria no reenvía el histórico de FRED: solo lo nuevo y lo revisado.
+
+    DFF tiene 7.928 observaciones. Reenviarlas cada día es correcto (el almacén
+    deduplica) pero obliga a comprobar identidad registro a registro para acabar
+    sin escribir nada. Aquí se comprueba que la segunda vuelta ni siquiera llama.
+    """
+    registry = _registry("CPIAUCSL")
+    payload = _fixture("cpi.json")
+    calls: list[str] = []
+    original_append = Store.append
+    original_revision = Store.append_revision
+
+    def spy_append(self: Store, layer: str, dataset: str, records: object) -> object:
+        calls.append("append")
+        return original_append(self, layer, dataset, records)  # type: ignore[arg-type]
+
+    def spy_revision(self: Store, layer: str, dataset: str, records: object) -> object:
+        calls.append("append_revision")
+        return original_revision(self, layer, dataset, records)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Store, "append", spy_append)
+    monkeypatch.setattr(Store, "append_revision", spy_revision)
+
+    ingest(
+        registry=registry,
+        data_root=tmp_path,
+        adapter=_adapter({"CPIAUCSL": payload}),
+        now=datetime(2024, 2, 20, 12, 0, tzinfo=UTC),
+    )
+    assert calls == ["append"], "la primera vuelta escribe las observaciones nuevas"
+    calls.clear()
+    ingest(
+        registry=registry,
+        data_root=tmp_path,
+        adapter=_adapter({"CPIAUCSL": payload}),
+        now=datetime(2024, 2, 20, 12, 0, tzinfo=UTC),
+    )
+
+    assert calls == [], "la segunda vuelta no debe tocar el almacén"
 
 
 def test_a_revision_from_the_source_becomes_version_two(tmp_path: Path) -> None:

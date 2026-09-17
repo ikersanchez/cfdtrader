@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import polars as pl
+import pytest
 
 from cfdtrader.data.coverage import CoverageReport, SeriesRow
 from cfdtrader.data.market import PAYLOAD_COLUMNS, ingest
@@ -359,7 +360,44 @@ def test_second_identical_run_is_a_noop(tmp_path: Path) -> None:
     assert _row(first, "^TEST").rows_new == 1
     assert _row(second, "^TEST").rows_new == 0
     assert _row(second, "^TEST").rows_written == 1
+    assert any("unchanged" in note for note in _row(second, "^TEST").notes)
     assert sorted((tmp_path / "raw").rglob("*.parquet")) == files_after_first
+
+
+def test_second_run_does_not_send_the_history_to_the_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """La ejecución diaria no reenvía el histórico: solo lo nuevo y lo revisado.
+
+    El almacén deduplica, así que reenviarlo todo es correcto pero carísimo: su
+    comprobación de identidad es registro a registro. Con 5.461 filas por serie la
+    ejecución diaria tardaba horas. Aquí se comprueba que la segunda vuelta no
+    llama a `append` en absoluto, no solo que no cree ficheros.
+    """
+    spec = _spec()
+    frame = _frame([_bar(FRIDAY, 5000.0), _bar(MONDAY, 5010.0)])
+    adapters = {"fake": FakeAdapter({"^TEST": frame})}
+    calls: list[str] = []
+    original_append = Store.append
+    original_revision = Store.append_revision
+
+    def spy_append(self: Store, layer: str, dataset: str, records: object) -> object:
+        calls.append("append")
+        return original_append(self, layer, dataset, records)  # type: ignore[arg-type]
+
+    def spy_revision(self: Store, layer: str, dataset: str, records: object) -> object:
+        calls.append("append_revision")
+        return original_revision(self, layer, dataset, records)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Store, "append", spy_append)
+    monkeypatch.setattr(Store, "append_revision", spy_revision)
+
+    ingest(registry=_registry(spec), data_root=tmp_path, adapters=adapters, now=MONDAY_BEFORE_CLOSE)
+    assert calls == ["append"], "la primera vuelta escribe las dos barras nuevas"
+    calls.clear()
+    ingest(registry=_registry(spec), data_root=tmp_path, adapters=adapters, now=MONDAY_BEFORE_CLOSE)
+
+    assert calls == [], "la segunda vuelta no debe tocar el almacén"
 
 
 def test_a_revised_bar_is_stored_as_version_two(tmp_path: Path) -> None:

@@ -49,7 +49,7 @@ from cfdtrader.data.sources.http import CachedHttpClient
 from cfdtrader.data.sources.registry import SeriesRegistry, load_registry
 from cfdtrader.data.sources.stooq_adapter import StooqAdapter
 from cfdtrader.data.sources.yfinance_adapter import YFinanceAdapter
-from cfdtrader.data.store import ImmutableWriteError, Store, UnknownDatasetError
+from cfdtrader.data.store import ImmutableWriteError, Store, UnknownDatasetError, WriteOutcome
 
 __all__ = ["EXIT_NOT_READY", "EXIT_OK", "build_adapters", "ingest", "main"]
 
@@ -170,8 +170,13 @@ def _write_result(
         )
 
     records = _records(frame, spec=spec, source=result.source, now=now, dataset=dataset)
+    payload = PAYLOAD_COLUMNS[dataset]
+    stored = _stored_payload(
+        store, dataset, source=result.source, series_id=spec.series_id, columns=payload
+    )
+    new, revised = _split(records, stored, payload)
     before = _count_rows(store, dataset, source=result.source, series_id=spec.series_id)
-    outcome = _write(store, dataset, records)
+    outcome = _write(store, dataset, new=new, revised=revised)
     after = _count_rows(store, dataset, source=result.source, series_id=spec.series_id)
 
     span, written = _span(store, dataset, source=result.source, series_id=spec.series_id)
@@ -224,19 +229,83 @@ def _records(
     return records
 
 
-def _write(store: Store, dataset: str, records: Sequence[dict[str, object]]) -> str:
-    """Escribe en ``raw``; si la fuente revisó un valor, usa ``append_revision``.
+def _stored_payload(
+    store: Store, dataset: str, *, source: str, series_id: str, columns: Sequence[str]
+) -> dict[object, tuple[object, ...]]:
+    """Estado vigente del almacén para esa serie: ``as_of`` → columnas de *payload*.
 
-    ``append`` es la vía normal. Cuando la misma ``(source, series_id, as_of)``
-    llega con otro contenido, el almacén lo rechaza con ``ImmutableWriteError``
-    y la ingesta escribe la revisión de forma explícita (A10): una barra en
-    formación que la fuente corrige se guarda como ``version = 2``.
+    Una sola consulta por serie. Comparar en memoria es lo que evita reenviar el
+    histórico completo —5.461 filas por serie— solo para que el almacén descubra
+    que ya lo tiene: su comprobación de identidad es registro a registro.
     """
+    selected = ", ".join(("as_of", *columns))
+    query = (
+        f"SELECT {selected} FROM raw.{dataset} "
+        f"WHERE source = {_literal(source)} AND series_id = {_literal(series_id)}"
+    )
     try:
-        return str(store.append("raw", dataset, list(records)))
-    except ImmutableWriteError:
-        logger.info("{}: la fuente revisó algún valor; se escribe como revisión", dataset)
-        return str(store.append_revision("raw", dataset, list(records)))
+        frame = store.sql(query)
+    except (UnknownDatasetError, duckdb.Error):
+        # Dataset todavía inexistente: no hay nada guardado que comparar.
+        return {}
+    return {
+        row["as_of"]: tuple(row[name] for name in columns)
+        for row in frame.iter_rows(named=True)
+    }
+
+
+def _split(
+    records: Sequence[dict[str, object]],
+    stored: dict[object, tuple[object, ...]],
+    columns: Sequence[str],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Separa lo nuevo de lo **revisado** comparando con el estado vigente.
+
+    Se comparan **todas** las columnas que se envían: una diferencia en cualquiera
+    de ellas es contenido distinto para el almacén, y dejarla fuera sería perder
+    una revisión silenciosamente.
+    """
+    new: list[dict[str, object]] = []
+    revised: list[dict[str, object]] = []
+    for record in records:
+        previous = stored.get(record["as_of"])
+        if previous is None:
+            new.append(record)
+        elif tuple(record[name] for name in columns) != previous:
+            revised.append(record)
+    return new, revised
+
+
+def _write(
+    store: Store,
+    dataset: str,
+    *,
+    new: Sequence[dict[str, object]],
+    revised: Sequence[dict[str, object]],
+) -> str:
+    """Escribe solo lo que cambia: lo nuevo con ``append``, lo revisado con ``append_revision``.
+
+    Enviar el histórico completo en cada ejecución es *correcto* (el almacén
+    deduplica) pero carísimo: la ejecución diaria reenviaría ~110.000 filas para
+    añadir veinte. Aquí se decide una vez por serie.
+
+    El parche de ``ImmutableWriteError`` no es decorativo: si otro proceso escribió
+    la misma identidad entre la comparación y la escritura, ``append`` falla y la
+    vía correcta es la revisión (A10), nunca perder el dato.
+    """
+    outcomes: list[str] = []
+    if new:
+        try:
+            outcomes.append(str(store.append("raw", dataset, list(new))))
+        except ImmutableWriteError:
+            logger.info("{}: identidad escrita por otro proceso; se escribe como revisión", dataset)
+            outcomes.append(str(store.append_revision("raw", dataset, list(new))))
+    if revised:
+        logger.info("{}: la fuente revisó {} filas", dataset, len(revised))
+        outcomes.append(str(store.append_revision("raw", dataset, list(revised))))
+    if not outcomes:
+        return WriteOutcome.UNCHANGED.value
+    return "; ".join(outcomes)
 
 
 def _count_rows(store: Store, dataset: str, *, source: str, series_id: str) -> int:
