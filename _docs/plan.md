@@ -461,23 +461,23 @@ class Direction(str, Enum):
 
 class AgentSignal(BaseModel):
     agent: str
-    as_of: str                        # ISO 8601 con TZ. Guardar en UTC, presentar en Europe/Madrid
-    features_version: str             # hash del feature set
-    prob_up: float = Field(ge=0, le=1)   # solo si el agente es direccional
+    as_of: str  # ISO 8601 con TZ. Guardar en UTC, presentar en Europe/Madrid
+    features_version: str  # hash del feature set
+    prob_up: float = Field(ge=0, le=1)  # solo si el agente es direccional
     confidence: float = Field(ge=0, le=1)
     veto: bool = False
     veto_reason: str | None = None
-    evidence: dict = {}               # valores numéricos crudos y trazables
+    evidence: dict = {}  # valores numéricos crudos y trazables
 
 
 class NewsEvent(BaseModel):
-    entity: str                       # "SPX500", "NVDA", "FED", "DXY", ...
-    direction: int                    # -1 / 0 / +1
+    entity: str  # "SPX500", "NVDA", "FED", "DXY", ...
+    direction: int  # -1 / 0 / +1
     materiality: float = Field(ge=0, le=1)
     horizon_hours: int
     source: str
     url: str
-    published_at: str                 # CRÍTICO: debe ser <= as_of de la decisión
+    published_at: str  # CRÍTICO: debe ser <= as_of de la decisión
     llm_confidence: float = Field(ge=0, le=1)
 
 
@@ -486,8 +486,8 @@ class Recommendation(BaseModel):
     direction: Direction
     prob_up_calibrated: float
     expected_move_pct: float
-    cost_pct: float                   # ida + vuelta, MEDIDO
-    ev_net_pct: float                 # el número que decide
+    cost_pct: float  # ida + vuelta, MEDIDO
+    ev_net_pct: float  # el número que decide
     size_notional_eur: float
     size_fraction_of_capital: float
     leverage_implied: float
@@ -497,7 +497,7 @@ class Recommendation(BaseModel):
     blocking_events: list[str]
     bull_case: list[str]
     bear_case: list[str]
-    confidence_tier: str              # "A" | "B" | "C"
+    confidence_tier: str  # "A" | "B" | "C"
     model_version: str
     features_version: str
     prompt_hashes: dict[str, str]
@@ -914,17 +914,17 @@ Secretos:    .env local con permisos 600
 def backtest(dates, feature_fn, model, gate_fn, costs, initial=10_000.0):
     equity, trades = initial, []
     for d in dates:
-        f = feature_fn(as_of=d)                 # snapshot point-in-time, sin futuro
-        if f is None:                           # calidad de datos KO
+        f = feature_fn(as_of=d)  # snapshot point-in-time, sin futuro
+        if f is None:  # calidad de datos KO
             continue
-        p_up = model.predict_proba(f)["up"]     # CALIBRADA
-        R = f["expected_range"]                 # del RegimeVolAgent
-        c = costs.round_trip_pct(d)             # del CostExecutionAgent
-        rec = gate_fn(p_up, R, c, f)            # FUNCIÓN PURA y determinista
+        p_up = model.predict_proba(f)["up"]  # CALIBRADA
+        R = f["expected_range"]  # del RegimeVolAgent
+        c = costs.round_trip_pct(d)  # del CostExecutionAgent
+        rec = gate_fn(p_up, R, c, f)  # FUNCIÓN PURA y determinista
         if rec.direction == "nothing":
             continue
-        pnl = simulate_trade(d, rec, costs)     # respeta bid/ask y gap de apertura
-        equity *= (1 + pnl * rec.size_fraction)
+        pnl = simulate_trade(d, rec, costs)  # respeta bid/ask y gap de apertura
+        equity *= 1 + pnl * rec.size_fraction
         trades.append((d, rec, pnl))
     return equity, trades
 ```
