@@ -380,6 +380,13 @@ def test_replace_in_derived_keeps_a_single_row_per_identity(store: Store) -> Non
     assert frame["value"][0] == 2.0
     assert frame["version"][0] == 2
 
+    # El estado consultable del dataset también tiene una sola fila por identidad:
+    # el valor sustituido no se puede leer por SQL. La historia sigue en disco.
+    assert store.sql("SELECT value, version FROM derived.features_daily").to_dicts() == [
+        {"value": 2.0, "version": 2}
+    ]
+    assert len(_files(store.root)) == 2
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Revisiones y visibilidad point-in-time
@@ -478,6 +485,27 @@ def test_sql_queries_parquet_and_creates_no_database(store: Store, tmp_path: Pat
 
     assert list(tmp_path.rglob("*.duckdb")) == []
     assert {path.suffix for path in tmp_path.rglob("*") if path.is_file()} == {".parquet"}
+
+
+def test_sql_view_shows_one_row_per_identity_without_losing_the_history(store: Store) -> None:
+    """La vista SQL expone el estado vigente; las revisiones anteriores siguen en disco."""
+    revised = _series(
+        value=309.0,
+        published_at=datetime(2024, 3, 14, 12, 30, tzinfo=UTC),
+        fetched_at=datetime(2024, 3, 14, 12, 31, tzinfo=UTC),
+    )
+    store.append("raw", "macro", _series())
+    store.append_revision("raw", "macro", revised)
+
+    assert store.sql("SELECT count(*) AS n FROM raw.macro")["n"][0] == 1
+    assert store.sql("SELECT value, version FROM raw.macro").to_dicts() == [
+        {"value": 309.0, "version": 2}
+    ]
+
+    # Nada se ha borrado: siguen los dos ficheros y la lectura antigua ve el valor original.
+    assert len(_files(store.root)) == 2
+    before = store.read_pit("raw", "macro", datetime(2024, 2, 20, tzinfo=UTC))
+    assert (before["value"][0], before["version"][0]) == (308.4, 1)
 
 
 def test_tests_do_not_write_into_the_repository_data_directory() -> None:

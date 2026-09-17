@@ -79,9 +79,11 @@ Semántica de escritura
   (FRED revisa CPI/PCE/NFP). ``version = max + 1``. Si el contenido coincide con
   la última revisión ⇒ no-op.
 - ``replace(...)``: **solo ``derived``**, que es recalculable. En ``raw`` falla
-  con ``ImmutableWriteError``. Reescribe el valor de la identidad; el valor
-  anterior deja de ser visible pero no se borra del disco. `raw` nunca se
-  sobrescribe.
+  con ``ImmutableWriteError``. Reescribe el valor de la identidad y deja **una
+  sola fila por identidad** en el estado consultable: la revisión nueva
+  sustituye a la anterior tanto en ``read_pit`` como en las vistas SQL. El valor
+  anterior deja de ser visible pero **no se borra del disco** (se recupera con
+  ``read_pit`` de un instante pasado). `raw` nunca se sobrescribe.
 
 El **contenido** de un registro es todo salvo ``version`` y ``fetched_at``:
 ``fetched_at`` es cuándo lo obtuvimos (varía en cada reintento legítimo) y
@@ -110,6 +112,13 @@ Lectura *point-in-time*
 ``sql(query)`` consulta cualquier dataset con SQL de DuckDB sobre los Parquet.
 Para eso registra una vista por dataset en los esquemas ``raw`` y ``derived``,
 de modo que ``SELECT * FROM raw.market_daily`` funciona sin escribir rutas.
+
+Las vistas exponen **una sola fila por identidad**: la **revisión vigente**, la
+de mayor ``version`` (lo mismo que devuelve ``read_pit``, sin el filtro de
+visibilidad temporal). Así, tras un ``replace`` en ``derived`` o un
+``append_revision``, el dataset **no** muestra a la vez el valor viejo y el
+nuevo. La historia completa sigue en los Parquet y se reconstruye con
+``read_pit(at=...)``.
 """
 
 from __future__ import annotations
@@ -170,6 +179,13 @@ _DATASET_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 _SOURCE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 _PARQUET_SUFFIX = ".parquet"
+
+#: Expresión de ventana que define la **revisión vigente** de una identidad: la
+#: de mayor ``version``. La usan la lectura *point-in-time* (que además filtra
+#: por visibilidad) y las vistas SQL (que exponen el estado actual).
+_CURRENT_ROW_WINDOW = (
+    "row_number() OVER (PARTITION BY source, series_id, as_of ORDER BY version DESC)"
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -472,8 +488,7 @@ class Store:
         query = (
             "WITH visible AS (SELECT * FROM "
             f"{_read_parquet_expr(paths)} WHERE {' AND '.join(conditions)}), "
-            "ranked AS (SELECT *, row_number() OVER ("
-            "PARTITION BY source, series_id, as_of ORDER BY version DESC) AS pit_rank FROM visible) "
+            f"ranked AS (SELECT *, {_CURRENT_ROW_WINDOW} AS pit_rank FROM visible) "
             "SELECT * EXCLUDE (pit_rank) FROM ranked WHERE pit_rank = 1 "
             "ORDER BY series_id, as_of"
         )
@@ -671,7 +686,13 @@ class Store:
         return connection
 
     def _register_views(self, connection: duckdb.DuckDBPyConnection) -> None:
-        """Expone cada dataset como ``raw.<dataset>`` / ``derived.<dataset>``."""
+        """Expone cada dataset como ``raw.<dataset>`` / ``derived.<dataset>``.
+
+        La vista devuelve el **estado actual**: una sola fila por identidad, la
+        de mayor ``version``. Sin ese filtro, un ``replace`` en ``derived`` (o
+        un ``append_revision``) dejaría dos filas por identidad y el valor ya
+        sustituido seguiría siendo legible por SQL.
+        """
         for layer in LAYERS:
             connection.execute(f'CREATE SCHEMA IF NOT EXISTS "{layer}"')
             for dataset in self.datasets(layer):
@@ -680,7 +701,9 @@ class Store:
                     continue
                 connection.execute(
                     f'CREATE OR REPLACE VIEW "{layer}"."{dataset}" AS '
-                    f"SELECT * FROM {_read_parquet_expr(paths)}"
+                    "SELECT * EXCLUDE (pit_rank) FROM ("
+                    f"SELECT *, {_CURRENT_ROW_WINDOW} AS pit_rank "
+                    f"FROM {_read_parquet_expr(paths)}) WHERE pit_rank = 1"
                 )
 
     def _fetch(self, query: str, params: Sequence[object]) -> pl.DataFrame:
