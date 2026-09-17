@@ -59,6 +59,10 @@ FRED_OBSERVATIONS_URL = "https://api.stlouisfed.org/fred/series/observations"
 #: Valor con el que FRED marca un dato ausente. No es un 0 ni un nulo: es «no hay dato».
 FRED_MISSING = "."
 
+#: Extremos de la ventana de *vintages*: desde el principio de los datos hasta hoy.
+FIRST_VINTAGE = date(1900, 1, 1)
+LAST_VINTAGE = "9999-12-31"
+
 
 class MacroSeriesSpec(BaseModel):
     """Declaración de una serie macro: qué es, cuándo se publica y qué se exige de ella."""
@@ -175,6 +179,17 @@ class FredAdapter:
         if realtime is not None:
             params["realtime_start"] = realtime.isoformat()
             params["realtime_end"] = realtime.isoformat()
+        elif spec.publication_from_realtime_start:
+            # ⚠️ Sin esto, FRED devuelve la **última** vintage y cada observación
+            # trae `realtime_start` = el día de la consulta: las 260 observaciones
+            # de CPI desde 2005 quedarían publicadas «hoy» y el *point-in-time*
+            # sería decorativo. Pidiendo todas las vintages, `realtime_start` de
+            # cada observación es la fecha real de su primer comunicado
+            # (comprobado contra la API el 2026-09-17: 1.367 filas y 0,1 MB para
+            # CPIAUCSL desde 2005, con el primer dato de 2005-01-01 publicado el
+            # 2005-02-23).
+            params["realtime_start"] = (spec.min_start or FIRST_VINTAGE).isoformat()
+            params["realtime_end"] = LAST_VINTAGE
 
         try:
             cached = self._client.get(FRED_OBSERVATIONS_URL, params=params, now=now)
@@ -197,13 +212,18 @@ class FredAdapter:
             )
             return _failed(spec, status, message, attempts=cached.attempts)
 
-        frame = _normalize(payload, spec=spec)
+        frame, vintages = _normalize(payload, spec=spec)
         if frame.height == 0:
             return _failed(
                 spec, SourceStatus.UNAVAILABLE, f"{spec.series_id}: FRED no trae observaciones"
             )
 
         notes = [f"cache={'sí' if cached.from_cache else 'no'}"]
+        if spec.publication_from_realtime_start:
+            notes.append(
+                f"vintages desde {params['realtime_start']}: {vintages} filas leídas, "
+                f"se guarda la primera publicación de cada observación"
+            )
         vintage = payload.get("realtime_start")
         if vintage is not None:
             notes.append(f"vintage={vintage}")
@@ -264,13 +284,27 @@ def _as_json(payload: object) -> dict[str, Any] | None:
     return cast("dict[str, Any]", payload)
 
 
-def _normalize(payload: dict[str, Any], *, spec: MacroSeriesSpec) -> pl.DataFrame:
-    """Observaciones de FRED → ``(as_of, value, published_at)`` en UTC."""
+def _normalize(payload: dict[str, Any], *, spec: MacroSeriesSpec) -> tuple[pl.DataFrame, int]:
+    """Observaciones de FRED → ``(as_of, value, published_at)`` en UTC.
+
+    Cuando la respuesta trae **varias vintages** de la misma observación (series
+    del BLS/BEA), se guarda la **primera**: el valor que movió el mercado es el
+    primer publicado, y su instante de publicación es el del primer comunicado.
+    Las revisiones posteriores son otro dato y no se mezclan aquí (si algún día
+    hacen falta, se piden por vintage y se escriben como revisión).
+
+    Returns
+    -------
+    tuple[pl.DataFrame, int]
+        El frame normalizado y cuántas filas de vintage se leyeron.
+    """
     observations = payload.get("observations")
     if not isinstance(observations, list):
-        return _empty_frame()
+        return _empty_frame(), 0
 
-    rows: list[dict[str, object]] = []
+    # Fecha observada → (primera vintage con valor, valor de esa vintage).
+    first: dict[date, tuple[str, float | None]] = {}
+    vintages = 0
     for item in cast("list[object]", observations):
         if not isinstance(item, dict):
             continue
@@ -278,28 +312,41 @@ def _normalize(payload: dict[str, Any], *, spec: MacroSeriesSpec) -> pl.DataFram
         day = _as_date(observation.get("date"))
         if day is None:
             continue
+        vintages += 1
         value = _as_number(observation.get("value"))
+        realtime = observation.get("realtime_start")
+        release = realtime if isinstance(realtime, str) else ""
+        previous = first.get(day)
+        # Se prefiere la vintage más antigua **con valor**: una vintage con `.`
+        # no es una publicación, es un hueco.
+        if previous is None or (previous[1] is None and value is not None) or (
+            value is not None and previous[1] is not None and release and release < previous[0]
+        ):
+            first[day] = (release, value)
+
+    rows: list[dict[str, object]] = []
+    for day, (release, value) in sorted(first.items()):
         rows.append(
             {
                 "as_of": day,
                 # NULL = no hay dato. No se interpola ni se arrastra el valor anterior.
                 "value": value,
-                "published_at": _published_at(
-                    spec, day=day, realtime_start=observation.get("realtime_start")
-                ),
+                "published_at": _published_at(spec, day=day, realtime_start=release),
             }
         )
-
     if not rows:
-        return _empty_frame()
-    return pl.DataFrame(
-        rows,
-        schema_overrides={
-            "as_of": pl.Date(),
-            "value": pl.Float64(),
-            "published_at": pl.Datetime("us", "UTC"),
-        },
-    ).sort("as_of")
+        return _empty_frame(), vintages
+    return (
+        pl.DataFrame(
+            rows,
+            schema_overrides={
+                "as_of": pl.Date(),
+                "value": pl.Float64(),
+                "published_at": pl.Datetime("us", "UTC"),
+            },
+        ).sort("as_of"),
+        vintages,
+    )
 
 
 def _published_at(spec: MacroSeriesSpec, *, day: date, realtime_start: object) -> datetime | None:

@@ -46,6 +46,9 @@ KNOWN_PUBLICATIONS: tuple[tuple[str, str, date, datetime], ...] = (
 
 Handler = Callable[[httpx.Request], httpx.Response]
 
+#: Clave de mentira para los tests. No es un secreto: la API no se llama nunca.
+PROBE_KEY = "no-es-una-clave"  # pragma: allowlist secret
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Utilidades
@@ -222,6 +225,74 @@ def test_market_determined_series_use_the_declared_publication_rule() -> None:
         datetime(2024, 6, 11, 13, 0, tzinfo=UTC)  # 09:00 EDT del día siguiente
     ]
     assert treasury.frame.get_column("as_of").to_list() == [date(2024, 6, 10)]
+
+
+def test_the_request_asks_for_all_the_vintages_of_a_release_calendar_series() -> None:
+    """Sin pedir las *vintages*, FRED devuelve la última y publica **toda** la historia hoy.
+
+    Es el bug que apareció al probar contra la API de verdad (2026-09-17): con la
+    consulta por omisión, las 260 observaciones de `CPIAUCSL` desde 2005 traían
+    `realtime_start = 2026-09-17`. Lo que se pide ahora es la ventana de vintages
+    completa, y solo para las series que publican por calendario.
+    """
+    seen: list[dict[str, str]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(dict(request.url.params))
+        return httpx.Response(
+            200, headers={"content-type": "application/json"}, content=_fixture("cpi.json")
+        )
+
+    adapter = FredAdapter(
+        CachedHttpClient(
+            source="fred",
+            client=httpx.Client(transport=httpx.MockTransport(handle)),
+            backoff_seconds=0.0,
+        ),
+        api_key=PROBE_KEY,
+    )
+
+    adapter.fetch(_spec("CPIAUCSL"), now=NOW)
+    calendar_series = seen[-1]
+    assert calendar_series["realtime_start"] == "2005-01-01"
+    assert calendar_series["realtime_end"] == "9999-12-31"
+
+    adapter.fetch(_spec("DGS10"), now=NOW)
+    market_series = seen[-1]
+    assert "realtime_start" not in market_series
+    assert "realtime_end" not in market_series
+
+
+def test_only_the_first_publication_of_each_observation_is_kept() -> None:
+    """Con varias *vintages* de la misma observación se guarda el primer comunicado.
+
+    El valor que movió el mercado es el primer publicado; una vintage con `.` no
+    es una publicación y no puede «adelantar» la fecha.
+    """
+    body = json.dumps(
+        {
+            "realtime_start": "2005-01-01",
+            "realtime_end": "9999-12-31",
+            "observations": [
+                # Primera publicación, luego la revisión, y una vintage sin dato.
+                {"realtime_start": "2024-01-11", "date": "2023-12-01", "value": "306.746"},
+                {"realtime_start": "2024-02-13", "date": "2023-12-01", "value": "306.900"},
+                {"realtime_start": "2024-02-12", "date": "2023-12-01", "value": "."},
+                {"realtime_start": "2024-02-13", "date": "2024-01-01", "value": "308.417"},
+            ],
+        }
+    ).encode()
+
+    result = _adapter({"CPIAUCSL": body}).fetch(_spec("CPIAUCSL"), now=NOW)
+
+    assert result.ok is True
+    assert result.frame.get_column("as_of").to_list() == [date(2023, 12, 1), date(2024, 1, 1)]
+    assert result.frame.get_column("value").to_list() == [306.746, 308.417]
+    assert result.frame.get_column("published_at").to_list() == [
+        datetime(2024, 1, 11, 13, 30, tzinfo=UTC),
+        datetime(2024, 2, 13, 13, 30, tzinfo=UTC),
+    ]
+    assert any("primera publicación" in note for note in result.notes)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
