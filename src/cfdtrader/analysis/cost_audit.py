@@ -20,6 +20,13 @@ mano, y el *tracking difference* cuando hay pares CFD/índice en el mismo instan
   que sale ``state: "unmeasured"``, ``value: null``, con motivo y con el
   procedimiento de ``plan.md`` §8.5 para rellenarlo. Prohibido cualquier valor de
   relleno: ni constante provisional, ni un ``0`` con motivo, ni un rango inventado.
+  El **2026-09-18** el propietario decidió **no medirlo ahora** y seguir adelante con
+  un **supuesto pesimista declarado**, y eso es lo que publica el bloque
+  ``slippage_asumido``: ``state: "assumed"``, ``is_measurement: false``, valor
+  **100 % del margen de la puerta (b) = 20 % de ``R``**, con su procedencia y su
+  motivo. Una asunción **no** es una medición y **no** convierte el
+  ``not_evaluable`` de la mitad (b) en un aprobado: asumir tu propio peor caso no
+  puede ser un aprobado.
 - **Corte de financiación**: **sigue sin verificar**. Vale ``null`` con
   ``state: "unverified"`` y con la pregunta literal al bróker. Asumir una hora de
   corte fija está prohibido: si el corte cae antes del cierre, el intradía puro
@@ -85,8 +92,14 @@ __all__ = [
     "LIMITATIONS",
     "PAIR_TOLERANCE_SECONDS",
     "REFERENCE_NOTIONAL_USD",
+    "R_ILLUSTRATIVE_PCT",
     "SESSION_TRANCHES",
     "SIZE_LADDER_USD",
+    "SLIPPAGE_ASSUMPTION_DECIDED_ON",
+    "SLIPPAGE_ASSUMPTION_NAME",
+    "SLIPPAGE_ASSUMPTION_PCT_OF_R",
+    "SLIPPAGE_ASSUMPTION_PROVENANCE",
+    "SLIPPAGE_ASSUMPTION_SHARE_OF_GATE_PCT",
     "SPREAD_PCT",
     "SPREAD_USD",
     "CostAudit",
@@ -109,6 +122,7 @@ __all__ = [
     "render_markdown",
     "report_payload",
     "session_tranches",
+    "slippage_assumption_block",
     "tranche_of",
 ]
 
@@ -172,6 +186,45 @@ DECLARED_SETTLEMENT_CURRENCY: Final[str] = "USD"
 #: una hora de corte fija está prohibido. La constante existe para poder afirmarlo en
 #: un test.
 DECLARED_FINANCING_CUT: Final[None] = None
+
+# ── El supuesto pesimista del *slippage* (decisión del propietario 2026-09-18) ──
+#: Nombre declarado del supuesto. Es una **asunción**, no una medición (A14).
+SLIPPAGE_ASSUMPTION_NAME: Final[str] = "slippage_ejecucion_asumido"
+
+#: Procedencia y fecha del supuesto: decisión del propietario del 2026-09-18.
+SLIPPAGE_ASSUMPTION_PROVENANCE: Final[str] = "decision del propietario 2026-09-18"
+SLIPPAGE_ASSUMPTION_DECIDED_ON: Final[str] = "2026-09-18"
+
+#: Palabras del propietario (verbatim) que ordenan el supuesto.
+SLIPPAGE_ASSUMPTION_OWNER_QUOTE: Final[str] = (
+    "pues déjalo como supuesto pesimista y seguimos adelante, modifica el precio de entrada que "
+    "decías también con lo disponible en la apertura"
+)
+
+#: Valor declarado: 100 % del margen de la puerta (b) = **20 % de `R`**.
+SLIPPAGE_ASSUMPTION_SHARE_OF_GATE_PCT: Final[Decimal] = Decimal("100")
+SLIPPAGE_ASSUMPTION_PCT_OF_R: Final[Decimal] = Decimal("20")
+UNIT_PCT_OF_R: Final[str] = "% de `R`"
+UNIT_SHARE_OF_GATE: Final[str] = "% del margen de la puerta (b)"
+UNIT_BP_OF_NOTIONAL: Final[str] = "bp del nocional"
+
+#: `R` **ilustrativo** bajo el que se publica el equivalente en bp: **nunca** una
+#: decisión. `R` es la decisión abierta 5 → #60 y viaja como `null`.
+R_ILLUSTRATIVE_PCT: Final[Decimal] = Decimal("1")
+SLIPPAGE_ASSUMPTION_R_ISSUE: Final[str] = "#60"
+
+#: De dónde se aplica el supuesto aguas abajo (A22). Hasta entonces es una declaración.
+SLIPPAGE_ASSUMPTION_DOWNSTREAM: Final[tuple[str, ...]] = ("#11", "#13", "#28")
+
+#: Limitación declarada de la evidencia que sostiene el supuesto (A16).
+SLIPPAGE_ASSUMPTION_LIMITATIONS: Final[tuple[str, ...]] = (
+    "la evidencia son 59 sesiones, un solo régimen y granularidad de 5 min: **no resuelve el "
+    "sub-minuto**, que es justo el tramo donde vive el *slippage* de la apertura",
+    "la magnitud se mide sobre `^GSPC`, no sobre el `SPX500:CFD`: el signo se traslada, la "
+    "magnitud no (diferencial y horario de ejecución del bróker)",
+    "el supuesto es una **declaración** del propietario, no un resultado de esa medición: la "
+    "medición solo acota el orden de magnitud",
+)
 
 #: Nota del *tracking difference*: no se mide sobre un nocional (A10).
 TRACKING_NOTIONAL_NOTE: Final[str] = (
@@ -263,6 +316,10 @@ class MeasureState(StrEnum):
 
     MEASURED = "measured"
     """Hay dato, con su fuente y su número de observaciones."""
+
+    ASSUMED = "assumed"
+    """No hay dato y se declara un **supuesto**: lleva procedencia, motivo y
+    ``is_measurement: false``. Un supuesto **nunca** vale ``measured``."""
 
     UNMEASURED = "unmeasured"
     """No hay dato. El valor es ``null`` y el motivo es obligatorio."""
@@ -1213,21 +1270,161 @@ def _slippage_block(executions: Sequence[Execution], *, template: str) -> dict[s
     }
 
 
-def _phase0_gate_b(slippage: dict[str, Any]) -> dict[str, Any]:
-    """La puerta (b) de #9 no es evaluable hoy. **No** se emite veredicto (A6)."""
+def slippage_assumption_block(
+    *, r_illustrative_pct: Decimal = R_ILLUSTRATIVE_PCT
+) -> dict[str, Any]:
+    """Supuesto pesimista **declarado** del *slippage* de ejecución (A14-A16).
+
+    Es una **asunción**, no una **medición**: lleva nombre, valor, unidad, procedencia
+    y motivo, se publica como **ratio sobre `R`** (que sigue pendiente, decisión
+    abierta 5 → #60) y su equivalente en bp solo bajo un `R` **ilustrativo** y
+    etiquetado como tal. Función pura: cambiar el `R` ilustrativo cambia el
+    equivalente en bp y **no** la ratio sobre `R`.
+    """
+    share = SLIPPAGE_ASSUMPTION_PCT_OF_R / Decimal(100)
+    equivalence_pct = SLIPPAGE_ASSUMPTION_PCT_OF_R * r_illustrative_pct / Decimal(100)
+    equivalence_bp = equivalence_pct * Decimal(100)
+    return {
+        "id": "slippage_asumido",
+        "title": "Supuesto pesimista declarado del *slippage* de ejecución",
+        "state": MeasureState.ASSUMED.value,
+        "is_measurement": False,
+        "assumption_note": (
+            "es una **asunción** del propietario y **no** una **medición**: se declara para "
+            "poder seguir adelante y **no** sustituye a la medición pendiente (#62)"
+        ),
+        "name": SLIPPAGE_ASSUMPTION_NAME,
+        "provenance": SLIPPAGE_ASSUMPTION_PROVENANCE,
+        "decided_on": SLIPPAGE_ASSUMPTION_DECIDED_ON,
+        "owner_quote": SLIPPAGE_ASSUMPTION_OWNER_QUOTE,
+        "reason": (
+            "el propietario del 2026-09-18 decidió no medir el *slippage* todavía y seguir "
+            "adelante con un **supuesto pesimista** declarado, en vez de un valor de relleno: "
+            "medirlo exige 10-15 ejecuciones reales en la apertura (#62, #45)"
+        ),
+        "value_pct_of_r": _num(SLIPPAGE_ASSUMPTION_PCT_OF_R),
+        "value_pct_of_r_unit": UNIT_PCT_OF_R,
+        "share_of_gate_b_allowance_pct": _num(SLIPPAGE_ASSUMPTION_SHARE_OF_GATE_PCT),
+        "share_of_gate_b_allowance_pct_unit": UNIT_SHARE_OF_GATE,
+        "gate_b_allowance_pct_of_r": _num(SLIPPAGE_ASSUMPTION_PCT_OF_R),
+        "r_pct": None,
+        "r_state": "unresolved",
+        "r_reason": (
+            "el tamaño de `R` es la decisión abierta 5 y **no** se elige aquí: por eso el valor "
+            "se publica como **ratio sobre `R`** y `R` viaja como `null`"
+        ),
+        "r_issue": SLIPPAGE_ASSUMPTION_R_ISSUE,
+        "why_not_zero": (
+            "no puede ser 0: el *slippage* de ejecución existe por construcción (se entra en la "
+            "subasta de apertura, que es el momento de peor liquidez) y el diferencial declarado "
+            "**no** lo cubre; medido el 2026-09-18, el movimiento de la apertura pesa **≈30×** el "
+            "diferencial declarado de 0,42 bp, así que declararlo 0 sería negar la evidencia"
+        ),
+        "measured_evidence": {
+            "state": MeasureState.MEASURED.value,
+            "is_measurement": True,
+            "measured_on": "2026-09-18",
+            "definition": (
+                "movimiento absoluto entre el precio de la subasta de apertura y el cierre de la "
+                "primera barra de 5 min (09:35 ET)"
+            ),
+            "sample": "59 sesiones de `^GSPC` 5m con cobertura >= 0,95",
+            "unit": UNIT_BP_OF_NOTIONAL,
+            "provenance": (
+                "medición del 2026-09-18 sobre `raw.market_intraday` (`^GSPC` a 5 minutos)"
+            ),
+            "median_bp": 13.2,
+            "p90_bp": 26.6,
+            "max_bp": 46.8,
+            "sessions_above_10_bp": 36,
+            "sessions_measured": 59,
+            "declared_spread_bp": 0.42,
+            "ratio_to_declared_spread": "≈30x",
+            "not_part_of_the_assumption": (
+                "la evidencia acota el orden de magnitud; el valor del supuesto lo pone la "
+                "decisión del propietario (100 % del margen de la puerta (b))"
+            ),
+        },
+        "limitations": list(SLIPPAGE_ASSUMPTION_LIMITATIONS),
+        "illustrative_equivalence": {
+            "r_pct": _num(r_illustrative_pct),
+            "r_label": "**ilustrativo**, no una decisión de `R` (-> #60)",
+            "is_decision": False,
+            "ratio_over_r_is_unchanged": (
+                f"el equivalente se deriva solo de la relación declarada "
+                f"({_num(SLIPPAGE_ASSUMPTION_PCT_OF_R)} % de `R`): la ratio sobre `R` no cambia "
+                "al cambiar el `R` ilustrativo"
+            ),
+            "value_bp": _num(equivalence_bp),
+            "value_bp_unit": UNIT_BP_OF_NOTIONAL,
+            "value_pct_of_notional": _num(equivalence_pct),
+            "value_pct_of_notional_unit": UNIT_PCT,
+            "value_usd": _num(REFERENCE_NOTIONAL_USD * equivalence_pct / Decimal(100)),
+            "value_usd_unit": UNIT_USD,
+            "notional_usd": _num(REFERENCE_NOTIONAL_USD),
+            "warning": (
+                "el equivalente en bp **no** se publica como si `R` estuviera decidido: `R` "
+                "sigue pendiente (#60)"
+            ),
+        },
+        "enforced_downstream": {
+            "chain": list(SLIPPAGE_ASSUMPTION_DOWNSTREAM),
+            "description": (
+                "#11 (modelo de coste del motor) → #13 (motor *walk-forward*) → #28 (backtest "
+                "contra baselines)"
+            ),
+            "status": "declaracion",
+            "note": (
+                "hasta entonces el supuesto es una **declaración**: **no** es un coste aplicado "
+                "ni medido en ningún cálculo de este informe"
+            ),
+        },
+        "relation_note": (
+            f"el valor es {_num(SLIPPAGE_ASSUMPTION_SHARE_OF_GATE_PCT)} % del margen de la puerta "
+            f"(b), que es {_num(SLIPPAGE_ASSUMPTION_PCT_OF_R)} % de `R`: "
+            f"`{_num(SLIPPAGE_ASSUMPTION_PCT_OF_R)} % de R = "
+            f"{_num(SLIPPAGE_ASSUMPTION_PCT_OF_R * r_illustrative_pct / Decimal(100))} % del "
+            f"nocional = {_num(equivalence_bp)} bp` bajo el `R` ilustrativo"
+        ),
+        "share_note": (
+            f"`share_of_gate_b_allowance_pct` = {_num(share * Decimal(100))} % del margen: el "
+            "supuesto es exactamente el margen completo que la puerta (b) concede"
+        ),
+    }
+
+
+def _phase0_gate_b(slippage: dict[str, Any], assumption: dict[str, Any]) -> dict[str, Any]:
+    """La puerta (b) de #9 no es evaluable hoy. **No** se emite veredicto (A6, A21)."""
     evaluable = slippage["state"] == MeasureState.MEASURED.value
+    if evaluable:
+        reason = "la condición se evalúa con el slippage medido; hoy hay ejecuciones anotadas"
+    else:
+        reason = (
+            "el slippage de ejecución está sin medir (no existe ninguna ejecución real) y lo "
+            "único declarado es un **supuesto pesimista** que **no** es una medición: **asumir "
+            "tu propio peor caso no puede ser un aprobado**, así que la condición (b) sigue sin "
+            "ser evaluable"
+        )
     return {
         "criterion": "slippage sistemático > ~20 % de R (tasks.md, tarea 9, puerta (b))",
         "threshold_pct_of_r": "20",
         "evaluable": evaluable,
-        "reason": (
-            "la condición se evalúa con el slippage medido; hoy hay ejecuciones anotadas"
-            if evaluable
-            else (
-                "el slippage de ejecución está sin medir (no existe ninguna ejecución real), "
-                "así que la condición (b) no es evaluable con este artefacto"
-            )
-        ),
+        "assumption_is_measurement": False,
+        "assumption": {
+            "name": assumption["name"],
+            "state": assumption["state"],
+            "is_measurement": assumption["is_measurement"],
+            "value_pct_of_r": assumption["value_pct_of_r"],
+            "provenance": assumption["provenance"],
+            "r_pct": assumption["r_pct"],
+            "r_state": assumption["r_state"],
+            "r_issue": assumption["r_issue"],
+            "note": (
+                "el supuesto **no** entra en la condición (b): no la convierte en evaluable ni "
+                "en un aprobado"
+            ),
+        },
+        "reason": reason,
         "verdict_owner": "#9",
         "note": (
             "aquí solo se deja dicho si la condición es evaluable; el veredicto de "
@@ -1318,6 +1515,15 @@ LIMITATIONS: Final[tuple[str, ...]] = (
     "**No hay ejecución real ⇒ el *slippage* no está medido.** No existe ninguna operación "
     "ejecutada a 2026-09-18, así que `slippage_ejecucion` sale `unmeasured` con `value: null`. "
     "No se emite ninguna constante provisional, ningún 0 con motivo ni ningún rango.",
+    "**El *slippage* con el que se sigue adelante es un supuesto pesimista declarado, no una "
+    "medición** (`slippage_asumido`): 100 % del margen de la puerta (b) = 20 % de `R`, "
+    "procedencia «decisión del propietario 2026-09-18». Se publica como ratio sobre `R` (que "
+    "sigue pendiente, #60) y su equivalente en bp solo bajo un `R = 1 %` **ilustrativo**. "
+    "Medido el 2026-09-18 sobre 59 sesiones con intradía (movimiento entre el precio de la "
+    "subasta y el cierre de la primera barra de 5 min): mediana 13,2 bp, p90 26,6 bp, máximo "
+    "46,8 bp y 36/59 sesiones por encima de 10 bp, frente al diferencial declarado de 0,42 bp "
+    "(≈30×). Limitación declarada: 59 sesiones, un solo régimen y granularidad de 5 min ⇒ no "
+    "resuelve el sub-minuto.",
     "**El corte de financiación está sin verificar.** El campo vale `null` con "
     '`state: "unverified"` y con la pregunta literal al bróker. Asumir una hora de corte '
     "fija está prohibido: si el corte cae antes del cierre, el intradía puro pagaría "
@@ -1328,7 +1534,11 @@ LIMITATIONS: Final[tuple[str, ...]] = (
     "directamente la del CFD.",
     "**La puerta (b) de #9 no se puede evaluar con esto**: «slippage sistemático > ~20 % de "
     "R» necesita el slippage medido. Aquí solo se declara que no es evaluable; el veredicto "
-    "de continuidad es de #9.",
+    "de continuidad es de #9. **Asumir el propio peor caso no puede ser un aprobado**: el "
+    "supuesto se publica con `is_measurement: false` y no convierte el `not_evaluable` en un "
+    "`pass`. El supuesto se aplicará de verdad en #11 (modelo de coste del motor) → #13 "
+    "(motor *walk-forward*) → #28 (backtest contra baselines); **hasta entonces es una "
+    "declaración**, no un coste aplicado ni medido.",
     "**Los ceros que aparecen son ceros con motivo.** El 0 % de cambio de divisa sale de que "
     "el nocional se liquida en USD (declaración del usuario) y va con fuente y motivo; nunca "
     "es el sustituto de un desconocido.",
@@ -1344,7 +1554,11 @@ NOTES: Final[tuple[str, ...]] = (
     "Los importes se publican como cadenas decimales exactas (`Decimal`), no como `float`: "
     "la comparación con la tabla declarada es exacta, no aproximada.",
     "Las tres medidas son bloques separados y **no se suman**: sumarlas daría un «coste "
-    "total» que nadie ha medido.",
+    "total» que nadie ha medido. El supuesto pesimista (`slippage_asumido`) es un **cuarto** "
+    'bloque, también separado y con su propio `state: "assumed"`, y tampoco se suma.',
+    "El supuesto pesimista **no** es una medición y **no** convierte el `not_evaluable` de la "
+    "mitad (b) en un aprobado: se aplicará en #11 → #13 → #28 y, hasta entonces, es una "
+    "declaración.",
     "Las fronteras de sesión se derivan de `America/New_York` con "
     "`cfdtrader.data.calendar.MarketCalendar`; los tramos son desplazamientos relativos a la "
     "apertura y al cierre, nunca horas fijas, para que el DST y las medias sesiones salgan bien.",
@@ -1412,6 +1626,7 @@ def consolidate(
     spread = _spread_block(observations.spread_observations, tranches, template=template)
     tracking = _tracking_block(observations.tracking_pairs, template=template)
     slippage = _slippage_block(observations.executions, template=template)
+    assumption = slippage_assumption_block()
 
     payload: dict[str, Any] = {
         "task": "#8",
@@ -1441,8 +1656,9 @@ def consolidate(
         "spread_cotizado": spread,
         "tracking_difference": tracking,
         "slippage_ejecucion": slippage,
+        "slippage_asumido": assumption,
         "by_size": _by_size(observations.minimum_commission_usd),
-        "phase0_gate_b": _phase0_gate_b(slippage),
+        "phase0_gate_b": _phase0_gate_b(slippage, assumption),
         "broker_questions": [dict(question) for question in BROKER_QUESTIONS],
         "limitations": list(LIMITATIONS),
         "notes": list(NOTES),
@@ -1631,13 +1847,56 @@ def render_markdown(audit: CostAudit) -> str:
     )
     for name in ("spread_cotizado", "tracking_difference", "slippage_ejecucion"):
         lines.append(_measure_row(name, payload[name]))
+    assumption = payload["slippage_asumido"]
+    evidence = assumption["measured_evidence"]
+    equivalent = assumption["illustrative_equivalence"]
+    downstream = assumption["enforced_downstream"]
     cut = payload["financing_cut"]
     cut_instant = cut["value_utc"] or "`null` (desconocido)"
     lines.extend(
         [
             "",
-            "No existe ningún campo que sume las tres: sumarlas daría un «coste total» que "
-            "nadie ha medido.",
+            "No existe ningún campo que sume las tres medidas ni que las sume con el supuesto: "
+            "sumarlas daría un «coste total» que nadie ha medido.",
+            "",
+            "## El supuesto pesimista del *slippage* (declarado el 2026-09-18)",
+            "",
+            f"- **`state`: `{assumption['state']}`** · `is_measurement`: "
+            f"`{str(assumption['is_measurement']).lower()}` — {assumption['assumption_note']}.",
+            f"- Procedencia: {assumption['provenance']} "
+            f"(`decided_on` = {assumption['decided_on']}). Palabras del propietario: "
+            f"«{assumption['owner_quote']}».",
+            f"- Motivo: {assumption['reason']}",
+            f"- **Valor:** `{assumption['value_pct_of_r']}` "
+            f"{assumption['value_pct_of_r_unit']} = "
+            f"`{assumption['share_of_gate_b_allowance_pct']}` "
+            f"{assumption['share_of_gate_b_allowance_pct_unit']}.",
+            f"- `R` **no** está decidido: `r_pct` = `null`, `r_state` = "
+            f"`{assumption['r_state']}` ({assumption['r_issue']}). {assumption['r_reason']}",
+            f"- Equivalente **ilustrativo** con `R` = {equivalent['r_pct']} % "
+            f"({equivalent['r_label']}): **{equivalent['value_bp']} "
+            f"{equivalent['value_bp_unit']}** = {equivalent['value_pct_of_notional']} "
+            f"{equivalent['value_pct_of_notional_unit']} = {equivalent['value_usd']} "
+            f"{equivalent['value_usd_unit']} sobre {equivalent['notional_usd']} $. "
+            f"{equivalent['warning']}",
+            f"- Por qué **no** puede ser 0: {assumption['why_not_zero']}",
+            f"- Evidencia medida ({evidence['measured_on']}): {evidence['sample']} — mediana "
+            f"{evidence['median_bp']} bp, p90 {evidence['p90_bp']} bp, máximo "
+            f"{evidence['max_bp']} bp, {evidence['sessions_above_10_bp']}/"
+            f"{evidence['sessions_measured']} sesiones por encima de 10 bp, frente al "
+            f"diferencial declarado de {evidence['declared_spread_bp']} bp "
+            f"({evidence['ratio_to_declared_spread']}).",
+            f"- **Dónde se aplica:** {downstream['description']} "
+            f"(`status`: `{downstream['status']}`). {downstream['note']}",
+        ]
+    )
+    lines.extend(f"- Limitación del supuesto: {item}" for item in assumption["limitations"])
+    lines.extend(
+        [
+            "",
+            "**El supuesto no convierte la mitad (b) en un aprobado:** asumir tu propio peor "
+            "caso no es una medición. Se publica en su propio bloque y **no** se suma con el "
+            "diferencial, el *tracking difference* ni la financiación.",
             "",
             "## Corte de financiación",
             "",
@@ -1650,6 +1909,9 @@ def render_markdown(audit: CostAudit) -> str:
             f"- Criterio: {payload['phase0_gate_b']['criterion']}.",
             f"- **`evaluable`: `{str(payload['phase0_gate_b']['evaluable']).lower()}`** — "
             f"{payload['phase0_gate_b']['reason']}",
+            f"- **`assumption_is_measurement`: "
+            f"`{str(payload['phase0_gate_b']['assumption_is_measurement']).lower()}`** — el "
+            "supuesto pesimista **no** entra en la condición (b).",
             f"- {payload['phase0_gate_b']['note']}",
             "",
             "## Preguntas pendientes al bróker",

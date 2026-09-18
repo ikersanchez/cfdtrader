@@ -89,3 +89,20 @@ executions: []
 #     notional_usd: 10000
 #     reference_price: 5002.00                      # precio de referencia del instante
 #     filled_price: 5003.10                         # precio obtenido de verdad
+
+# ── 8. Supuesto pesimista del *slippage*: NO se rellena aquí ─────────────────────
+# El propietario decidió el 2026-09-18 no medir todavía el *slippage* y seguir adelante
+# con un **supuesto pesimista declarado**. Ese valor **no** es un campo de esta
+# plantilla y **no** se escribe aquí: vive como constante declarada en
+# `src/cfdtrader/analysis/cost_audit.py` (`SLIPPAGE_ASSUMPTION_*`) y el informe lo
+# publica en el bloque `slippage_asumido` con `state: "assumed"` e
+# `is_measurement: false`.
+#
+# Valor declarado: 100 % del margen de la puerta (b) = 20 % de `R` (`R` sigue pendiente:
+# decisión abierta 5 → #60). El equivalente en bp (20 bp bajo un `R = 1 %` ilustrativo)
+# es **ilustrativo**: `R` no está decidido y no se elige en esta plantilla.
+#
+# Este bloque está **comentado** a propósito: `extra="forbid"` rechaza campos
+# desconocidos, así que un `slippage` aquí rompería la plantilla vacía. Medir el
+# *slippage* de verdad (10–15 ejecuciones en la apertura) es la issue #62 y se anota en
+# la sección 7 (`executions`), no en esta.

@@ -19,13 +19,24 @@ Qué **no** decide, y por tanto no puede inventar:
 
 - el **modelo de coste del motor de backtest**: es #11
   (``src/cfdtrader/backtest/costs.py``); aquí solo se reproduce la tabla declarada de #8;
-- el **bróker definitivo** (decisión abierta 4 -> #59), los **umbrales** —incluido el
-  tamaño de ``R``— (decisión abierta 5 -> #60) y el **precio de entrada exacto**
-  (decisión abierta 6 -> #61). Se publican en ``open_decisions`` con
+- el **bróker definitivo** (decisión abierta 4 -> #59) y los **umbrales** —incluido el
+  tamaño de ``R``— (decisión abierta 5 -> #60). Se publican en ``open_decisions`` con
   ``state: "unresolved"``. En particular, ``R`` sin decidir deja la mitad (b) en
   ``not_evaluable`` **aunque el *slippage* llegue a medirse**;
 - la medición del ***slippage*** real (10-15 ejecuciones a la apertura -> #62), la fuente
-  de bid/ask del CFD (-> #50) y el arreglo del `open` repetido del índice (-> #52).
+  de bid/ask del CFD (-> #50) y el arreglo del `open` repetido del índice (-> #52);
+- el **precio de entrada** ya **no** figura entre las decisiones abiertas: el propietario
+  lo **cerró** el **2026-09-18** (el `open` de la subasta de apertura de 09:30 ET, fuente
+  ``session_open``, que **coincide** con ``plan.md`` §4.1). Su cierre se publica en
+  ``open_decisions`` con ``state: "resolved"`` y en ``owner_decisions``; el registro en
+  ``_docs/**`` es #61. Una decisión ``resolved`` **no** puede generar un ``blocker``.
+
+El **supuesto pesimista del *slippage*** (decisión del propietario del 2026-09-18) es una
+**declaración**, no una medición: se publica con ``is_measurement: false`` en su propio
+bloque del artefacto de costes, **no** entra en ninguna comparación de este informe y
+**no** convierte el ``not_evaluable`` de la mitad (b) en un aprobado —asumir tu propio
+peor caso no puede ser un aprobado—. Se aplicará de verdad en #11 (modelo de coste del
+motor) -> #13 (motor *walk-forward*) -> #28 (backtest contra baselines).
 
 Un ``not_evaluable`` **nunca** es un ``pass``: convertirlo en un «adelante» es el error más
 caro que puede cometer este informe, y :func:`aggregate_gate` lo hace imposible por
@@ -59,6 +70,7 @@ __all__ = [
     "HALF_A_MAPPING",
     "MEASURE_KEYS",
     "OPEN_DECISIONS",
+    "OWNER_DECISIONS",
     "RECOMMENDATION_CONSISTENCY_RULE",
     "WHAT_WOULD_CHANGE_THE_VERDICT",
     "AmbiguousArtifactError",
@@ -185,10 +197,12 @@ GATE_A_LIMITATIONS: Final[tuple[dict[str, str], ...]] = (
     },
     {
         "limitation": (
-            "el precio de entrada real es del CFD y está sin decidir (subasta frente a unos "
-            "minutos después)"
+            "el precio de entrada del etiquetado es el `open` de la subasta de apertura del "
+            "**índice** `^GSPC` (**decisión cerrada** el 2026-09-18, #61): no es la cotización "
+            "del `SPX500:CFD` (#50) y los números publicados **heredan** el *look-ahead* de la "
+            "muestra completa de #7 (#63), así que **no** son una validación de la estrategia"
         ),
-        "issue": "#61",
+        "issue": "#50, #63",
     },
     {
         "limitation": (
@@ -239,15 +253,18 @@ OPEN_DECISIONS: Final[tuple[dict[str, str], ...]] = (
             "Horizonte y precio de entrada exactos (`open` de la subasta frente a unos minutos "
             "después)"
         ),
-        "state": "unresolved",
-        "issue": "#61",
-        "missing_information": (
-            "si la entrada es el `open` de la subasta o la ejecución real unos minutos después "
-            "(`plan.md` §4.1 y §21)"
+        "state": "resolved",
+        "decided_on": "2026-09-18",
+        "provenance": "decision del propietario",
+        "value": (
+            "el `open` de la subasta de apertura (09:30 ET) = la fuente `session_open`; coincide "
+            "con `plan.md` §4.1, que **no** se reescribe"
         ),
-        "depends": (
-            "la interpretación del *slippage* medido —y por tanto la mitad (b)— y el horizonte "
-            "del etiquetado tri-barra de la Fase 1 (#61)"
+        "issue": "#61",
+        "note": (
+            "una decision `resolved` **no** puede generar un `blocker`: por eso "
+            "`entry_price_undecided` desaparece de `blockers[]`. El registro en `_docs/**` "
+            "vive en #61 y #65"
         ),
     },
 )
@@ -350,12 +367,40 @@ DECLARED_CONSTANTS: Final[tuple[dict[str, str], ...]] = (
     },
 )
 
+#: Las **dos** decisiones del propietario del 2026-09-18 que este informe registra (A29).
+OWNER_DECISIONS: Final[tuple[dict[str, str], ...]] = (
+    {
+        "id": "entry_price",
+        "decided_on": "2026-09-18",
+        "provenance": "decision del propietario",
+        "decision": (
+            "el precio de entrada de la triple barrera es el `open` de la subasta de apertura "
+            "(09:30 ET, fuente `session_open`): **coincide** con `plan.md` §4.1, que no se "
+            "reescribe"
+        ),
+        "artifact": "`data/derived/reports/triple_barrier_<fecha>.json` (`entry_price`)",
+        "issue": "#61",
+    },
+    {
+        "id": "slippage_assumption",
+        "decided_on": "2026-09-18",
+        "provenance": "decision del propietario",
+        "decision": (
+            "el *slippage* de ejecución se lleva como **supuesto pesimista declarado** (100 % del "
+            "margen de la puerta (b) = 20 % de `R`), **nunca** como medición: la mitad (b) sigue "
+            "`not_evaluable`"
+        ),
+        "artifact": "`data/derived/reports/cost_audit_<fecha>.json` (`slippage_asumido`)",
+        "issue": "#62",
+    },
+)
+
 #: Condiciones que cambiarían el veredicto (A28): comprobables, con mitad, dueño y enlace.
 WHAT_WOULD_CHANGE_THE_VERDICT: Final[tuple[dict[str, str], ...]] = (
     {
         "condition": (
             "medir el drift sobre el **CFD** con el `open` real del bróker, en lugar del índice "
-            "y de una subasta reconstruida"
+            "de la fuente"
         ),
         "half": "a",
         "owner": "#9 (dueño de este informe) con #6 (estudio del drift)",
@@ -432,15 +477,28 @@ class Recommendation(StrEnum):
 
 
 class BlockerCode(StrEnum):
-    """Códigos de ``blockers`` buscables por máquina (A24)."""
+    """Códigos de ``blockers`` buscables por máquina (A24).
+
+    El 2026-09-18 se **cerró** la decisión 6 (precio de entrada): su código
+    ``entry_price_undecided`` desaparece del vocabulario. El de la mitad (b) se
+    **renombra** a ``slippage_assumed_not_measured`` porque lo que queda no es un
+    desconocido sin declarar, sino un **supuesto** que no es medición.
+
+    Con los artefactos de hoy ``blockers[]`` trae **exactamente** los cinco códigos
+    ``drift_overnight``, ``slippage_assumed_not_measured``, ``r_undecided``,
+    ``financing_cut_unverified`` y ``broker_undecided``. ``drift_not_evaluable`` es el
+    camino **declarado** de #9 para una mitad (a) que no sea ``fail`` por el drift
+    nocturno (un par ``verdict``/``phase0_gate`` fuera de la tabla): no aparece con
+    estos artefactos y no se retira aquí, porque retirarlo dejaría ese caso sin motivo
+    legible por máquina.
+    """
 
     DRIFT_OVERNIGHT = "drift_overnight"
     DRIFT_NOT_EVALUABLE = "drift_not_evaluable"
-    SLIPPAGE_UNMEASURED = "slippage_unmeasured"
+    SLIPPAGE_ASSUMED_NOT_MEASURED = "slippage_assumed_not_measured"
     R_UNDECIDED = "r_undecided"
     BROKER_UNDECIDED = "broker_undecided"
     FINANCING_CUT_UNVERIFIED = "financing_cut_unverified"
-    ENTRY_PRICE_UNDECIDED = "entry_price_undecided"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1075,7 +1133,9 @@ def _gate_b(
         reason = (
             "El motivo está en el artefacto de costes: "
             f"{artifact_reason}. La mitad (b) es `not_evaluable`: no es un aprobado condicional "
-            "ni un pendiente favorable."
+            "ni un pendiente favorable, y **asumir tu propio peor caso no puede ser un "
+            "aprobado**. El supuesto pesimista declarado (`slippage_asumido`) no es una "
+            "medición y no entra en la condición."
         )
     else:
         reason = (
@@ -1112,6 +1172,29 @@ def _gate_b(
             "observations": _require_int(payload, "slippage_ejecucion", "observations"),
             "reason": _require_str(payload, "slippage_ejecucion", "reason"),
             "how_to_fill": _require_str(payload, "slippage_ejecucion", "how_to_fill"),
+        },
+        "assumption_is_measurement": False,
+        "assumption": {
+            "name": _require_str(payload, "slippage_asumido", "name"),
+            "state": _require_str(payload, "slippage_asumido", "state"),
+            "is_measurement": bool(_require(payload, "slippage_asumido", "is_measurement")),
+            "value_pct_of_r": _require_str(payload, "slippage_asumido", "value_pct_of_r"),
+            "value_pct_of_r_unit": _require_str(payload, "slippage_asumido", "value_pct_of_r_unit"),
+            "provenance": _require_str(payload, "slippage_asumido", "provenance"),
+            "decided_on": _require_str(payload, "slippage_asumido", "decided_on"),
+            "r_pct": _get(payload, "slippage_asumido", "r_pct"),
+            "r_state": _require_str(payload, "slippage_asumido", "r_state"),
+            "r_issue": _require_str(payload, "slippage_asumido", "r_issue"),
+            "illustrative_equivalence": _require_mapping(
+                payload, "slippage_asumido", "illustrative_equivalence"
+            ),
+            "enforced_downstream": _require_mapping(
+                payload, "slippage_asumido", "enforced_downstream"
+            ),
+            "note": (
+                "el supuesto es una **declaración** del propietario: no es una medición, no se "
+                "suma con las otras medidas y **no** convierte la mitad (b) en `pass`"
+            ),
         },
         "dominance": {
             "statement": (
@@ -1219,10 +1302,84 @@ def _declared_costs(payload: Any) -> dict[str, Any]:
     }
 
 
-def _p_star_block(
-    *, spread_pct: Decimal, spread_usd: Decimal, short_pct: Decimal, long_pct: Decimal
+def _assumption_scenario_block(
+    *, spread_pct: Decimal, assumption_pct_of_r: Decimal, decimals: Decimal
 ) -> dict[str, Any]:
-    """El bloque `p*` con la aritmética exacta y los escenarios declarados (A19)."""
+    """El escenario de `p*` con el supuesto pesimista del *slippage* (A23).
+
+    `c` = diferencial declarado **+** el supuesto. Como el supuesto se publica como **ratio
+    sobre `R`**, su importe depende de `R` y el diferencial no: por eso el **suelo** se publica
+    calculado con `c` = solo el supuesto, que no depende de `R`. Se calcula, no se escribe.
+    """
+    share_of_r = assumption_pct_of_r / Decimal(100)
+    rows: list[dict[str, str]] = []
+    for r_text in _r_scenario_values():
+        r_pct = Decimal(r_text)
+        cost_pct = spread_pct + share_of_r * r_pct
+        rows.append(
+            {
+                "r_pct": r_text,
+                "r_label": "escenario declarado, no decisión del propietario (-> #60)",
+                "c_pct": _dec_str(cost_pct),
+                "c_label": (
+                    "diferencial declarado + "
+                    f"{_dec_str(assumption_pct_of_r)} % de `R` (supuesto pesimista del *slippage*)"
+                ),
+                "p_star_fraction": _dec_str(p_star(r_pct, cost_pct)),
+                "p_star_pct": _pct_str(p_star(r_pct, cost_pct) * Decimal(100), decimals),
+                "floor_pct": _pct_str(p_star(r_pct, share_of_r * r_pct) * Decimal(100), decimals),
+                "floor_label": "suelo con `c` = solo el supuesto",
+            }
+        )
+    floors = {row["floor_pct"] for row in rows}
+    floor_text = _dec_str(_trim(Decimal(rows[0]["floor_pct"])))
+    return {
+        "title": (
+            "Escenario del supuesto pesimista del *slippage*: **no** sustituye a las filas "
+            "declaradas"
+        ),
+        "assumption_pct_of_r": _dec_str(assumption_pct_of_r),
+        "assumption_pct_of_r_unit": "% de `R`",
+        "provenance": ("artefacto de #8 (`slippage_asumido`), decisión del propietario 2026-09-18"),
+        "is_measurement": False,
+        "formula": (
+            f"{P_STAR_FORMULA} con `c` = diferencial declarado **+** el supuesto "
+            f"(`c` = {_dec_str(spread_pct)} % + {_dec_str(assumption_pct_of_r)} % de `R`) ⇒ "
+            f"`p* = {floor_text} % + ({_dec_str(spread_pct)} %)/(2R)`"
+        ),
+        "statement": (
+            f"con el supuesto, el **suelo del {floor_text} %** lo pone el supuesto "
+            f"({_dec_str(assumption_pct_of_r)} % de `R`, que es el margen completo de la puerta "
+            "(b)) y **no** depende de `R`; lo único que depende de `R` es el término del "
+            "diferencial declarado."
+        ),
+        "floor_is_r_independent": len(floors) == 1,
+        "rows": rows,
+        "never_replaces": (
+            "estas filas son el **escenario del supuesto** y **nunca** sustituyen a las "
+            "declaradas: la tabla del diferencial declarado de arriba queda **intacta**"
+        ),
+        "derogated_gate_note": (
+            f"el umbral «{declared_value('derogated_p_star_gate')}» es la puerta **derogada**: "
+            "con el supuesto se alcanza siempre, así que **no decide** nada (ni siquiera aquí)"
+        ),
+    }
+
+
+def _p_star_block(
+    *,
+    spread_pct: Decimal,
+    spread_usd: Decimal,
+    short_pct: Decimal,
+    long_pct: Decimal,
+    assumption_pct_of_r: Decimal,
+) -> dict[str, Any]:
+    """El bloque `p*` con la aritmética exacta y los escenarios declarados (A19).
+
+    Incluye, **aparte y sin sustituir nada**, el escenario del supuesto pesimista del
+    *slippage* (A23): con `c` = diferencial declarado + supuesto, el suelo del 60 % lo pone el
+    supuesto y no depende de `R`. Las filas declaradas se publican tal cual.
+    """
     decimals = Decimal(declared_value("p_star_decimals"))
     cost_rows: tuple[tuple[str, Decimal], ...] = (
         ("intradía puro sin noche (el diferencial declarado)", spread_pct),
@@ -1266,6 +1423,9 @@ def _p_star_block(
             "label": "una noche mal cerrada (largo), con el `R` del escenario del 1 %",
             "p_star_pct": _pct_str(bad_night, decimals),
         },
+        "assumption_scenario": _assumption_scenario_block(
+            spread_pct=spread_pct, assumption_pct_of_r=assumption_pct_of_r, decimals=decimals
+        ),
         "viability": {
             "statement": (
                 "**un `p*` bajo ya no es criterio de viabilidad** (`plan.md` §4.6), y este "
@@ -1417,16 +1577,27 @@ def _blockers(
                 "issues": ["#6"],
             }
         )
-    if half_b["slippage"]["state"] == "unmeasured":
+    assumption = half_b["assumption"]
+    if half_b["slippage"]["state"] != "measured":
+        assumed = assumption["state"] == "assumed" and assumption["is_measurement"] is False
         blockers.append(
             {
-                "code": str(BlockerCode.SLIPPAGE_UNMEASURED),
+                "code": str(BlockerCode.SLIPPAGE_ASSUMED_NOT_MEASURED),
                 "half": "b",
                 "reason": (
-                    "el *slippage* de ejecución está sin medir: no existe ninguna ejecución real "
-                    "y el artefacto no emite ningún valor de relleno"
+                    "el *slippage* de ejecución **no está medido**: no existe ninguna ejecución "
+                    "real y el artefacto no emite ningún valor de relleno. Lo que hay es un "
+                    f"**supuesto pesimista declarado** (`{assumption['name']}`, "
+                    f"`{assumption['value_pct_of_r']}` % de `R`, procedencia «"
+                    f"{assumption['provenance']}», `is_measurement: false`): *asumir el propio "
+                    "peor caso no puede ser un aprobado*"
+                    if assumed
+                    else (
+                        "el *slippage* de ejecución **no está medido**: no existe ninguna "
+                        "ejecución real y el artefacto no emite ningún valor de relleno"
+                    )
                 ),
-                "issues": ["#62"],
+                "issues": ["#62", "#60"],
             }
         )
     blockers.append(
@@ -1462,17 +1633,6 @@ def _blockers(
                 "de costes —y con ella el `p*`— no está cerrada"
             ),
             "issues": ["#59"],
-        }
-    )
-    blockers.append(
-        {
-            "code": str(BlockerCode.ENTRY_PRICE_UNDECIDED),
-            "half": "b",
-            "reason": (
-                "el precio de entrada exacto es la decisión abierta 6 (#61): sin él no se puede "
-                "interpretar el *slippage* medido ni cerrar la mitad (b)"
-            ),
-            "issues": ["#61"],
         }
     )
     return blockers
@@ -1573,6 +1733,20 @@ def _limitations(
             "issue": "#62",
         }
     )
+    assumption = gate_b["assumption"]
+    items.append(
+        {
+            "statement": (
+                "con el *slippage* se sigue adelante con un **supuesto pesimista declarado** "
+                f"(`{assumption['name']}`, `{assumption['value_pct_of_r']}` % de `R`, "
+                f"procedencia «{assumption['provenance']}», `is_measurement: false`): **asumir tu "
+                "propio peor caso no es un aprobado** y el supuesto **no** se suma con el "
+                "diferencial, el *tracking difference* ni la financiación"
+            ),
+            "half": "b",
+            "issue": "#11, #13, #28, #62",
+        }
+    )
     items.append(
         {
             "statement": (
@@ -1630,6 +1804,10 @@ def _notes() -> list[str]:
         "arregla sus fuentes: un defecto de un artefacto se comenta en su issue.",
         "El **modelo de coste del motor de backtest** es #11 "
         "(`src/cfdtrader/backtest/costs.py`): aquí solo se reproduce la tabla declarada de #8.",
+        "El **supuesto pesimista del *slippage*** se declara en la auditoría de costes de #8 y "
+        "se publica aquí con `is_measurement: false`: se aplicará de verdad en #11 (modelo de "
+        "coste del motor) → #13 (motor *walk-forward*) → #28 (backtest contra baselines) y, "
+        "**hasta entonces, es una declaración**, no un coste aplicado ni medido.",
         "El **bróker definitivo** es la decisión abierta 4 (#59): la tabla de costes es de un "
         "bróker concreto y su procedencia no está cerrada.",
         "Se consumen **solo los `.json`**: la prosa `.md` de los otros informes no se lee.",
@@ -1687,6 +1865,7 @@ def consolidate(inputs: Phase0Inputs, *, now: datetime) -> Phase0Report:
     short_pct = Decimal(declared_costs["round_trip"]["short_pct"])
     long_pct = Decimal(declared_costs["round_trip"]["long_pct"])
     threshold_pct_of_r = _require_decimal(costs_payload, "phase0_gate_b", "threshold_pct_of_r")
+    assumption_pct_of_r = _require_decimal(costs_payload, "slippage_asumido", "value_pct_of_r")
 
     gate_a = _gate_a(inputs)
     gate_b = _gate_b(inputs, threshold_pct_of_r=threshold_pct_of_r, spread_usd=spread_usd)
@@ -1737,14 +1916,22 @@ def consolidate(inputs: Phase0Inputs, *, now: datetime) -> Phase0Report:
         },
         "sample_consistency": sample,
         "declared_constants": _published_constants(
-            threshold_pct_of_r=threshold_pct_of_r, spread_pct=spread_pct, spread_usd=spread_usd
+            threshold_pct_of_r=threshold_pct_of_r,
+            spread_pct=spread_pct,
+            spread_usd=spread_usd,
+            assumption_pct_of_r=assumption_pct_of_r,
         ),
         "open_decisions": [dict(decision) for decision in OPEN_DECISIONS],
+        "owner_decisions": [dict(decision) for decision in OWNER_DECISIONS],
         "gate_a": gate_a,
         "gate_b": gate_b,
         "declared_costs": declared_costs,
         "p_star": _p_star_block(
-            spread_pct=spread_pct, spread_usd=spread_usd, short_pct=short_pct, long_pct=long_pct
+            spread_pct=spread_pct,
+            spread_usd=spread_usd,
+            short_pct=short_pct,
+            long_pct=long_pct,
+            assumption_pct_of_r=assumption_pct_of_r,
         ),
         "statistics": statistics,
         "volatility_anchor": volatility_anchor,
@@ -1781,6 +1968,10 @@ def consolidate(inputs: Phase0Inputs, *, now: datetime) -> Phase0Report:
                     "issue": "#62 y #60",
                 },
             ],
+            "assumption_does_not_remove_this": (
+                "el supuesto pesimista del *slippage* **no** retira este apartado: un supuesto "
+                "no es una medición y no puede sostener una recomendación de continuar"
+            ),
         }
     return Phase0Report(
         as_of=now.astimezone(UTC), report_date=now.astimezone(UTC).date(), payload=payload
@@ -1788,7 +1979,11 @@ def consolidate(inputs: Phase0Inputs, *, now: datetime) -> Phase0Report:
 
 
 def _published_constants(
-    *, threshold_pct_of_r: Decimal, spread_pct: Decimal, spread_usd: Decimal
+    *,
+    threshold_pct_of_r: Decimal,
+    spread_pct: Decimal,
+    spread_usd: Decimal,
+    assumption_pct_of_r: Decimal,
 ) -> list[dict[str, str]]:
     """Constantes declaradas con nombre, valor y procedencia (A2)."""
     published = [dict(entry) for entry in DECLARED_CONSTANTS]
@@ -1820,6 +2015,22 @@ def _published_constants(
             "unit": "$ sobre el nocional de referencia",
             "provenance": "artefacto de #8 (`declared_table`, tabla declarada del bróker)",
             "note": "importe declarado del diferencial, tal cual; no se recalcula",
+        }
+    )
+    published.append(
+        {
+            "name": "slippage_assumption_pct_of_r",
+            "value": _dec_str(assumption_pct_of_r),
+            "unit": "% de `R`",
+            "provenance": (
+                "artefacto de #8 (`slippage_asumido`), decisión del propietario 2026-09-18"
+            ),
+            "note": (
+                "**`assumed`, no `measured`**: 100 % del margen de la puerta (b) y "
+                "`is_measurement: false`. Se publica como ratio sobre `R` porque `R` sigue "
+                "pendiente (decisión abierta 5 → #60): el equivalente en bp solo vale bajo un "
+                "`R` ilustrativo"
+            ),
         }
     )
     return published
@@ -1895,6 +2106,11 @@ def render_markdown(report: Phase0Report) -> str:
             "Se resuelve leyendo `verdict` y `phase0_gate` del artefacto del drift y aplicando la "
             f"tabla declarada: {gate_a['mapping']['fallback']}.",
             "",
+            f"**La mitad (a) sigue `{gate_a['state']}`**: el retorno del índice se concentra "
+            "fuera de la sesión (el drift medido es nocturno), y añadir un supuesto a la mitad "
+            f"(b) **no** cambia el veredicto agregado: `gate = {verdict['gate']}` y "
+            f"`phase1_ready = {str(verdict['phase1_ready']).lower()}`.",
+            "",
             f"Muestra limpia: `clean_from = {gate_a['clean_sample']['clean_from']}`, "
             f"{gate_a['clean_sample']['clean_sessions']} sesiones de "
             f"{gate_a['clean_sample']['sessions']} almacenadas. Calidad del `open`: "
@@ -1955,6 +2171,19 @@ def render_markdown(report: Phase0Report) -> str:
             f"La mitad (b) es `{gate_b['state']}`. {gate_b['reason']}",
             "",
             gate_b["not_presented_as"],
+            "",
+            f"**La mitad (b) sigue `{gate_b['state']}`**: asumir tu propio peor caso no es un "
+            "aprobado. El supuesto pesimista declarado "
+            f"(`{gate_b['assumption']['name']}`, `{gate_b['assumption']['value_pct_of_r']}` % de "
+            f"`R`, `is_measurement: {str(gate_b['assumption']['is_measurement']).lower()}`, "
+            f"procedencia «{gate_b['assumption']['provenance']}», `decided_on` = "
+            f"{gate_b['assumption']['decided_on']}) **no** entra en la condición (b) y no la "
+            "convierte en un aprobado.",
+            "",
+            "**Dónde se aplica el supuesto:** "
+            f"{gate_b['assumption']['enforced_downstream']['description']} "
+            f"(`status`: `{gate_b['assumption']['enforced_downstream']['status']}`). "
+            f"{gate_b['assumption']['enforced_downstream']['note']}",
             "",
             "### Las tres medidas de #8, por separado y nunca sumadas",
             "",
@@ -2025,6 +2254,28 @@ def render_markdown(report: Phase0Report) -> str:
             f"`c = {bad_night['c_pct']}` %, `R = {bad_night['r_pct']}` %): "
             f"**{bad_night['p_star_pct']} %**.",
             "",
+            f"### {p_star_block['assumption_scenario']['title']}",
+            "",
+            p_star_block["assumption_scenario"]["formula"],
+            "",
+            p_star_block["assumption_scenario"]["statement"],
+            "",
+            "| `c` (diferencial declarado + supuesto) | `R` (escenario) | `p*` | suelo |",
+            "|---|---|---|---|",
+        ]
+    )
+    for row in p_star_block["assumption_scenario"]["rows"]:
+        lines.append(
+            f"| {row['c_label']} (`{row['c_pct']}` %) | {row['r_pct']} % | "
+            f"**{row['p_star_pct']} %** | {row['floor_pct']} % |"
+        )
+    lines.extend(
+        [
+            "",
+            f"{p_star_block['assumption_scenario']['never_replaces']}.",
+            "",
+            f"{p_star_block['assumption_scenario']['derogated_gate_note']}.",
+            "",
             f"{p_star_block['viability']['statement']} {p_star_block['viability']['reason']}",
             "",
             f"Puerta antigua «{p_star_block['viability']['derogated_gate']['criterion']}»: "
@@ -2082,16 +2333,39 @@ def render_markdown(report: Phase0Report) -> str:
     lines.extend(
         [
             "",
+            "## Decisiones del propietario del 2026-09-18 (cerradas, no inventadas)",
+            "",
+            "| # | decidida el | procedencia | valor decidido | artefacto | issue |",
+            "|---|---|---|---|---|---|",
+        ]
+    )
+    for decision in payload["owner_decisions"]:
+        lines.append(
+            f"| `{decision['id']}` | {decision['decided_on']} | {decision['provenance']} | "
+            f"{decision['decision']} | {decision['artifact']} | {decision['issue']} |"
+        )
+    lines.extend(
+        [
+            "",
+            "Las dos decisiones están **cerradas**: el precio de entrada (el `open` de la "
+            "subasta de apertura, que coincide con `plan.md` §4.1, documento que **no** se "
+            "reescribe aquí) y el **supuesto pesimista del *slippage*** (que **no** es una "
+            "medición y **no** convierte la mitad (b) en un aprobado). El registro en "
+            "`_docs/**` es #61 y #65.",
+            "",
             "## Decisiones abiertas (declaradas, no inventadas)",
             "",
-            "| # | decisión | estado | información que falta | qué depende de ella | issue |",
+            "| # | decisión | estado | valor decidido / información que falta | "
+            "qué depende de ella | issue |",
             "|---|---|---|---|---|---|",
         ]
     )
     for decision in payload["open_decisions"]:
+        detail = decision.get("value") or decision.get("missing_information") or ""
+        depends = decision.get("depends") or decision.get("note") or ""
         lines.append(
             f"| {decision['id']} | {decision['name']} | `{decision['state']}` | "
-            f"{decision['missing_information']} | {decision['depends']} | {decision['issue']} |"
+            f"{detail} | {depends} | {decision['issue']} |"
         )
     lines.extend(["", "## Limitaciones", ""])
     for item in payload["limitations"]:

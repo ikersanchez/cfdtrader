@@ -316,6 +316,47 @@ def costs_payload() -> dict[str, Any]:
             "how_to_fill": "anotar el precio obtenido frente al de referencia, 10-15 veces",
             "forbidden": "prohibido cualquier valor de relleno",
         },
+        # #64 etapa 2: el supuesto pesimista **declarado** (no es una medición).
+        "slippage_asumido": {
+            "id": "slippage_asumido",
+            "name": "slippage_ejecucion_asumido",
+            "state": "assumed",
+            "is_measurement": False,
+            "assumption_note": ("es una **asunción** del propietario y **no** una **medición**"),
+            "provenance": "decision del propietario 2026-09-18",
+            "decided_on": "2026-09-18",
+            "reason": "no se mide todavía: se declara un supuesto pesimista",
+            "value_pct_of_r": "20",
+            "value_pct_of_r_unit": "% de `R`",
+            "share_of_gate_b_allowance_pct": "100",
+            "r_pct": None,
+            "r_state": "unresolved",
+            "r_reason": "`R` es la decisión abierta 5 y no se elige aquí",
+            "r_issue": "#60",
+            "why_not_zero": "no puede ser 0: el *slippage* de la apertura existe y es ≈30× el ",
+            "illustrative_equivalence": {
+                "r_pct": "1",
+                "r_label": "**ilustrativo**, no una decisión de `R` (-> #60)",
+                "is_decision": False,
+                "value_bp": "20",
+                "value_pct_of_notional": "0.2",
+                "value_usd": "20",
+                "notional_usd": "10000",
+            },
+            "enforced_downstream": {
+                "chain": ["#11", "#13", "#28"],
+                "description": (
+                    "#11 (modelo de coste del motor) → #13 (motor *walk-forward*) → #28 "
+                    "(backtest contra baselines)"
+                ),
+                "status": "declaracion",
+                "note": (
+                    "hasta entonces el supuesto es una **declaración**: no es un coste aplicado "
+                    "ni medido en ningún cálculo de este informe"
+                ),
+            },
+            "limitations": ["59 sesiones, un solo régimen y granularidad de 5 min"],
+        },
         "by_size": {"percentage_is_constant": True},
         "phase0_gate_b": {
             "criterion": "slippage sistemático > ~20 % de R (tasks.md, tarea 9, puerta (b))",
@@ -557,6 +598,11 @@ FORBIDDEN_LITERALS = (
     "0.463",
     "0.576",
     "33.1",
+    # #64 etapa 2: el escenario del supuesto también se calcula (`Decimal`), no se escribe
+    "60.42",
+    "60.21",
+    "60.14",
+    "60.00",
 )
 
 
@@ -645,25 +691,37 @@ def test_a3_each_input_publishes_path_as_of_source_series_and_sha256(tmp_path: P
 # ─────────────────────────────────────────────────────────────────────────────
 # A4 · decisiones abiertas 4, 5 y 6
 # ─────────────────────────────────────────────────────────────────────────────
-def test_a4_open_decisions_4_5_and_6_are_declared_unresolved(tmp_path: Path) -> None:
+def test_a4_open_decisions_4_and_5_are_unresolved_and_6_is_resolved(tmp_path: Path) -> None:
     payload = report_for(ready_inputs(tmp_path))
     decisions = {entry["id"]: entry for entry in payload["open_decisions"]}
 
-    assert set(decisions) == {"4", "5", "6"}
+    assert set(decisions) == {"4", "5", "6"}, "ninguna decisión se borra"
     assert decisions["4"]["issue"] == "#59"
     assert decisions["5"]["issue"] == "#60"
     assert decisions["6"]["issue"] == "#61"
-    for entry in decisions.values():
+    for entry in (decisions["4"], decisions["5"]):
         assert entry["state"] == "unresolved"
         assert entry["missing_information"]
         assert entry["depends"]
     assert "R" in decisions["5"]["name"]
     assert "#60" in decisions["5"]["depends"]
+
+    # #64 / A26: la decisión 6 se **cerró** el 2026-09-18 y ese cierre se declara.
+    resolved = decisions["6"]
+    assert resolved["state"] == "resolved"
+    assert resolved["decided_on"] == "2026-09-18"
+    assert resolved["provenance"] == "decision del propietario"
+    assert "session_open" in resolved["value"]
+    assert "§4.1" in resolved["value"]
+    assert "missing_information" not in resolved
     assert payload["gate_b"]["threshold_in_comparable_units"]["applied"] is False
 
 
 def test_a4_the_module_declares_the_same_decisions() -> None:
-    assert {entry["id"] for entry in OPEN_DECISIONS} == {"4", "5", "6"}
+    decisions = {entry["id"]: entry for entry in OPEN_DECISIONS}
+    assert set(decisions) == {"4", "5", "6"}
+    assert decisions["6"]["state"] == "resolved"
+    assert decisions["4"]["state"] == decisions["5"]["state"] == "unresolved"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -697,7 +755,7 @@ def test_a5_no_silent_defaults_are_baked_into_the_module() -> None:
     assert payload_free_default(source)
     decisions = {entry["id"]: entry for entry in OPEN_DECISIONS}
     assert decisions["5"]["state"] == "unresolved"
-    assert decisions["6"]["missing_information"]
+    assert decisions["6"]["state"] == "resolved" and decisions["6"]["value"]
 
 
 def payload_free_default(source: str) -> bool:
@@ -915,7 +973,11 @@ def test_a12_half_a_is_fail_and_not_softened(tmp_path: Path) -> None:
 def test_a13_gate_a_limitations_are_published_with_their_links(tmp_path: Path) -> None:
     payload = report_for(ready_inputs(tmp_path))
     issues = {entry["issue"] for entry in payload["gate_a"]["limitations"]}
-    assert {"#50", "#52", "#61"} <= issues
+    assert {"#50", "#52"} <= issues
+    assert "#63" in " ".join(entry["issue"] for entry in payload["gate_a"]["limitations"]), (
+        "el *look-ahead* heredado de #7 se declara (#63)"
+    )
+    assert "#61" not in issues, "el precio de entrada ya **no** está sin decidir"
     text = " ".join(entry["limitation"] for entry in payload["gate_a"]["limitations"])
     assert "^GSPC" in text
     assert "nocturno del **sistema** es cero" in text
@@ -1251,7 +1313,13 @@ def test_a24_with_today_like_artifacts_the_verdict_block_is_the_expected_one(
     assert payload["phases"]["phase1_ready"] is False
 
     codes = {blocker["code"] for blocker in verdict["blockers"]}
-    assert {"drift_overnight", "slippage_unmeasured", "r_undecided"} <= codes
+    assert codes == {
+        "drift_overnight",
+        "slippage_assumed_not_measured",
+        "r_undecided",
+        "financing_cut_unverified",
+        "broker_undecided",
+    }, "el conjunto exacto de `blockers` está fijado por la decisión del 2026-09-18"
     for blocker in verdict["blockers"]:
         assert blocker["half"] in {"a", "b"}
         assert blocker["reason"]
@@ -1608,3 +1676,222 @@ def test_the_report_error_is_exported_for_the_cli_contract() -> None:
     assert issubclass(phase0_report.AmbiguousArtifactError, Phase0ReportError)
     assert issubclass(phase0_report.InputConflictError, Phase0ReportError)
     assert issubclass(phase0_report.VerdictError, Phase0ReportError)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #64 etapa 2 · el supuesto pesimista del *slippage* en el informe de Fase 0
+# (A21-A29 del issue #64: la asunción no es medición y el veredicto no se mueve)
+# ─────────────────────────────────────────────────────────────────────────────
+def _measured_slippage_overrides() -> dict[str, Any]:
+    return {
+        "slippage_ejecucion.state": "measured",
+        "slippage_ejecucion.value_pct": "0.05",
+        "slippage_ejecucion.observations": 12,
+        "phase0_gate_b.evaluable": True,
+    }
+
+
+def test_a21_the_assumption_never_makes_half_b_a_pass(tmp_path: Path) -> None:
+    payload = report_for(ready_inputs(tmp_path))
+    gate_b = payload["gate_b"]
+    assert gate_b["state"] == "not_evaluable"
+    assert gate_b["artifact"]["evaluable"] is False
+    assert gate_b["assumption_is_measurement"] is False
+    assert "asumir tu propio peor caso no puede ser un aprobado" in gate_b["reason"]
+
+    # Todos los valores del supuesto viajan con estado, unidad, procedencia y `is_measurement`.
+    assumption = gate_b["assumption"]
+    assert assumption["state"] == "assumed"
+    assert assumption["is_measurement"] is False
+    assert assumption["name"] and assumption["provenance"] and assumption["decided_on"]
+    assert assumption["value_pct_of_r"] == "20" and assumption["value_pct_of_r_unit"]
+    assert assumption["r_pct"] is None and assumption["r_state"] == "unresolved"
+    assert assumption["r_issue"] == "#60"
+
+    assert payload["verdict"]["half_b"] == "not_evaluable"
+    assert payload["verdict"]["half_b"] != "pass"
+    assert payload["verdict"]["gate"] != "pass"
+
+
+def test_a21_a_measured_slippage_without_r_is_still_not_evaluable(tmp_path: Path) -> None:
+    payload = report_for(
+        ready_inputs(tmp_path, costs=_measured_slippage_overrides()),
+    )
+    assert payload["gate_b"]["artifact"]["evaluable"] is True
+    assert payload["gate_b"]["state"] == "not_evaluable"
+    assert payload["gate_b"]["assumption_is_measurement"] is False
+    assert payload["gate_b"]["assumption"]["is_measurement"] is False
+    assert payload["gate_b"]["assumption"]["r_pct"] is None
+    assert payload["verdict"]["half_b"] != "pass"
+    codes = {blocker["code"] for blocker in payload["verdict"]["blockers"]}
+    assert "slippage_assumed_not_measured" not in codes, (
+        "con el *slippage* medido el bloqueo es `R`, no el supuesto"
+    )
+    assert "r_undecided" in codes
+
+
+def test_a22_the_report_says_where_the_assumption_is_enforced(tmp_path: Path) -> None:
+    payload = report_for(ready_inputs(tmp_path))
+    downstream = payload["gate_b"]["assumption"]["enforced_downstream"]
+    assert downstream["chain"] == ["#11", "#13", "#28"]
+    assert downstream["status"] == "declaracion"
+    assert "declaración" in downstream["note"]
+
+    markdown = render_markdown(consolidate(ready_inputs(tmp_path / "md"), now=NOW))
+    assert "Dónde se aplica el supuesto" in markdown
+    for issue in ("#11", "#13", "#28"):
+        assert issue in markdown
+    assert "hasta entonces el supuesto es una **declaración**" in markdown
+
+
+def test_a23_the_assumption_scenario_is_exact_and_keeps_the_declared_rows(
+    tmp_path: Path,
+) -> None:
+    payload = report_for(ready_inputs(tmp_path))["p_star"]
+    declared = {(row["r_pct"], row["c_pct"]) for row in payload["rows"]}
+    assert ("1.0", "0.0042") in declared, "la tabla declarada queda intacta"
+    assert payload["cost_used_pct"] == "0.0042"
+
+    scenario = payload["assumption_scenario"]
+    assert scenario["assumption_pct_of_r"] == "20"
+    assert scenario["is_measurement"] is False
+    assert "60 % + (0.0042 %)/(2R)" in scenario["formula"]
+
+    rows = {row["r_pct"]: row for row in scenario["rows"]}
+    assert set(rows) == {"0.5", "1.0", "1.5"}
+    expected = {"0.5": "60.42", "1.0": "60.21", "1.5": "60.14"}
+    for r_pct, p_star_pct in expected.items():
+        assert rows[r_pct]["p_star_pct"] == p_star_pct
+        # Exacto, recalculado con `Decimal`: no se publica ningún delta sin recomputar.
+        cost = Decimal("0.0042") + Decimal("20") / Decimal(100) * Decimal(r_pct)
+        exact = p_star(Decimal(r_pct), cost) * Decimal(100)
+        assert format(exact.quantize(Decimal("0.01")), "f") == p_star_pct
+        assert rows[r_pct]["floor_pct"] == "60.00"
+
+    assert scenario["floor_is_r_independent"] is True
+    assert "no** depende de `R`" in scenario["statement"]
+    assert scenario["never_replaces"] and "intacta" in scenario["never_replaces"]
+    assert "derogada" in scenario["derogated_gate_note"]
+
+    markdown = render_markdown(consolidate(ready_inputs(tmp_path / "md"), now=NOW))
+    for row in payload["rows"]:
+        assert row["p_star_pct"] in markdown
+    for p_star_pct in expected.values():
+        assert p_star_pct in markdown
+
+
+def test_a24_the_aggregate_verdict_does_not_flip_and_no_basis_is_updated(
+    tmp_path: Path,
+) -> None:
+    payload = report_for(ready_inputs(tmp_path))
+    verdict = payload["verdict"]
+    assert verdict["half_a"] == "fail"
+    assert verdict["half_b"] == "not_evaluable"
+    assert verdict["gate"] == "fail"
+    assert verdict["phase1_ready"] is False
+    assert payload["phases"]["phase1_ready"] is False
+    assert payload["recommendation"]["value"] == "reframe"
+    assert payload["recommendation"]["value"] != "continue"
+
+    no_basis = payload["no_basis_for_continuation"]
+    blob = " ".join(entry["what"] for entry in no_basis["missing"])
+    assert "slippage" in blob and "`R`" in blob
+    assert "assumption_does_not_remove_this" in no_basis
+
+    markdown = render_markdown(consolidate(ready_inputs(tmp_path / "md"), now=NOW))
+    assert "La mitad (a) sigue `fail`" in markdown
+    assert "La mitad (b) sigue `not_evaluable`" in markdown
+    assert "no se pasa a Fase 1" in markdown
+
+
+def test_a25_the_blocker_codes_are_exactly_the_five_declared_ones(tmp_path: Path) -> None:
+    declared_codes = {
+        "drift_overnight",
+        "slippage_assumed_not_measured",
+        "r_undecided",
+        "financing_cut_unverified",
+        "broker_undecided",
+    }
+    vocabulary = {member.value for member in phase0_report.BlockerCode}
+    assert declared_codes <= vocabulary
+    assert vocabulary - declared_codes == {"drift_not_evaluable"}, (
+        "el único código extra es el camino declarado de #9 para una mitad (a) que no es "
+        "`fail` por el drift nocturno; con estos artefactos **no** aparece"
+    )
+
+    payload = report_for(ready_inputs(tmp_path))
+    blockers = payload["verdict"]["blockers"]
+    assert {blocker["code"] for blocker in blockers} == declared_codes
+    for blocker in blockers:
+        assert blocker["half"] in {"a", "b"}
+        assert blocker["reason"]
+        assert blocker["issues"]
+
+    serialized = json.dumps(payload["verdict"], ensure_ascii=False)
+    assert "entry_price_undecided" not in serialized
+    assert "slippage_unmeasured" not in serialized
+    assert "drift_not_evaluable" not in serialized, "el camino de la mitad (a) es el de hoy"
+
+
+def test_a26_a_resolved_decision_cannot_generate_a_blocker(tmp_path: Path) -> None:
+    payload = report_for(ready_inputs(tmp_path))
+    decisions = {entry["id"]: entry for entry in payload["open_decisions"]}
+    resolved = [entry for entry in decisions.values() if entry["state"] == "resolved"]
+    assert [entry["id"] for entry in resolved] == ["6"]
+
+    resolved_issues = {entry["issue"] for entry in resolved}
+    for blocker in payload["verdict"]["blockers"]:
+        assert not set(blocker["issues"]) <= resolved_issues, (
+            f"un `blocker` no puede salir de una decisión cerrada: {blocker['code']}"
+        )
+    assert "entry_price_undecided" not in {b["code"] for b in payload["verdict"]["blockers"]}
+
+    # Una decisión cerrada tampoco puede figurar entre las que faltan por decidir.
+    undecided = {entry["id"] for entry in decisions.values() if entry["state"] == "unresolved"}
+    assert undecided == {"4", "5"}
+
+
+def test_a27_the_declared_constants_gain_the_assumption_and_drop_entry_price(
+    tmp_path: Path,
+) -> None:
+    payload = report_for(ready_inputs(tmp_path))
+    by_name = {entry["name"]: entry for entry in payload["declared_constants"]}
+    assumption = by_name["slippage_assumption_pct_of_r"]
+    assert assumption["value"] == "20"
+    assert assumption["unit"] == "% de `R`"
+    assert "2026-09-18" in assumption["provenance"]
+    assert "assumed" in assumption["note"] and "#60" in assumption["note"]
+
+    half_b = [entry for entry in payload["what_would_change_the_verdict"] if entry["half"] == "b"]
+    assert half_b
+    condition = " ".join(entry["condition"] for entry in half_b)
+    assert "*slippage*" in condition
+    assert "decisión 5" in condition and "`R`" in condition
+    assert all("#60" in entry["issues"] for entry in half_b)
+    serialized = json.dumps(payload["what_would_change_the_verdict"], ensure_ascii=False)
+    assert "precio de entrada" not in serialized
+    # El código retirado no sobrevive ni en `blockers[]` ni en el vocabulario; solo la nota de
+    # la decisión cerrada lo nombra para dejar el rastro del cambio.
+    codes = {blocker["code"] for blocker in payload["verdict"]["blockers"]}
+    assert "entry_price_undecided" not in codes
+    assert "entry_price_undecided" not in {member.value for member in phase0_report.BlockerCode}
+
+
+def test_a29_the_markdown_names_both_owner_decisions_and_the_unchanged_halves(
+    tmp_path: Path,
+) -> None:
+    payload = report_for(ready_inputs(tmp_path))
+    markdown = render_markdown(consolidate(ready_inputs(tmp_path / "md"), now=NOW))
+
+    assert "## Decisiones del propietario del 2026-09-18" in markdown
+    assert markdown.count("decision del propietario") >= 2
+    assert markdown.count("2026-09-18") >= 2
+    for decision in payload["owner_decisions"]:
+        assert decision["id"] in markdown
+    assert "session_open" in markdown, "decisión 1: el `open` de la subasta"
+    assert "supuesto pesimista" in markdown, "decisión 2: el supuesto del *slippage*"
+
+    assert "asumir tu propio peor caso no es un aprobado" in markdown
+    assert "La mitad (b) sigue `not_evaluable`" in markdown
+    assert "La mitad (a) sigue `fail`" in markdown
+    assert f"`{payload['verdict']['gate']}`" in markdown

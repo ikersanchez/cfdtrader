@@ -828,6 +828,7 @@ def test_a24_no_bare_zero_anywhere_in_the_guarded_blocks() -> None:
             "spread_cotizado",
             "tracking_difference",
             "slippage_ejecucion",
+            "slippage_asumido",
             "financing_cut",
             "fx_cost",
         ):
@@ -839,6 +840,211 @@ def test_a24_no_bare_zero_anywhere_in_the_guarded_blocks() -> None:
                 assert block.get("state") == MeasureState.MEASURED.value, f"{name}.{key} es 0"
                 assert block.get("source"), f"{name}.{key} es 0 sin fuente"
                 assert block.get("reason"), f"{name}.{key} es 0 sin motivo"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #64 etapa 2 · El supuesto pesimista del *slippage* (A14-A22)
+# ─────────────────────────────────────────────────────────────────────────────
+def _assumption() -> dict[str, object]:
+    return cast("dict[str, object]", _consolidate().payload["slippage_asumido"])
+
+
+def test_a14_the_assumption_constant_and_the_block_agree_and_it_is_not_a_measurement() -> None:
+    """A14: constante declarada con nombre, valor, unidad, procedencia y motivo."""
+    block = _assumption()
+    assert block["name"] == "slippage_ejecucion_asumido"
+    assert block["value_pct_of_r"] == str(cost_audit.SLIPPAGE_ASSUMPTION_PCT_OF_R)
+    assert block["value_pct_of_r_unit"] == "% de `R`"
+    assert block["provenance"] == "decision del propietario 2026-09-18"
+    assert block["decided_on"] == "2026-09-18"
+    assert block["is_measurement"] is False
+    assert block["reason"] and block["owner_quote"]
+    assert block["state"] == MeasureState.ASSUMED.value
+
+
+def test_a15_the_assumption_is_a_ratio_over_r_and_the_bp_equivalent_is_illustrative() -> None:
+    """A15: 100 % del margen de la puerta (b) = 20 % de `R`; el bp sale de esa relación."""
+    block = _assumption()
+    assert block["share_of_gate_b_allowance_pct"] == "100"
+    assert block["gate_b_allowance_pct_of_r"] == "20"
+    assert block["value_pct_of_r"] == "20"
+    assert block["r_pct"] is None, "`R` sigue pendiente: nunca un valor por defecto"
+    assert block["r_state"] == "unresolved" and block["r_issue"] == "#60"
+
+    stated = cast("dict[str, object]", block["illustrative_equivalence"])
+    assert stated["r_pct"] == "1"
+    assert stated["value_bp"] == "20"
+    assert stated["value_pct_of_notional"] == "0.2"
+    assert stated["value_usd"] == "20"
+    assert stated["notional_usd"] == "10000"
+    assert stated["is_decision"] is False
+    assert "no" in str(stated["warning"])
+
+    # Con otro `R` ilustrativo, el equivalente cambia y la ratio sobre `R` **no**.
+    halves = cost_audit.slippage_assumption_block(r_illustrative_pct=Decimal("0.5"))
+    assert halves["value_pct_of_r"] == "20"
+    other = cast("dict[str, object]", halves["illustrative_equivalence"])
+    assert other["value_bp"] == "10"
+    assert other["value_usd"] == "10"
+    assert other["r_pct"] == "0.5"
+
+
+def test_a16_the_assumption_cites_the_measurement_its_reason_and_its_limitation() -> None:
+    """A16: motivo de no-cero, evidencia medida y limitación declarada."""
+    block = _assumption()
+    assert "no puede ser 0" in str(block["why_not_zero"])
+    assert "≈30×" in str(block["why_not_zero"]) or "30x" in str(block["why_not_zero"])
+
+    evidence = cast("dict[str, object]", block["measured_evidence"])
+    assert evidence["median_bp"] == 13.2
+    assert evidence["p90_bp"] == 26.6
+    assert evidence["max_bp"] == 46.8
+    assert evidence["sessions_above_10_bp"] == 36
+    assert evidence["sessions_measured"] == 59
+    assert evidence["declared_spread_bp"] == 0.42
+    assert evidence["state"] == MeasureState.MEASURED.value and evidence["is_measurement"] is True
+    assert "5 min" in str(evidence["definition"]) and "subasta" in str(evidence["definition"])
+
+    limitations = " ".join(cast("list[str]", block["limitations"]))
+    assert "59 sesiones" in limitations and "sub-minuto" in limitations
+
+    blob = json.dumps(block, ensure_ascii=False)
+    assert "asunción" in blob and "no" in blob
+    assert "asunción" in str(block["assumption_note"])
+    assert "no** una **medición" in str(block["assumption_note"])
+
+
+def test_a17_the_assumption_does_not_feed_the_unmeasured_slippage() -> None:
+    """A17: los tres estados son distinguibles y nadie rellena `slippage_ejecucion`."""
+    payload = _consolidate().payload
+    measured = payload["spread_cotizado"]
+    assumed = payload["slippage_asumido"]
+    unmeasured = payload["slippage_ejecucion"]
+
+    assert measured["state"] == MeasureState.UNMEASURED.value
+    assert assumed["state"] == MeasureState.ASSUMED.value
+    assert unmeasured["state"] == MeasureState.UNMEASURED.value
+    assert {assumed["state"], unmeasured["state"], MeasureState.MEASURED.value} == {
+        "assumed",
+        "unmeasured",
+        "measured",
+    }, "los tres estados deben existir y ser distinguibles"
+
+    assert unmeasured["value_pct"] is None and unmeasured["value_usd"] is None
+    assert unmeasured["source"] is None
+    assert unmeasured["reason"] and unmeasured["how_to_fill"] == cost_audit.SLIPPAGE_HOW_TO_FILL
+    assert "slippage_asumido" not in json.dumps(unmeasured, ensure_ascii=False)
+    # Ningún valor del supuesto vive dentro de la medida sin medir: sigue en `null`.
+    for key in ("value_usd", "value_pct", "value_points"):
+        assert unmeasured[key] is None, f"`{key}` no puede venir del supuesto"
+    assert "value_pct_of_r" not in unmeasured and "value_bp" not in unmeasured
+
+
+def test_a18_the_assumption_is_a_separate_block_and_nothing_sums_it() -> None:
+    """A18: sigue sin existir ningún «coste total» que fusione los bloques."""
+    payload = _consolidate().payload
+    for name in (
+        "spread_cotizado",
+        "tracking_difference",
+        "slippage_ejecucion",
+        "slippage_asumido",
+    ):
+        assert name in payload
+        assert {"state", "reason"} <= set(payload[name])
+
+    forbidden = {"total", "total_cost", "cost_total", "combined_cost", "grand_total", "sum_cost"}
+    for key, _ in _walk(payload):
+        assert key not in forbidden, f"el informe no puede combinar los bloques: {key}"
+
+
+def test_a19_a_numeric_assumption_value_without_state_unit_and_provenance_fails() -> None:
+    """A19: recorrido del JSON completo; `assumed` sin procedencia no pasa."""
+    block = _assumption()
+    assert _assumed_is_declared(block)
+
+    for key in ("value_pct_of_r", "share_of_gate_b_allowance_pct"):
+        assert block[key] is not None
+        assert block[f"{key}_unit"]
+
+    assert not _assumed_is_declared({**block, "provenance": ""})
+    assert not _assumed_is_declared({**block, "is_measurement": True})
+    assert not _assumed_is_declared({**block, "state": MeasureState.MEASURED.value})
+
+    equivalence = cast("dict[str, object]", block["illustrative_equivalence"])
+    assert equivalence["value_bp_unit"] and equivalence["value_usd_unit"]
+    assert equivalence["value_pct_of_notional_unit"]
+    assert equivalence["notional_usd"]
+
+
+def _assumed_is_declared(block: dict[str, object]) -> bool:
+    """Regla de A19: `assumed` exige estado, unidad, procedencia y no ser medición."""
+    return (
+        block.get("state") == MeasureState.ASSUMED.value
+        and block.get("is_measurement") is False
+        and bool(block.get("provenance"))
+        and bool(block.get("decided_on"))
+        and bool(block.get("value_pct_of_r_unit"))
+        and block.get("reason") is not None
+    )
+
+
+def test_a20_the_blank_template_still_produces_the_assumption_block(tmp_path: Path) -> None:
+    """A20: la plantilla vacía sigue valiendo y el supuesto no es un campo suyo."""
+    template = tmp_path / "vacia.yaml"
+    template.write_text(yaml.safe_dump(_payload()), encoding="utf-8")
+    loads = cost_audit.load_template(template)
+    assert loads.executions == (), "el supuesto no puede llegar por la plantilla"
+
+    audit = consolidate(loads, calendar=load_calendar(), now=NOW, template_path=template)
+    payload = audit.payload
+    assert payload["slippage_asumido"]["state"] == MeasureState.ASSUMED.value
+    for name in ("spread_cotizado", "tracking_difference", "slippage_ejecucion"):
+        assert payload[name]["state"] == MeasureState.UNMEASURED.value
+
+    # El YAML commiteado solo menciona el supuesto en comentarios.
+    text = DEFAULT_TEMPLATE_PATH.read_text(encoding="utf-8")
+    assert "slippage_asumido" in text
+    for line in text.splitlines():
+        if "slippage_asumido" in line:
+            assert line.lstrip().startswith("#"), f"no puede ser un campo YAML: {line!r}"
+
+
+def test_a21_the_assumption_never_makes_gate_b_a_pass() -> None:
+    """A21: «asumir tu propio peor caso no puede ser un aprobado»."""
+    gate = _consolidate().payload["phase0_gate_b"]
+    assert gate["evaluable"] is False
+    assert gate["assumption_is_measurement"] is False
+    assert "asumir tu propio peor caso no puede ser un aprobado" in str(gate["reason"])
+    assert gate["assumption"]["state"] == MeasureState.ASSUMED.value
+    assert gate["assumption"]["is_measurement"] is False
+
+    # Con un *slippage* sintético **medido**, la condición pasa a ser evaluable... pero el
+    # supuesto sigue sin ser una medición y `R` sigue sin decidirse (lo dice #9).
+    execution = {
+        "timestamp_utc": "2026-09-18T13:30:05+00:00",
+        "side": "long",
+        "notional_usd": 10_000,
+        "reference_price": 5000.0,
+        "filled_price": 5002.0,
+    }
+    measured = _consolidate(executions=[execution]).payload["phase0_gate_b"]
+    assert measured["evaluable"] is True
+    assert measured["assumption_is_measurement"] is False
+    assert measured["assumption"]["r_pct"] is None
+
+
+def test_a22_the_report_says_where_the_assumption_is_enforced() -> None:
+    """A22: la cadena #11 → #13 → #28, en máquina y en prosa."""
+    block = _assumption()
+    downstream = cast("dict[str, object]", block["enforced_downstream"])
+    assert downstream["chain"] == ["#11", "#13", "#28"]
+    assert downstream["status"] == "declaracion"
+    assert "declaración" in str(downstream["note"])
+    text = render_markdown(_consolidate())
+    assert "## El supuesto pesimista del *slippage* (declarado el 2026-09-18)" in text
+    assert "#11" in text and "#13" in text and "#28" in text
+    assert "asumir tu propio peor caso no es una medición" in text
+    assert "20 bp" in text, "el equivalente ilustrativo se publica"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
