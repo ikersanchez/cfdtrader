@@ -60,7 +60,8 @@ REPO_NAME = "cfdtrader"
 VISIBILITY = "--public"
 REPO_DESCRIPTION = (
     "Sistema multiagente de decisión intradía sobre CFD del S&P 500: "
-    "medición, backtest con purga y embargo, gate determinista. Diseño, sin código todavía."
+    "medición, backtest con purga y embargo, gate determinista. "
+    "Ejecución manual y a demanda, sin automatización."
 )
 
 TASKS_FILE = Path(__file__).resolve().parent / "_docs" / "tasks.md"
