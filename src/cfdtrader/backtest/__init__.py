@@ -16,4 +16,14 @@ en el *train* y cuáles en el *test* (bloques de test contiguos, train estrictam
 anterior, expansivo o rodante) y publica un ``SplitPlan`` verificable y reproducible por
 ``plan_sha256``. Es la pieza que consumen #13, #16, #24 y #25; no entrena, no mide precios
 y no reserva el *holdout* (eso es #68).
+
+El **motor *walk-forward*** vive en ``cfdtrader.backtest.engine`` (tarea #13): puro y
+determinista, recorre las sesiones de *test* del ``SplitPlan`` de #12, pide una ``Decision``
+por sesión a partir de una vista **sin el futuro de la sesión**, simula la operación
+intradía ``open`` -> ``close`` (entrada en la subasta de apertura, salida dentro de la
+sesión, *gap* declarado y no operado) y devuelve un ``BacktestRun`` verificable, con el eco
+del plan y su ``run_sha256`` reproducible byte a byte. El reparto es «**#11 cobra; #13
+recorre y simula**»: el coste sale de una única llamada a ``cost_breakdown`` por operación.
+No lee el ``Store``, no construye los ``SessionInput`` y no escribe el informe: eso es el
+adaptador de almacén **#69**.
 """

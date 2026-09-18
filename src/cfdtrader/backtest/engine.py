@@ -55,8 +55,8 @@ Purga y embargo: **se publican, no se afirman**
 El ``BacktestRun`` hace eco literal de ``plan_sha256``, ``purge_total``, ``embargo_total``,
 ``embargo_in_train_total``, ``exclusions_are_no_op`` y ``uncovered`` del ``SplitPlan``.
 Con el horizonte de #10 (``label_horizon = 0``) la purga y el embargo son **no-ops
-estructurales** (el train es estrictamente anterior al test): aquí **no** se presentan como
-un filtro activo. La frontera es #12 (que los mide) y #67 (CPCV, el esquema donde sí
+estructurales** (el train es estrictamente anterior al test) y aquí **no** se presentan
+como un filtro activo. La frontera es #12 (que los mide) y #67 (CPCV, el esquema donde sí
 trabajan); la reserva del *holdout* es #68.
 
 Determinismo, pureza y LLM
@@ -639,6 +639,12 @@ def _optional_decimal_text(value: Decimal | None) -> str | None:
     return None if value is None else _decimal_text(value)
 
 
+def _compact_decimal_text(value: Decimal) -> str:
+    """Cadena decimal exacta sin ceros de relleno: la convencion de #8 (20 bp, no 20,0)."""
+    text = format(value.normalize(), "f")
+    return "0" if text in {"-0", "0"} else text
+
+
 def _date_text(value: date | None) -> str | None:
     """Una sesion se publica en ISO-8601; ``None`` sigue siendo ``None``."""
     return None if value is None else value.isoformat()
@@ -1124,8 +1130,8 @@ def _illustrative_block(pct_of_r: Decimal) -> dict[str, object]:
         "decision": False,
         "basis": "supuesto declarado de #64: 20 % de R",
         "r_illustrative_pct": _decimal_text(_ILLUSTRATIVE_R_PCT),
-        "equivalent_pct_of_notional": _decimal_text(pct),
-        "equivalent_bp_of_notional": _decimal_text(pct * Decimal(100)),
+        "equivalent_pct_of_notional": _compact_decimal_text(pct),
+        "equivalent_bp_of_notional": _compact_decimal_text(pct * Decimal(100)),
         "feeds_pnl_net_pct": False,
     }
 
