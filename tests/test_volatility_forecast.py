@@ -25,19 +25,25 @@ import pytest
 from cfdtrader.analysis.drift import decompose, load_sessions, session_stale_open
 from cfdtrader.analysis.volatility_forecast import (
     CANDIDATES,
+    GARCH_SANITY_SESSIONS,
+    GARCH_VARIANCE_BAND,
     MIN_TRAIN,
     REFIT_EVERY,
+    RELATIVE_TOLERANCE,
     CandidateResult,
     Metrics,
     Target,
     Verdict,
     analyse,
     build_sample,
+    garch_one_step_forecast,
     load_market,
     main,
+    relative_qlike_gap,
     report_payload,
     scale_sigma_for_duration,
     select_candidate,
+    verdict_text,
     walk_forward,
 )
 from cfdtrader.data.calendar import FULL_SESSION_HOURS, HALF_SESSION_HOURS, MarketCalendar
@@ -293,7 +299,7 @@ def test_the_json_carries_the_machine_readable_blocks(tmp_path: Path) -> None:
     payload = report_payload(study)
 
     selection = _dict_of(payload["selection"])
-    assert set(selection) >= {"selected", "verdict", "metric", "rule", "constants"}
+    assert set(selection) >= {"selected", "verdict", "metric", "rule", "constants", "leaders"}
     assert selection["metric"] == "qlike"
 
     candidates = _dict_of(payload["candidates"])
@@ -333,6 +339,65 @@ def test_a_store_without_vix_declares_har_vix_unavailable_and_still_reports(
     assert har_vix.metrics[Target.PARKINSON.value] is None
     assert any(result.status == "ok" for result in study.candidates)
     assert (reports / f"volatility_forecast_{NOW.date()}.md").exists()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A8 — GARCH(1,1): especificación y pronóstico a un paso en fracciones
+# ─────────────────────────────────────────────────────────────────────────────
+def test_garch_one_step_forecast_lands_in_the_declared_band() -> None:
+    """A8: con varianza constante conocida, el pronóstico a un paso cae en 0,5×–2×.
+
+    Retornos i.i.d. con ``sigma = 1,1 %`` (varianza ``1,21e-4``, una serie de
+    varianza constante conocida) durante 1.200 sesiones. El pronóstico a un paso
+    se compara con la **varianza realizada de las últimas 250 sesiones** y tiene
+    que caer dentro de la banda **declarada** en el módulo
+    (``GARCH_VARIANCE_BAND = (0.5, 2.0)``), no de un número elegido a posteriori.
+    Además es finito y positivo, y está en fracciones: un ajuste en porcentaje
+    daría un valor 10⁴ veces mayor.
+    """
+    sigma = 0.011
+    returns = np.random.default_rng(7).normal(0.0, sigma, 1200)
+
+    forecast = garch_one_step_forecast(returns)
+    realized = float(np.mean(returns[-GARCH_SANITY_SESSIONS:] ** 2))
+    lower, upper = GARCH_VARIANCE_BAND
+
+    assert GARCH_SANITY_SESSIONS == 250
+    assert math.isfinite(forecast) and forecast > 0.0
+    assert lower * realized <= forecast <= upper * realized
+    assert forecast == pytest.approx(sigma**2, rel=0.5)  # fracciones: no (100·sigma)²
+
+
+def test_the_garch_candidate_keeps_the_one_step_forecast() -> None:
+    """A8: el candidato `garch` guarda el pronóstico **a un paso**, no el pasado.
+
+    En la primera sesión del primer fold, el pronóstico tiene que ser
+    ``ω + alpha·ε²_{t-1} + beta·sigma²_{t-1}`` con los parámetros ajustados en
+    ``t-1``: la misma cantidad que devuelve `garch_one_step_forecast`. Guardar la
+    varianza condicional del último entrenamiento dejaría el pronóstico un paso
+    por detrás.
+    """
+    returns = np.random.default_rng(3).normal(0.0, 0.012, SESSIONS)
+
+    def lag(values: np.ndarray, periods: int) -> np.ndarray:
+        return np.concatenate((np.full(periods, np.nan), values[:-periods]))
+
+    frame = pl.DataFrame(
+        {
+            "session": _weekdays(SESSIONS),
+            "ret_log": returns,
+            "parkinson_rv": np.abs(returns),
+            "ret_sq": returns**2,
+            "har_lag1": lag(np.abs(returns), 1),
+            "har_lag4": lag(np.abs(returns), 4),
+            "har_lag17": lag(np.abs(returns), 17),
+        }
+    )
+    forecasts = walk_forward(frame).forecasts["garch"]
+
+    assert forecasts[MIN_TRAIN] == pytest.approx(
+        garch_one_step_forecast(returns[:MIN_TRAIN]), rel=1e-12
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -395,6 +460,8 @@ def test_the_selection_rule_picks_a_candidate_that_beats_rw_in_both_targets() ->
 
     assert selection.verdict == Verdict.SELECTED.value
     assert selection.selected == "har"
+    assert selection.leaders[Target.PARKINSON.value] == "har"
+    assert "har" in verdict_text(selection)
     arithmetic = {row["candidate"]: row for row in selection.arithmetic}
     assert arithmetic["har"]["eligible"] is True
     assert arithmetic["garch"]["eligible"] is False  # no bate a rw por más del 2 %
@@ -412,10 +479,16 @@ def test_the_selection_rule_falls_back_to_rw_when_nobody_beats_it() -> None:
     assert selection.verdict == Verdict.NO_BETTER_THAN_NAIVE.value
     assert selection.selected is None
     assert selection.constants["fallback"] == "rw"
+    assert "rw" in verdict_text(selection)
 
 
 def test_the_selection_rule_is_inconclusive_when_the_targets_contradict() -> None:
-    """A16: si cada objetivo señala a un candidato distinto, `inconclusive`."""
+    """A16: si cada objetivo señala a un candidato distinto, `inconclusive`.
+
+    El veredicto **declara los candidatos empatados**: uno por objetivo. Se
+    comprueba en la decisión, en el JSON (``selection.leaders``, para que #23 no
+    lea prosa) y en el texto del informe.
+    """
     selection = select_candidate(
         [
             _result("rw", primary=1.0, secondary=1.0),
@@ -426,6 +499,54 @@ def test_the_selection_rule_is_inconclusive_when_the_targets_contradict() -> Non
 
     assert selection.verdict == Verdict.INCONCLUSIVE.value
     assert selection.selected is None
+    assert selection.leaders == {
+        Target.PARKINSON.value: "har",
+        Target.RET_SQ.value: "garch",
+    }
+    text = verdict_text(selection)
+    assert "har" in text and "garch" in text and Target.PARKINSON.value in text
+
+
+def test_the_relative_gap_is_sign_safe_with_negative_qlike() -> None:
+    """A16: la diferencia relativa no invierte el signo con QLIKE negativo."""
+    assert relative_qlike_gap(-8.0, -8.0) == 0.0
+    assert relative_qlike_gap(-8.08, -8.0) == pytest.approx(-0.01, rel=1e-9)  # 1 % mejor
+    assert relative_qlike_gap(-7.92, -8.0) == pytest.approx(0.01, rel=1e-9)  # 1 % peor
+    assert relative_qlike_gap(1.5, 0.0) == 1.5
+
+
+def test_the_selection_rule_selects_the_best_candidate_with_negative_qlike() -> None:
+    """A16: con los QLIKE negativos del estudio real, gana el mejor de verdad.
+
+    Es la reproducción numérica del informe del 2026-09-18: `garch` y `har_vix`
+    baten a `rw` en más de un 2 % y están dentro del 2 % del mejor, así que el
+    veredicto es `selected` y el elegido es `garch` (el mejor del objetivo
+    primario). Con el cociente directo, el mejor candidato quedaba **fuera** de su
+    propia banda del 2 % (porque `negativo × 1,02` es más negativo) y el veredicto
+    salía `no_better_than_naive`: una regla muerta.
+    """
+    selection = select_candidate(
+        [
+            _result("rw", primary=-8.693968, secondary=-8.514185),
+            _result("har", primary=-8.657222, secondary=-8.436836),
+            _result("har_vix", primary=-8.946905, secondary=-8.801883),
+            _result("garch", primary=-8.975490, secondary=-8.849183),
+        ]
+    )
+
+    assert selection.verdict == Verdict.SELECTED.value
+    assert selection.selected == "garch"
+    assert selection.leaders == {
+        Target.PARKINSON.value: "garch",
+        Target.RET_SQ.value: "garch",
+    }
+    arithmetic = {row["candidate"]: row for row in selection.arithmetic}
+    assert arithmetic["garch"]["within_2pct_of_best"] is True
+    assert arithmetic["garch"]["beats_rw_by_more_than_2pct"] is True
+    assert arithmetic["har_vix"]["eligible"] is True
+    assert arithmetic["har"]["eligible"] is False  # solo mejora un 0,4 % / 0,9 % a rw
+    gap_vs_rw = arithmetic["garch"]["relative_vs_rw_primary"]
+    assert isinstance(gap_vs_rw, float) and gap_vs_rw < -RELATIVE_TOLERANCE
 
 
 def test_an_unavailable_candidate_is_never_selected() -> None:

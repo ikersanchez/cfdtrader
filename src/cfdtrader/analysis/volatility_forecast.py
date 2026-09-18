@@ -20,7 +20,11 @@ Esquema **pre-registrado** (no se cambia después de ver el resultado)
   **MSE del logaritmo** de la varianza. El ranking es por QLIKE medio.
 - Regla de selección: gana el candidato que sea el mejor **o esté dentro del 2 %
   relativo** del mejor en **los dos** objetivos **y** que supere a ``rw`` en
-  **más del 2 % relativo** de QLIKE en **los dos**. Si ninguno lo cumple, el
+  **más del 2 % relativo** de QLIKE en **los dos**. La diferencia relativa se mide
+  como ``(candidato - referencia) / |referencia|`` (positiva = peor): el QLIKE de
+  una varianza en fracción² es **negativo** (``≈ ln(10⁻⁵) + 1``), así que el
+  cociente directo invertiría el signo y dejaría la banda del 2 % inalcanzable
+  para todos, incluido el propio mejor candidato. Si ninguno lo cumple, el
   veredicto es ``no_better_than_naive`` y el *fallback* es ``rw``; si los dos
   objetivos se contradicen, ``inconclusive``.
 
@@ -94,6 +98,8 @@ from cfdtrader.features.volatility import HAR_WARMUP, add_features, fit_log_har
 
 __all__ = [
     "CANDIDATES",
+    "GARCH_SANITY_SESSIONS",
+    "GARCH_VARIANCE_BAND",
     "MIN_TRAIN",
     "REFIT_EVERY",
     "RELATIVE_TOLERANCE",
@@ -104,10 +110,13 @@ __all__ = [
     "Verdict",
     "VolatilityStudy",
     "analyse",
+    "garch_one_step_forecast",
     "main",
+    "relative_qlike_gap",
     "render_markdown",
     "scale_sigma_for_duration",
     "select_candidate",
+    "verdict_text",
     "write_report",
 ]
 
@@ -254,7 +263,12 @@ class Anchors:
 
 @dataclass(frozen=True, slots=True)
 class Selection:
-    """Decisión de la regla pre-registrada, con la aritmética que la justifica."""
+    """Decisión de la regla pre-registrada, con la aritmética que la justifica.
+
+    ``leaders`` declara, por objetivo, **qué candidato va primero**: es lo que
+    permite ver de un vistazo, cuando el veredicto es ``inconclusive``, qué dos
+    candidatos están empatados (uno por objetivo).
+    """
 
     selected: str | None
     verdict: str
@@ -262,6 +276,7 @@ class Selection:
     rule: tuple[str, ...]
     constants: dict[str, object]
     arithmetic: tuple[dict[str, object], ...]
+    leaders: dict[str, str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -525,6 +540,17 @@ class _GarchFit:
     epsilon2: float
 
 
+#: Banda declarada de cordura del GARCH (A8): sobre una serie de varianza
+#: constante, el pronóstico a un paso tiene que caer dentro de 0,5×–2× de la
+#: varianza realizada de las últimas ``GARCH_SANITY_SESSIONS`` sesiones. Fuera de
+#: ahí hay un error de especificación o de unidades (fracciones frente a %), no un
+#: resultado que merezca confianza.
+GARCH_VARIANCE_BAND: Final[tuple[float, float]] = (0.5, 2.0)
+
+#: Sesiones de la varianza realizada con la que se contrasta el GARCH (A8).
+GARCH_SANITY_SESSIONS: Final[int] = 250
+
+
 def _fit_garch(returns: np.ndarray) -> _GarchFit:
     """Ajusta GARCH(1,1) con ``arch``: media cero, errores normales, sin exógenas.
 
@@ -551,6 +577,22 @@ def _fit_garch(returns: np.ndarray) -> _GarchFit:
     return fit
 
 
+def garch_one_step_forecast(returns: np.ndarray) -> float:
+    """Pronóstico de varianza **a un paso** de GARCH(1,1) ajustado con ``returns``.
+
+    Con los parámetros ajustados sobre ``returns``, la varianza pronosticada para
+    la sesión siguiente es ``sigma² = ω + alpha·ε²_T + beta·sigma²_T``, donde ``T``
+    es la última sesión de entrenamiento. Los retornos van **en fracciones**
+    (``0,01`` = 1 %).
+
+    Se expone aparte de :func:`_garch_forecasts` para poder comprobar la
+    especificación contra una serie de varianza conocida (A8) sin montar el
+    *walk-forward* completo.
+    """
+    fit = _fit_garch(returns)
+    return fit.omega + fit.alpha * fit.epsilon2 + fit.beta * fit.sigma2
+
+
 def _garch_forecasts(
     returns: np.ndarray, *, bounds: Sequence[tuple[int, int]]
 ) -> tuple[np.ndarray, str | None]:
@@ -559,8 +601,10 @@ def _garch_forecasts(
     Dentro del fold los parámetros están **congelados** (el reajuste es cada 21
     sesiones, igual que para los demás candidatos) y la varianza condicional se
     actualiza con la recursión de GARCH(1,1):
-    ``sigma²_t = ω + alpha·ε²_{t-1} + β·sigma²_{t-1}``. Es exactamente el pronóstico a un paso
-    con la información disponible antes de la sesión ``t``.
+    ``sigma²_t = ω + alpha·ε²_{t-1} + β·sigma²_{t-1}``. El valor que se guarda en
+    ``t`` es esa recursión aplicada con la información de ``t-1``: exactamente el
+    pronóstico a un paso con lo disponible antes de la sesión ``t`` (incluida la
+    primera sesión de cada fold, que si no quedaría un paso por detrás).
     """
     forecasts = np.full(returns.shape, np.nan)
     for start, end in bounds:
@@ -570,9 +614,9 @@ def _garch_forecasts(
             return forecasts, f"GARCH(1,1) no estimable: {type(error).__name__}: {error}"
         sigma2, epsilon2 = fit.sigma2, fit.epsilon2
         for index in range(start, end):
+            sigma2 = fit.omega + fit.alpha * epsilon2 + fit.beta * sigma2
             forecasts[index] = sigma2
             epsilon2 = returns[index] ** 2
-            sigma2 = fit.omega + fit.alpha * epsilon2 + fit.beta * sigma2
     return forecasts, None
 
 
@@ -782,6 +826,11 @@ SELECTION_RULE: Final[tuple[str, ...]] = (
     "Gana el candidato que sea el mejor o esté dentro del 2 % relativo del mejor "
     "en los DOS objetivos y que además supere a `rw` en más del 2 % relativo de "
     "QLIKE en los DOS objetivos.",
+    "La diferencia relativa se mide como `(candidato - referencia) / |referencia|`: "
+    "positiva = peor, negativa = mejor. **No** se usa el cociente directo porque el "
+    "QLIKE de una varianza en fracción² es negativo de forma natural (≈ ln(10⁻⁵) + 1) "
+    "y con él el cociente invertiría el signo: el mejor candidato quedaría siempre "
+    "fuera de la banda del 2 %, que es una regla muerta.",
     "Si ninguno lo cumple, el veredicto es `no_better_than_naive` y el fallback es `rw`.",
     "Si los dos objetivos se contradicen (el mejor de cada uno es distinto y ninguno "
     "cumple la condición completa), el veredicto es `inconclusive` y se declaran los "
@@ -790,6 +839,22 @@ SELECTION_RULE: Final[tuple[str, ...]] = (
     "(el primario manda). Las tolerancias son las declaradas y no se cambian después "
     "de ver el resultado.",
 )
+
+
+def relative_qlike_gap(candidate: float, reference: float) -> float:
+    """Diferencia relativa de QLIKE frente a una referencia: ``> 0`` es peor.
+
+    ``(candidato - referencia) / |referencia|``: ``0`` si son iguales, positivo si el
+    candidato tiene más pérdida (QLIKE más alto) y negativo si tiene menos. Se
+    normaliza por el **valor absoluto** de la referencia porque el QLIKE de una
+    varianza en fracción² es negativo (``≈ ln(10⁻⁵) + 1``) y el cociente directo
+    ``candidato / referencia - 1`` cambiaría de signo justo cuando el candidato es
+    mejor. Con referencias muy pequeñas el cociente es inestable, así que si la
+    referencia es exactamente cero se devuelve la diferencia bruta.
+    """
+    if reference == 0.0:
+        return candidate - reference
+    return (candidate - reference) / abs(reference)
 
 
 def select_candidate(results: Sequence[CandidateResult]) -> Selection:
@@ -809,26 +874,31 @@ def select_candidate(results: Sequence[CandidateResult]) -> Selection:
     arithmetic: list[dict[str, object]] = []
     verdict = Verdict.NO_BETTER_THAN_NAIVE.value
     selected: str | None = None
+    leaders: dict[str, str] = {}
 
     if available:
         best_primary = min(available, key=lambda name: qlike(name, primary))
         best_secondary = min(available, key=lambda name: qlike(name, secondary))
+        leaders = {primary: best_primary, secondary: best_secondary}
         rw_primary = qlike(Candidate.RW, primary) if Candidate.RW in available else None
         rw_secondary = qlike(Candidate.RW, secondary) if Candidate.RW in available else None
 
         eligible: list[str] = []
         for name in available:
-            within_primary = qlike(name, primary) <= qlike(best_primary, primary) * (
-                1 + RELATIVE_TOLERANCE
+            gap_primary = relative_qlike_gap(qlike(name, primary), qlike(best_primary, primary))
+            gap_secondary = relative_qlike_gap(
+                qlike(name, secondary), qlike(best_secondary, secondary)
             )
-            within_secondary = qlike(name, secondary) <= qlike(best_secondary, secondary) * (
-                1 + RELATIVE_TOLERANCE
+            within_primary = gap_primary <= RELATIVE_TOLERANCE
+            within_secondary = gap_secondary <= RELATIVE_TOLERANCE
+            # "Superar a rw" = mejora relativa de más del 2 % = hueco < -tolerancia.
+            beats_primary = (
+                rw_primary is not None
+                and relative_qlike_gap(qlike(name, primary), rw_primary) < -RELATIVE_TOLERANCE
             )
-            beats_primary = rw_primary is not None and qlike(name, primary) < rw_primary * (
-                1 - RELATIVE_TOLERANCE
-            )
-            beats_secondary = rw_secondary is not None and qlike(name, secondary) < rw_secondary * (
-                1 - RELATIVE_TOLERANCE
+            beats_secondary = (
+                rw_secondary is not None
+                and relative_qlike_gap(qlike(name, secondary), rw_secondary) < -RELATIVE_TOLERANCE
             )
             qualifies = within_primary and within_secondary and beats_primary and beats_secondary
             if qualifies:
@@ -838,17 +908,18 @@ def select_candidate(results: Sequence[CandidateResult]) -> Selection:
                     "candidate": name,
                     "qlike_primary": qlike(name, primary),
                     "qlike_secondary": qlike(name, secondary),
-                    "relative_vs_best_primary": qlike(name, primary) / qlike(best_primary, primary)
-                    - 1.0,
-                    "relative_vs_best_secondary": qlike(name, secondary)
-                    / qlike(best_secondary, secondary)
-                    - 1.0,
-                    "relative_vs_rw_primary": (qlike(name, primary) / rw_primary - 1.0)
-                    if rw_primary
-                    else None,
-                    "relative_vs_rw_secondary": (qlike(name, secondary) / rw_secondary - 1.0)
-                    if rw_secondary
-                    else None,
+                    "relative_vs_best_primary": gap_primary,
+                    "relative_vs_best_secondary": gap_secondary,
+                    "relative_vs_rw_primary": (
+                        relative_qlike_gap(qlike(name, primary), rw_primary)
+                        if rw_primary is not None
+                        else None
+                    ),
+                    "relative_vs_rw_secondary": (
+                        relative_qlike_gap(qlike(name, secondary), rw_secondary)
+                        if rw_secondary is not None
+                        else None
+                    ),
                     "within_2pct_of_best": within_primary and within_secondary,
                     "beats_rw_by_more_than_2pct": beats_primary and beats_secondary,
                     "eligible": qualifies,
@@ -882,7 +953,26 @@ def select_candidate(results: Sequence[CandidateResult]) -> Selection:
         rule=SELECTION_RULE,
         constants=constants,
         arithmetic=tuple(arithmetic),
+        leaders=leaders,
     )
+
+
+def verdict_text(selection: Selection) -> str:
+    """Frase del veredicto, con los candidatos empatados si son inconclusos (A16).
+
+    Cuando los dos objetivos señalan a candidatos distintos, el texto **los nombra**
+    (uno por objetivo) en vez de decir solo que se contradicen: es la declaración
+    que pide A16 y la razón de que ``Selection.leaders`` exista.
+    """
+    if selection.verdict == Verdict.SELECTED.value:
+        return f"Candidato elegido: **`{selection.selected}`**."
+    if selection.verdict == Verdict.INCONCLUSIVE.value:
+        tied = ", ".join(
+            f"{target} → `{name}`" for target, name in selection.leaders.items() if name
+        )
+        detail = f" ({tied})" if tied else ""
+        return f"Los dos objetivos apuntan a candidatos distintos{detail}: **no se elige** ninguno."
+    return "Ningún candidato bate a la persistencia: el **fallback es `rw`**."
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1069,6 +1159,7 @@ def report_payload(study: VolatilityStudy) -> dict[str, object]:
             "metric": study.selection.metric,
             "rule": list(study.selection.rule),
             "constants": study.selection.constants,
+            "leaders": dict(study.selection.leaders),
             "arithmetic": list(study.selection.arithmetic),
         },
         "candidates": {
@@ -1150,15 +1241,7 @@ def _target_table(study: VolatilityStudy, target: Target, *, title: str) -> list
 def render_markdown(study: VolatilityStudy) -> str:
     """Informe legible, empezando por lo que se decide."""
     selection = study.selection
-    verdict_text = {
-        Verdict.SELECTED: f"Candidato elegido: **`{selection.selected}`**.",
-        Verdict.NO_BETTER_THAN_NAIVE: (
-            "Ningún candidato bate a la persistencia: el **fallback es `rw`**."
-        ),
-        Verdict.INCONCLUSIVE: (
-            "Los dos objetivos apuntan a candidatos distintos: **no se elige** ninguno."
-        ),
-    }[Verdict(selection.verdict)]
+    resolved = verdict_text(selection)
 
     lines = [
         "# Volatilidad realizada, VIX y primer *forecast* (tarea #7)",
@@ -1169,14 +1252,14 @@ def render_markdown(study: VolatilityStudy) -> str:
         f"- **Calculado:** {study.as_of.isoformat()}",
         "- **Métrica pre-registrada:** QLIKE en varianza (ranking por QLIKE medio); "
         "MSE del logaritmo como secundaria",
-        f"- **Veredicto:** `{selection.verdict}` — {verdict_text}",
+        f"- **Veredicto:** `{selection.verdict}` — {resolved}",
         "",
         "## Anclaje para #10 (barreras sobre números medidos)",
         "",
         f"- Mediana del *forecast* sigma de `{study.anchors.used_candidate}` en la ventana de "
         f"evaluación: **{study.anchors.median_forecast_sigma_bp:.1f} bp por sesión**.",
-        f"- Mediana de `|open→close|` de la muestra limpia: "
-        f"**{study.anchors.median_abs_open_close_bp:.1f} bp** "
+        f"- Mediana de `|open→close|` de la misma ventana de evaluación (muestra limpia menos "
+        f"las exclusiones de A3): **{study.anchors.median_abs_open_close_bp:.1f} bp** "
         f"({study.anchors.absolute_move_sessions} sesiones).",
         "",
         "| candidato | sigma mediana (bp/sesión) |",
@@ -1274,6 +1357,11 @@ def render_markdown(study: VolatilityStudy) -> str:
             "| candidato | QLIKE priori | QLIKE secu | vs mejor (pri) | vs mejor (sec) | "
             "vs `rw` (pri) | vs `rw` (sec) | ¿elegible? |",
             "|---|---|---|---|---|---|---|---|",
+            "",
+            "En las columnas relativas, **positivo = peor** y negativo = mejor: es la "
+            "diferencia relativa normalizada por el valor absoluto de la referencia, "
+            "necesaria porque el QLIKE es negativo.",
+            "",
         ]
     )
     for row in selection.arithmetic:
