@@ -306,9 +306,10 @@ Description: Comparar el Brier score y el Sharpe OOS **con el overlay activo y d
 
 # Fase 4 — Operación
 
-> **Objetivo de la fase:** que el sistema funcione solo cada día, con degradación grácil, diario completo y **garantía de cierre a las 22:00**.
+> **Objetivo de la fase:** que el sistema se pueda ejecutar a mano cada día, con degradación grácil, diario completo y **cierre a las 22:00 asumido por el usuario**.
 > **Depende de:** Fase 3 superada.
-> **Paralelizable:** 41, 42 y 43 entre sí, una vez hecha 39.
+> **Ejecución:** **manual y a demanda**. Sin scheduler, sin notificaciones y sin canales externos.
+> **Paralelizable:** 43 y 44 entre sí, una vez hecha 39.
 > **Puerta de salida (tarea 45):** paper trading de 2–3 meses sin divergencia superior a 2σ frente al backtest.
 
 ## 39. Capa de persistencia del diario
@@ -321,31 +322,19 @@ Description: Crear las tablas `journal.decisions`, `journal.agent_signals`, `jou
 
 Goal: Que el sistema nunca emita una recomendación con datos que no corresponden a la sesión actual.
 
-Description: Implementar la guardia de `tech_stack.md` §8.4 y las reglas duras 13–15 de `plan.md` §12: si el `as_of` no es la fecha de hoy no se emite recomendación accionable, y "no sé" se distingue de `NOTHING` en el registro y en la notificación. Implementar el modo observación de 5 sesiones tras una ausencia prolongada y el tratamiento de **festivos americanos y medias sesiones** (que en este instrumento devuelven `NOTHING` justificado, no "no sé"). Entregar el módulo con tests que simulen un PC apagado tres días, un festivo de EE. UU. y una media sesión, verificando que **no se emite ninguna recomendación accionable cuando no corresponde**.
+Description: Implementar la guardia de `tech_stack.md` §8.4 y las reglas duras 13–15 de `plan.md` §12: si el `as_of` no es la fecha de hoy no se emite recomendación accionable, y "no sé" se distingue de `NOTHING` en el registro y en el informe. Implementar el modo observación de 5 sesiones tras una ausencia prolongada y el tratamiento de **festivos americanos y medias sesiones** (que en este instrumento devuelven `NOTHING` justificado, no "no sé"). Verificar además que la conversión a `Europe/Madrid` es correcta en las **dos ventanas DST** (solo presentación: la referencia interna es siempre `America/New_York`). Entregar el módulo con tests que simulen un PC apagado tres días, un festivo de EE. UU., una media sesión y ambas ventanas DST, verificando que **no se emite ninguna recomendación accionable cuando no corresponde**.
 
-## 41. Scheduler con systemd anclado a Nueva York
+## 43. Observabilidad
 
-Goal: Que el pipeline se ejecute solo, siempre en el mismo punto relativo a la sesión americana y a su DST.
+Goal: Que cualquier fallo quede registrado y sea visible al ejecutar el pipeline a mano.
 
-Description: Crear las unidades `systemd` de usuario (`.service` y `.timer`) con `OnCalendar`, `Timezone=America/New_York`, `Persistent=true` y `flock`, según `tech_stack.md` §4.11 y §8.1, más el timer secundario de registro de cierre a las 16:20 ET. Verificar que cada disparo se convierte correctamente a `Europe/Madrid` en ambas ventanas DST y que una ejecución recuperada por `Persistent=true` queda bloqueada por la guardia de sesión si llega tarde.
-
-## 42. Notificaciones, alarma de cierre y heartbeat
-
-Goal: Recibir el informe antes de la apertura y, sobre todo, **no olvidar cerrar a las 16:00 ET**.
-
-Description: Implementar el envío del informe a Telegram con `httpx` contra la Bot API, más las alertas de fallo y de recomendación obsoleta. La alarma de cierre debe programarse a **15:45 `America/New_York`** y convertirse a Madrid solo para presentar el mensaje. Registrar el incumplimiento si la posición sigue abierta a las 16:00 ET (`plan.md` §12, regla 16). Entregar el módulo con pruebas de las dos ventanas DST.
-
-## 43. Observabilidad y heartbeat
-
-Goal: Que ningún fallo se manifieste en forma de silencio.
-
-Description: Implementar el `run_log` por ejecución en JSONL con etapas, duraciones y errores, más el `manifest.json` con hashes y versiones (`tech_stack.md` §4.13). Implementar la alerta de *heartbeat*: si a las **09:40 ET** no ha llegado el informe (y si a las **16:20 ET** no se ha registrado el cierre), se notifica. Entregar el módulo de logging estructurado y un test que verifique que un fallo en cualquier etapa produce alerta y no un silencio.
+Description: Implementar el `run_log` por ejecución en JSONL con etapas, duraciones y errores, más el `manifest.json` con hashes y versiones (`tech_stack.md` §4.13). **Sin alertas ni heartbeat**: no hay scheduler ni ejecución desatendida, así que un fallo se ve en la terminal al terminar y queda en el `run_log` de esa ejecución. Entregar el módulo de logging estructurado y un test que verifique que un fallo en cualquier etapa queda registrado con su traza y no se pierde.
 
 ## 44. Retención y job de tamaños
 
 Goal: Evitar que el disco crezca sin control y sin que nadie lo note.
 
-Description: Implementar el job mensual que mide el tamaño de cada directorio y **avisa si supera su presupuesto**, más el job trimestral que aplica la política de retención de `tech_stack.md` §12.7 y §12.9. Incluir la purga de la caché del LLM con más de 12–18 meses y de los binarios de modelos no productivos. Entregar los dos trabajos programados y un informe de ejemplo con los tamaños actuales frente a los presupuestados.
+Description: Implementar el comando mensual que mide el tamaño de cada directorio y **registra un aviso si supera su presupuesto**, más el comando trimestral que aplica la política de retención de `tech_stack.md` §12.7 y §12.9. Incluir la purga de la caché del LLM con más de 12–18 meses y de los binarios de modelos no productivos. Los dos se invocan **a mano**: no hay ningún job programado ni servicio que los dispare. Entregar ambos comandos y un informe de ejemplo con los tamaños actuales frente a los presupuestados.
 
 ## 45. Paper trading prolongado
 
@@ -389,9 +378,11 @@ Description: Evaluar con datos qué agentes aportan valor marginal y cuáles no,
 | 1 — Arnés de backtest | 10–18 | 9 | Motor de evaluación fiable |
 | 2 — Núcleo cuantitativo | 19–29 | 11 | Modelo calibrado y gate |
 | 3 — Capa LLM | 30–38 | 9 | Overlay con poder acotado |
-| 4 — Operación | 39–45 | 7 | Automatización, diario y **mecanismo de cierre** |
+| 4 — Operación | 39–45 | 5 | Diario, guardia de sesión y registro |
 | 5 — Producción | 46–48 | 3 | Auditoría y mantenimiento |
-| **Total** | **48** | **48** | |
+| **Total** | **46** | **46** | |
+
+> 🚫 **Las tareas 41 y 42 se retiraron el 2026-09-18** (scheduler `systemd` y notificaciones / alarma de cierre), y la 43 perdió el *heartbeat*. La ejecución es **manual y a demanda**, sin automatización y sin canales externos. **Los números 41 y 42 se dejan vacíos a propósito:** `setup_github.py` empareja las issues por título exacto (`T{n} — {título}`) y sus listas `CRITICAL_TASKS` y `GATE_TASKS` están fijadas por número, así que renumerar crearía issues duplicadas y apuntaría las etiquetas a la tarea equivocada. `setup_github.py` avisará de que faltan los números 41 y 42: **es esperado**. Ver el registro de cambios.
 
 **Las cuatro tareas que más peso tienen en el resultado del proyecto, y no son las que parecen:**
 
@@ -402,7 +393,7 @@ Description: Evaluar con datos qué agentes aportan valor marginal y cuáles no,
 
 > ⚠️ **Advertencia que introduce la revisión de costes:** con $p^* \approx 50{,}2\%$, **ninguna tarea de este backlog va a producir una confirmación de que el sistema funciona** en un plazo razonable (§4.5 y §4.6 del `plan.md`). El valor verificable del proyecto está en las tareas **1–18** (proceso, motor, integridad) y en la **6** (la medición del drift), no en ver un P&L verde. Si esperas lo segundo, este backlog te va a decepcionar.
 
-**La tarea más frágil en producción:** la **42** (alarma de cierre). El requisito de intradía puro depende de un acto manual a las 22:00, y **el coste de un descuido está cuantificado**: 0,0182 % de tenencia en un largo —más de cuatro veces el diferencial— más un *gap* de 17,5 horas.
+**Lo más frágil al operar:** el **cierre manual de la posición a las 16:00 ET**, sin ninguna tarea de software que lo respalde. El requisito de intradía puro depende de un acto manual a las 22:00, y **el coste de un descuido está cuantificado**: 0,0182 % de tenencia en un largo —más de cuatro veces el diferencial— más un *gap* de 17,5 horas. Al ser un sistema de ejecución **manual y a demanda**, esta fragilidad es una **decisión de diseño asumida**, no un defecto pendiente de arreglar.
 
 **Decisiones abiertas que hay que cerrar antes de ciertas tareas** (`tech_stack.md` §11 bis): el bróker y el umbral de coste (antes de la 9), el horizonte y precio de entrada (antes de la 10), el *holdout* intocable (antes de la 24), el proveedor de LLM definitivo y la contratación de histórico de noticias (antes de la 31 y la 38).
 
@@ -415,3 +406,4 @@ Description: Evaluar con datos qué agentes aportan valor marginal y cuáles no,
 | 2026-09-16 | 1.0 | Versión inicial del backlog: 48 tareas en 6 fases | Derivado de `plan.md` v1.1 y `tech_stack.md` v1.4 |
 | 2026-09-16 | **2.0** | ⚠️ **REPLANTEO POR CAMBIO DE INSTRUMENTO A CFD DEL S&P 500.** Fase 0 reescrita: tareas 3–8 con los datos, el calendario y las fuentes americanas; **la tarea 6 pasa a ser la descomposición del drift** (antes solo tasa base) y se convierte en la medición decisiva; la tarea 8 incorpora la confirmación de la ventana de cotización y la divisa de liquidación. La puerta de salida de la Fase 0 pasa a tener **dos condiciones**. Fase 2: tareas 21, 22 y 27 adaptadas a los drivers y reglas del nuevo instrumento. Fase 3: tarea 34 incorpora FOMC, roll del ES, medias sesiones y **resultados de mega-caps**. Fase 4: tarea 40 con festivos US y medias sesiones, tarea 41 anclada a `America/New_York`, tarea 42 ampliada con la **alarma de cierre**. Resumen final con cuatro tareas críticas en lugar de tres | **Decisión del usuario: operar el CFD del S&P 500**, con decisión a las 15:00, entrada en la apertura US, cierre a las 22:00 y sin overnight |
 | 2026-09-16 | **2.1** | ⭐ **COSTES REALES INCORPORADOS.** **Tarea 8 reformulada**: pasa de "confirmar la ventana y medir el coste" a **verificar los costes declarados**, priorizando la **hora exacta de corte de la financiación** y la **medición del *slippage***, que pasa a ser el coste dominante. **Tarea 9**: la antigua puerta "$p^* > 60\%$ ⇒ parar" queda **derogada** y se sustituye por *slippage* vs $R$. **Tarea 11**: el motor de costes se especifica con las cifras reales y un test que reproduzca los totales declarados. **Tarea 6** y resumen final matizados con la advertencia de que el sistema **no será validable por resultado** en plazo razonable | **Datos de coste aportados por el usuario.** Con un diferencial de 0,42 pb el listón económico desaparece ($p^* \approx 50{,}2\%$) y toda la dificultad se traslada al terreno estadístico (`plan.md` §4.6) |
+| 2026-09-18 | **2.2** | 🚫 **RETIRADA DE LA AUTOMATIZACIÓN Y DE LAS NOTIFICACIONES.** Se retiran la **tarea 41** (scheduler `systemd` anclado a `America/New_York`, con `OnCalendar`, `Persistent=true` y `flock`) y la **tarea 42** (envío del informe a Telegram, alertas de fallo y alarma de cierre de las 15:45 ET). La **tarea 43** pierde el *heartbeat* y pasa a llamarse **Observabilidad**: conserva el `run_log` en JSONL y el `manifest.json`, que no son notificaciones. La verificación de las **dos ventanas DST** se traslada a la tarea 40. La **tarea 44** pasa de "job programado" a **comando invocado a mano**. Cabecera de la Fase 4 reescrita y tabla resumen recalculada (**48 → 46**, Fase 4 **7 → 5**). **Los números 41 y 42 quedan vacíos a propósito y no se renumeran**, porque `setup_github.py` empareja por título exacto y `CRITICAL_TASKS`/`GATE_TASKS` están fijadas por número | **Decisión del usuario (2026-09-18): ejecución manual a demanda, sin Telegram y sin automatización.** La disponibilidad a las 16:00 ET la garantiza el usuario, no el software, así que no hay nada que notificar a distancia ni ningún disparo que programar |

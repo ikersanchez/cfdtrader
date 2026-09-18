@@ -286,7 +286,9 @@ class MarketCalendar:
 
         En esas ventanas el mercado abre a las **14:30** de Madrid en vez de a las
         15:30. Cualquier hora fija escrita a mano queda mal esos días, y por eso
-        el proyecto ancla el scheduler a ``America/New_York``.
+        el proyecto trabaja siempre en ``America/New_York`` y usa Madrid solo
+        para presentar. No hay scheduler: el anclaje lo garantiza este módulo,
+        no el sistema operativo (``_docs/tech_stack.md`` §4.11).
         """
         us_spring, us_fall = self.us_dst_transitions(year)
         eu_spring, eu_fall = self.eu_dst_transitions(year)

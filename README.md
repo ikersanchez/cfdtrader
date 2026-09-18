@@ -16,7 +16,7 @@ Todos los documentos viven en `_docs/`.
 |---|---|
 | [`plan.md`](_docs/plan.md) | **Fuente de verdad funcional.** Qué se construye: definición del problema, arquitectura, agentes, riesgo, protocolo de evaluación, roadmap. |
 | [`tech_stack.md`](_docs/tech_stack.md) | **Especificación técnica.** Con qué se construye: stack por capa, licencias, control de coste del LLM, operación en local y modelo de persistencia. Especificación **cerrada** (v2.0). |
-| [`tasks.md`](_docs/tasks.md) | **Backlog.** 48 tareas de una sesión cada una, agrupadas en 6 fases, con puertas de salida. |
+| [`tasks.md`](_docs/tasks.md) | **Backlog.** 46 tareas de una sesión cada una, agrupadas en 6 fases, con puertas de salida. |
 
 ### Cómo se relacionan
 

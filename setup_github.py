@@ -3,8 +3,8 @@
 Bootstrap de GitHub para el proyecto cfdtrader.
 
 Crea el repositorio remoto, los labels, los milestones por fase y **una issue
-por cada tarea de `tasks.md`**. Es idempotente: puede ejecutarse varias veces
-sin duplicar repositorio, labels, milestones ni issues.
+por cada tarea de `_docs/tasks.md`**. Es idempotente: puede ejecutarse varias
+veces sin duplicar repositorio, labels, milestones ni issues.
 
 Requisito previo
 ----------------
@@ -16,16 +16,26 @@ Uso
     python3 setup_github.py --dry-run       # muestra lo que haría, sin tocar nada
     python3 setup_github.py --repo-only     # solo git init + repo remoto + push
     python3 setup_github.py --issues-only   # solo labels, milestones e issues
+    python3 setup_github.py --show-body 43  # imprime el cuerpo de la tarea 43 y sale
 
 Fuente de verdad
 ----------------
-El script **lee `tasks.md`** en cada ejecución, así que las issues siempre
-reflejan el estado actual del backlog. `tasks.md` sigue siendo la fuente de
+El script **lee `_docs/tasks.md`** en cada ejecución, así que las issues siempre
+reflejan el estado actual del backlog. `_docs/tasks.md` sigue siendo la fuente de
 verdad: si se edita una tarea aquí, hay que volver a ejecutar el script (las
 issues ya creadas no se actualizan automáticamente; se avisa de los cambios).
 
-Formato que espera de `tasks.md`
---------------------------------
+Numeración
+----------
+La numeración **no tiene por qué ser correlativa**: al retirar una tarea se deja
+el hueco y **no se renumera**, porque el emparejamiento con las issues ya creadas
+se hace por título exacto (`T{n} — {título}`) y las listas `CRITICAL_TASKS` /
+`GATE_TASKS` están fijadas por número. Renumerar crearía issues duplicadas y
+movería las etiquetas a la tarea equivocada. El script avisa de los números que
+faltan y continúa.
+
+Formato que espera de `_docs/tasks.md`
+--------------------------------------
     # Fase 0 — Medir la realidad
     ## 1. Título de la tarea
     Goal: una línea
@@ -53,7 +63,7 @@ REPO_DESCRIPTION = (
     "medición, backtest con purga y embargo, gate determinista. Diseño, sin código todavía."
 )
 
-TASKS_FILE = Path(__file__).resolve().parent / "tasks.md"
+TASKS_FILE = Path(__file__).resolve().parent / "_docs" / "tasks.md"
 IGNORED_DIRS = {".git"}
 
 # Marcas transversales que no se deducen del parseo (cuidado si se renumera)
@@ -93,7 +103,7 @@ class Task:
 
 
 def parse_tasks(path: Path) -> list[Task]:
-    """Extrae las tareas y su fase desde `tasks.md`."""
+    """Extrae las tareas y su fase desde `_docs/tasks.md`."""
     if not path.exists():
         sys.exit(f"ERROR: no encuentro {path.resolve()}")
 
@@ -390,20 +400,20 @@ def build_body(task: Task, slug: str) -> str:
         "| | |",
         "|---|---|",
         f"| **Fase** | Fase {task.phase_number} — {task.phase_title} |",
-        f"| **Origen** | `tasks.md` · tarea `#{task.number}` |",
-        f"| **Documentos** | [`plan.md`](https://github.com/{slug}/blob/main/plan.md) · "
-        f"[`tech_stack.md`](https://github.com/{slug}/blob/main/tech_stack.md) |",
+        f"| **Origen** | `_docs/tasks.md` · tarea `#{task.number}` |",
+        f"| **Documentos** | [`plan.md`](https://github.com/{slug}/blob/main/_docs/plan.md) · "
+        f"[`tech_stack.md`](https://github.com/{slug}/blob/main/_docs/tech_stack.md) |",
     ]
     if task.number in GATE_TASKS:
         parts.append(
-            f"| **Puerta de salida** | Sí. Ver la nota de fase en `tasks.md`. |"
+            f"| **Puerta de salida** | Sí. Ver la nota de fase en `_docs/tasks.md`. |"
         )
     parts += [
         "",
         "> Tarea de una sola sesión. **No se cierra sin un artefacto verificable** "
         "y sin respetar su regla de aceptación.",
         "",
-        "<sub>Generada desde `tasks.md`, que sigue siendo la fuente de verdad.</sub>",
+        "<sub>Generada desde `_docs/tasks.md`, que sigue siendo la fuente de verdad.</sub>",
     ]
     return "\n".join(p for p in parts if p is not None)
 
@@ -456,7 +466,7 @@ def create_issues(slug: str, tasks: list[Task], milestones: dict[str, int], dry:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Crea el repositorio de GitHub y una issue por tarea de tasks.md"
+        description="Crea el repositorio de GitHub y una issue por tarea de _docs/tasks.md"
     )
     parser.add_argument("--dry-run", action="store_true",
                         help="muestra lo que haría sin tocar nada")
@@ -490,8 +500,8 @@ def main() -> int:
 
     tasks = parse_tasks(TASKS_FILE)
     phases = sorted({t.phase_number for t in tasks if t.phase_number is not None})
-    print(f"\ntasks.md: {len(tasks)} tareas en {len(phases)} fases "
-          f"(tareas {tasks[0].number}–{tasks[-1].number})")
+    print(f"\n_docs/tasks.md: {len(tasks)} tareas en {len(phases)} fases "
+          f"(numeración {tasks[0].number}–{tasks[-1].number})")
 
     if args.dry_run:
         print("\n*** MODO --dry-run: no se modificará nada ***")

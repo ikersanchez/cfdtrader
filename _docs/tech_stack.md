@@ -2,10 +2,10 @@
 
 | Campo | Valor |
 |---|---|
-| **Versión** | **2.2** · instrumento S&P 500 |
-| **Fecha** | 2026-09-17 |
+| **Versión** | **2.3** · instrumento S&P 500 |
+| **Fecha** | 2026-09-18 |
 | **Estado** | ✅ **Especificación cerrada.** Cambios posteriores solo mediante entrada en el registro y motivo medido |
-| **Documento padre** | `plan.md` v2.2 (fuente de verdad funcional) |
+| **Documento padre** | `plan.md` v2.3 (fuente de verdad funcional) |
 | **Ámbito** | Stack técnico del sistema descrito en `plan.md` |
 | **Instrumento** | **SPX500:CFD**, horario definido en `America/New_York` y presentado en `Europe/Madrid` |
 | **Restricciones rectoras** | Ejecución en **PC propio** · prioridad a **software libre y open source** · coste marginal objetivo **≈0 €** |
@@ -38,7 +38,7 @@
 | 4 | **Cero infraestructura** | Sin servidores, sin colas, sin contenedores, sin orquestadores distribuidos |
 | 5 | **Reproducibilidad por encima de comodidad** | Todo determinista, versionado y reconstruible desde los datos crudos |
 | 6 | **Minimizar dependencias** | Cada librería es un pasivo de mantenimiento a 5 años. Si son 40 líneas propias, escríbelas |
-| 7 | **El núcleo no depende de la periferia** | El backtest no importa LangGraph, ni Telegram, ni el cliente LLM. **El LLM nunca está en el camino crítico del backtest** |
+| 7 | **El núcleo no depende de la periferia** | El backtest no importa LangGraph, ni el cliente LLM, ni la capa de informe. **El LLM nunca está en el camino crítico del backtest** |
 | 8 | **Degradación grácil** | Si falla una API —**incluida la del LLM**— el pipeline continúa sin overlay o devuelve `NOTHING`. Nunca se bloquea por un tercero |
 | 9 | **Toda dependencia externa, abstraída** | El proveedor de LLM va detrás de una interfaz propia: cambiar de OpenAI a DeepSeek (o a un modelo local) no debe tocar el resto del sistema |
 | 10 | **Sobrevivir al abandono de librerías** | Formatos abiertos y estables (Parquet, JSON, CSV, SQL). Nunca un formato propietario como almacén primario |
@@ -109,16 +109,17 @@ Sigue cabiendo holgadamente en los 20 GB libres recomendados.
 
 | Opción | Valoración |
 |---|---|
-| **Linux (Ubuntu 24.04 LTS o Debian 12)** | ✅ **Recomendado.** `systemd` para scheduling, `journald` para logs, todo el tooling nativo |
-| macOS | ✅ Válido. Scheduling con `launchd` en lugar de `systemd` |
-| Windows | ⚠️ Funciona, pero el scheduling con Task Scheduler es incómodo y `systemd` no existe. Si es tu caso, considera **WSL2** |
+| **Linux (Ubuntu 24.04 LTS o Debian 12)** | ✅ **Recomendado.** Todo el tooling nativo y ninguna dependencia de plataforma |
+| macOS | ✅ Válido. Sin diferencias relevantes: no hay scheduler ni servicio del sistema que migrar |
+| Windows | ⚠️ Funciona, pero el tooling es incómodo. Si es tu caso, considera **WSL2** |
 
-Como el entorno actual es Linux, **especificamos todo asumiendo Linux + systemd**.
+Como el entorno actual es Linux, **especificamos todo asumiendo Linux**.
 
 ### 2.3 Modo de ejecución
 
-- **Ejecución batch diaria**, no servicio permanente. El pipeline arranca a las **08:00 ET**, entrega el informe a las **09:00 ET** (30 minutos antes de la subasta de apertura) y el proceso de decisión muere ahí. El registro de cierre se ejecuta a las **16:15 ET** en una invocación aparte y más ligera; Madrid solo se usa para presentar horarios.
-- **Nada corriendo 24/7.** Sin daemons, sin servidores web, sin workers a la escucha.
+- **Ejecución manual y a demanda**, no servicio permanente. **No hay scheduler, ni timer, ni ningún disparo automático**: lanzas el pipeline a mano cuando quieres, normalmente dentro de la ventana que describe `plan.md` §13 (ingesta hacia las **08:00 ET**, informe hacia las **09:00 ET**). El registro de cierre es una invocación aparte y más ligera; Madrid solo se usa para presentar horarios.
+- **Sin notificaciones ni canales externos.** El sistema **no envía nada a ningún sitio**: ni Telegram, ni correo, ni *push*, ni webhooks. El informe se lee en la terminal o en el fichero. No hay ningún secreto de notificación que custodiar.
+- **Nada corriendo 24/7.** Sin daemons, sin servidores web, sin workers a la escucha, sin timers. Si el PC está apagado, simplemente no se ejecuta nada.
 - **Modo offline parcial:** todo el cálculo de features, el backtest, el entrenamiento y el gate de decisión funcionan **sin conexión**. Solo requieren red la ingesta de datos y la **capa LLM (API)**.
 - **Consecuencia de diseño:** el sistema debe poder ejecutarse con la capa LLM desactivada y producir una recomendación válida. El overlay de noticias **mejora** la decisión; no la habilita. Esto es lo que permite retrotestear el núcleo sin el LLM (`plan.md` §6.2).
 
@@ -130,7 +131,7 @@ Como el entorno actual es Linux, **especificamos todo asumiendo Linux + systemd*
 
 | Prioridad | Licencias | Uso |
 |---|---|---|
-| 1 | **MIT, BSD-2/3, Apache-2.0, ISC** | Preferidas. Sin obligaciones de copyleft. Cubre **todo el stack salvo las dos excepciones declaradas**: el servicio LLM y `systemd` (LGPL-2.1, parte del sistema operativo y no distribuido con el proyecto) |
+| 1 | **MIT, BSD-2/3, Apache-2.0, ISC** | Preferidas. Sin obligaciones de copyleft. Cubre **todo el stack salvo la única excepción declarada**: el servicio LLM por API |
 | 2 | MPL-2.0, LGPL-3.0 | Aceptables. LGPL obliga a permitir sustituir la librería si distribuyes binarios: **solo importa si distribuyes**, no en uso personal |
 | 3 | GPL-3.0, AGPL-3.0 | Evitar en el núcleo. AGPL es problemática si algún día expones el sistema como servicio |
 | — | Propietarias / *source-available* | Solo si no hay alternativa OSS razonable, y siempre fuera del camino crítico |
@@ -180,7 +181,7 @@ Al usar un LLM por API, el software de inferencia deja de ser tu problema y apar
 2. **El núcleo de backtest solo depende de `numpy`, `polars` y `scikit-learn`.** Si algo se rompe en el ecosistema en 2030, el backtest sigue corriendo.
 3. **Adaptadores para todo lo frágil.** `yfinance` detrás de una interfaz propia con validación y *fallback* a Stooq.
 4. **Un cliente HTTP, un cliente LLM, un logger.** No dos librerías para lo mismo.
-5. **Sin dependencias de interfaz en el núcleo.** `features/` y `backtest/` no importan LangGraph, ni el cliente LLM, ni Telegram.
+5. **Sin dependencias de interfaz en el núcleo.** `features/` y `backtest/` no importan LangGraph, ni el cliente LLM, ni la capa de informe.
 6. **El cliente LLM va detrás de una interfaz propia.** Un protocolo interno (p. ej. `LLMClient`) con una implementación por proveedor. Cambiar de OpenAI a DeepSeek o a un modelo local no debe tocar `agents/` ni `orchestration/`.
 7. **Revisar el árbol transitivo** antes de añadir algo pesado. `langgraph` arrastra bastante: queda confinado a `orchestration/`.
 8. **`pip-audit` o `uv pip audit`** en el CI para vulnerabilidades conocidas.
@@ -223,7 +224,6 @@ Al usar un LLM por API, el software de inferencia deja de ser tu problema y apar
 | `LLM_BASE_URL` | *Endpoint* del proveedor (los dos son compatibles con el SDK de OpenAI) | Sí |
 | `LLM_DAILY_BUDGET_EUR` | Tope duro de gasto diario (§6.3) | Sí |
 | `FRED_API_KEY` | FRED, tier gratuito | Opcional |
-| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | Bot de Telegram | Fase 4 |
 | `MARKETAUX_API_KEY` / `FINNHUB_API_KEY` | Solo si GDELT + RSS no bastan | Opcional |
 
 **Reglas:**
@@ -408,31 +408,30 @@ Esta separación es la palanca de coste más importante: no tiene sentido pagar 
 
 **Nota de arquitectura:** LangGraph orquesta el **pipeline** (fetch → nodos expertos en paralelo → fan-in → síntesis). El **gate de decisión** (`plan.md` §7.3, paso 4) es una **función pura de Python sin dependencias de orquestación**. Si decidir requiriese LangGraph, el backtest estaría muerto.
 
-### 4.11 Scheduling y ejecución local
+### 4.11 Ejecución local
 
 | Propósito | Elección | Licencia | Alternativa | Nota |
 |---|---|---|---|---|
-| **Scheduler** | **systemd timer** | LGPL-2.1 (parte del sistema) | cron, APScheduler (MIT) | ⭐ **`OnCalendar` con `Timezone=America/New_York`.** Anclar a `Europe/Madrid` **sería un error**: la sesión se desplaza una hora dos veces al año porque EE. UU. y Europa cambian de hora en fechas distintas (`plan.md` §8.3) |
-| Entrada del pipeline | Módulo Python invocado con `uv run` | — | script shell envoltorio | — |
-| Prevención de solapamiento | **`flock`** sobre un fichero de *lock* | — | — | ⚠️ `Type=oneshot` **no** impide por sí solo el solapamiento: dos disparos del mismo timer pueden encolarse. El mecanismo real es `flock` (o `ExecStart` envuelto en `flock -n`) |
-| Logs del scheduler | **journald** | LGPL-2.1 | fichero con loguru | `systemctl status`, `journalctl -u` |
-| Ejecución manual | `uv run python -m cfdtrader.delivery.run_daily` | — | — | Para pruebas y para relanzar a mano |
+| **Disparador** | **Tú, a mano** | — | — | 🚫 **No hay scheduler**: sin `systemd timer`, sin cron, sin APScheduler. El pipeline se ejecuta cuando tú lo pides |
+| Entrada del pipeline | `uv run python -m cfdtrader.delivery.run_daily` | — | script shell envoltorio | Un solo comando, sin argumentos obligatorios |
+| Prevención de solapamiento | **Ninguna** | — | `flock` | Sin disparos automáticos no hay riesgo de solapamiento. Si algún día se automatiza, `flock` vuelve a ser obligatorio |
+| Logs | **`run_log` en JSONL** + salida de la terminal | — | journald | El `run_log` por ejecución (§4.13) sustituye a `journalctl`, que ya no aplica |
 
-**Por qué `systemd` y no `APScheduler`:** un timer de systemd sobrevive a reinicios del PC, arranca el proceso aunque tú no hayas iniciado sesión, gestiona la zona horaria y el DST, y deja los logs centralizados. `APScheduler` requiere tener un proceso Python permanentemente vivo: un punto de fallo más para un job que corre 80 minutos al día.
+**Por qué no hay scheduler:** el modo de operación fijado es **ejecución manual y a demanda con supervisión humana**. Un timer solo aporta valor en un flujo desatendido, y este no lo es: tú estás delante cuando el pipeline corre y cuando se cierra la posición. Eliminarlo quita de golpe un servicio del sistema, un fichero de *lock*, la recuperación de ejecuciones perdidas por `Persistent=true` y toda la casuística de horarios que no se disparan (PC apagado, suspensión, *linger*). **Si algún día se automatiza, esta sección es la que hay que recuperar.**
 
-### 4.12 Notificaciones
+> ⚠️ **Lo que NO se retira es el anclaje a `America/New_York`.** Aunque no haya timer, sigue siendo obligatorio calcular en ET/UTC y presentar en Madrid: la sesión se desplaza una hora dos veces al año porque EE. UU. y Europa cambian de hora en fechas distintas (`plan.md` §8.3). La conversión **deja de ser responsabilidad del sistema operativo y pasa a serlo del código**.
+
+### 4.12 Informe y salida
 
 | Propósito | Elección | Licencia | Alternativa | Nota |
 |---|---|---|---|---|
-| **Canal principal** | **Telegram** (Bot API vía `httpx`) | — | — | Enviar un mensaje son ~5 líneas. Sin dependencia extra |
-| Multi-canal | **Apprise** | BSD-2 | — | Una librería, muchos canales (Telegram, email, ntfy, Slack) |
-| Alternativa ligera | **ntfy** (autohospedado o público) | Apache-2.0 / GPL-2.0 | — | Notificaciones *push* sin cuenta de Telegram |
-| Correo | **smtplib** (stdlib) | PSF | — | Sin dependencias |
+| **Informe en consola** | **Rich** | MIT | salida plana | La ejecución es manual y a demanda: tú lanzas el pipeline y lees el resultado |
 | Plantillas del informe | **Jinja2** | BSD-3 | f-strings | Markdown/HTML |
-| Informe en consola | **Rich** | MIT | — | Si se ejecuta a mano |
-| ⚠️ Evitar | `python-telegram-bot` | **LGPL-3.0** | — | Sobredimensionado si solo envías, y añade una licencia copyleft al stack sin necesidad |
+| **Salida persistida** | **Markdown + JSON** en `data/derived/reports/` | — | — | Es el registro del informe. **No se envía a ningún sitio** |
 
-**Recomendación:** empezar con `httpx` contra la Bot API de Telegram (cero dependencias, licencia limpia) y migrar a **Apprise** solo si algún día quieres un segundo canal.
+**Sin notificaciones ni canales externos.** El sistema **no envía nada**: ni Telegram, ni correo, ni *push*, ni webhooks, ni ningún servicio de terceros. El informe se lee en la terminal o en el fichero Markdown de `data/derived/reports/`. Coherente con el principio 1 (todo vive en tu máquina), elimina una dependencia externa, un conjunto de secretos y una superficie de fallo.
+
+> 🚫 **Descartadas (2026-09-18): Telegram (Bot API vía `httpx`), `ntfy`, `Apprise`, `smtplib` y `python-telegram-bot`.** Se descartaron al fijar el modo de operación **manual y a demanda**: no hay nada que notificar a distancia porque el usuario está delante cuando el sistema se ejecuta. Se retiraron también la alarma de cierre de las 15:45 ET y el *heartbeat*: la obligación de cerrar a las 16:00 ET sigue vigente (`plan.md` §12, regla 16), pero **la garantiza el usuario, no el software**.
 
 ### 4.13 Observabilidad
 
@@ -441,10 +440,9 @@ Esta separación es la palanca de coste más importante: no tiene sentido pagar 
 | Logging | **loguru** | MIT | structlog (MIT / Apache-2.0) | loguru por simplicidad; structlog si quieres JSON estructurado consultable |
 | Trazas del pipeline | **JSONL** por ejecución + `manifest.json` | — | SQLite | Con hashes, versiones y duraciones |
 | Calidad de datos | **pandera** + checks propios | MIT | — | Ver `plan.md` §8.4 |
-| Alertas de fallo | Mensaje a Telegram si el pipeline falla | — | — | El **silencio es el peor modo de fallo** |
-| *Heartbeat* | Alerta si a las 09:05 ET no ha llegado el informe | — | — | Detecta el fallo silencioso |
-| Errores no capturados | **Sentry** (tier gratuito) | *freemium* | fichero + alerta | Opcional. Prioridad a la alerta propia, que es gratuita y suficiente |
-| Monitorización de recursos | `psutil` (BSD-3) | BSD-3 | — | Opcional |
+| Fallos del pipeline | Traza en el `run_log` de la ejecución + código de salida ≠ 0 | — | — | El **silencio es el peor modo de fallo**: con ejecución manual, un fallo se ve al terminar y nunca se pierde el rastro |
+| Errores no capturados | **Nada**: `run_log` + `manifest.json` | — | — | 🚫 **Sentry descartado:** mandar trazas a un tercero contradice la ejecución 100 % local y el principio 1. No hay capa de alertas que mantener |
+| Monitorización de recursos | `psutil` (BSD-3) | BSD-3 | — | Opcional. Se consulta a mano, no alerta |
 
 ### 4.14 Testing y CI
 
@@ -509,9 +507,8 @@ Esta separación es la palanca de coste más importante: no tiene sentido pagar 
 | Ingesta | feedparser · gdeltdoc · GDELT | 3 |
 | LLM | **SDK `openai`** (con `base_url` DeepSeek u OpenAI) · `LLMClient` propio · diskcache · tiktoken · **topes de gasto** | 3 |
 | Orquestación | LangGraph · Jinja2 | 3 |
-| Scheduling | systemd timer | 4 |
-| Notificaciones | httpx (Telegram) o Apprise · Rich | 4 |
-| Observabilidad | JSONL + manifest · alertas de fallo | 4 |
+| Informe | Rich · Jinja2 | 4 |
+| Observabilidad | JSONL + manifest | 4 |
 | Análisis | vectorbt (OSS) · skfolio | 5 |
 | Visualización | Streamlit · plotly | 5 |
 
@@ -529,8 +526,8 @@ Esta separación es la palanca de coste más importante: no tiene sentido pagar 
 | Datos diarios de mercado | **0 €** | yfinance, Stooq |
 | Macro y tipos | **0 €** | FRED (fuente primaria), ECB SDW y Eurostat (contexto) |
 | Noticias | **0 €** | GDELT + RSS |
-| Scheduling | **0 €** | systemd |
-| Notificaciones | **0 €** | Telegram Bot API o ntfy |
+| Ejecución | **0 €** | Manual desde la terminal: sin scheduler ni servicios |
+| Informe | **0 €** | Rich en consola + Markdown en `data/derived/reports/` |
 | CI | **0 €** | GitHub Actions tier gratuito, o *hooks* locales |
 | Almacenamiento | **0 €** | Disco del PC |
 | **LLM por API** | **céntimos – pocos €/mes** | ⚠️ **Único coste recurrente.** Acotado, medido y con tope duro (§6.3) |
@@ -595,11 +592,11 @@ El LLM es el **único componente con coste marginal por ejecución**. Por eso ll
 | Tokens de entrada por ejecución | Configurable (`LLM_DAILY_BUDGET_EUR`) | Abortar el overlay y continuar sin él |
 | Llamadas por ejecución | Configurable | Idem |
 | **Gasto acumulado diario** | Tope en €  | Idem |
-| **Gasto acumulado mensual** | Tope en € | Idem + **alerta por Telegram** |
+| **Gasto acumulado mensual** | Tope en € | Idem + **aviso registrado** en el informe y en el `run_log` |
 | Tiempo máximo de la capa LLM | Configurable (p. ej. 5 min) | Abortar y continuar sin overlay |
-| Fallos consecutivos de la API | 3 | Desactivar overlay ese día y alertar |
+| Fallos consecutivos de la API | 3 | Desactivar overlay ese día y registrarlo |
 
-> **Regla dura:** superar cualquier tope **nunca** bloquea el pipeline. El sistema produce una recomendación sin overlay, lo registra en el `decision log` (`llm_overlay: "disabled_budget"`) y te avisa. La decisión del día no depende de que la API esté disponible ni de que te quede presupuesto.
+> **Regla dura:** superar cualquier tope **nunca** bloquea el pipeline. El sistema produce una recomendación sin overlay, lo registra en el `decision log` (`llm_overlay: "disabled_budget"`) y lo deja escrito en el informe y en el `run_log`. La decisión del día no depende de que la API esté disponible ni de que te quede presupuesto.
 
 **5. Medición**
 
@@ -624,7 +621,7 @@ El LLM es el **único componente con coste marginal por ejecución**. Por eso ll
 | **`mlfinlab`** | De pago y problemático. Purga y embargo se implementan en ~50 líneas |
 | **`backtrader` / `zipline` / `backtesting.py`** | Abstracción que oculta la semántica que hay que auditar |
 | **LangChain a alto nivel** | Abstracciones inestables entre versiones |
-| **`python-telegram-bot`** | LGPL-3.0 sin necesidad y sobredimensionado para enviar un mensaje |
+| **Telegram y cualquier canal de notificación** (`python-telegram-bot`, `ntfy`, `Apprise`, `smtplib`) | La ejecución es manual y a demanda: no hay nada que notificar a distancia. Solo añadirían secretos, dependencias y superficie de fallo |
 | **Streamlit / Grafana (Fase 1)** | No aportan nada al objetivo de la Fase 1. Fase 5 como pronto |
 | **SQLite** | Mal rendimiento analítico columnar, tipos de fecha pobres |
 | **MongoDB / InfluxDB** | No es el paradigma adecuado para datos tabulares y relacionales |
@@ -640,64 +637,25 @@ El LLM es el **único componente con coste marginal por ejecución**. Por eso ll
 
 ## 8. Operación en el PC local
 
-### 8.1 Scheduling
+### 8.1 Ejecución manual
 
-Timer de systemd (unidad de ejemplo, **especificación**):
+**No hay scheduler.** El pipeline se lanza a mano, cuando tú decides:
 
-```ini
-# ~/.config/systemd/user/cfdtrader-daily.service
-[Unit]
-Description=cfdtrader - pipeline diario de recomendacion
-
-[Service]
-Type=oneshot
-WorkingDirectory=/home/iker/cfdtrader
-EnvironmentFile=%h/cfdtrader/.env
-ExecStart=/usr/bin/env flock -n %t/cfdtrader.lock \
-    uv run python -m cfdtrader.delivery.run_daily
-Environment=TZ=Europe/Madrid
+```bash
+cd ~/cfdtrader
+uv run python -m cfdtrader.delivery.run_daily
 ```
 
-> **Nota sobre secretos en systemd:** un servicio de usuario **no hereda las variables de tu shell**. La clave del LLM debe llegar de una de estas dos formas: (a) `EnvironmentFile=` apuntando al `.env` —opción del ejemplo, y la más explícita— o (b) que `pydantic-settings` lea el `.env` desde `WorkingDirectory`. Con `EnvironmentFile`, el fichero necesita permisos `600` porque systemd lo lee como tu usuario. **Verificar cuál de las dos vías se usa**, porque es un fallo silencioso clásico: el pipeline arranca, no encuentra la clave y emite la recomendación sin overlay sin que nadie lo note.
-
-```ini
-# ~/.config/systemd/user/cfdtrader-daily.timer
-[Unit]
-Description=Lanzar el pipeline de cfdtrader cada dia laborable
-
-[Timer]
-# 09:30 America/New_York = apertura de la sesion US.
-# El pipeline arranca 90 min antes para tener el informe listo antes de la apertura.
-OnCalendar=Mon..Fri *-*-* 08:00 America/New_York
-Timezone=America/New_York
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-```
-
-```ini
-# ~/.config/systemd/user/cfdtrader-close.timer
-# Registro de cierre tras la campana de las 16:00 ET
-[Unit]
-Description=Registrar cierre y atribucion
-
-[Timer]
-OnCalendar=Mon..Fri *-*-* 16:20 America/New_York
-Timezone=America/New_York
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-```
+> **Nota sobre secretos:** al ejecutar a mano, `pydantic-settings` lee el `.env` desde el directorio de trabajo y el proceso hereda las variables de tu shell. El `.env` sigue necesitando permisos `600` y sigue fuera de git. ⚠️ **Verifica que la clave llega de verdad**: el fallo clásico es que el pipeline arranque, no encuentre la clave del LLM y emita la recomendación **sin overlay** sin que nadie lo note. Con ejecución manual hay una ventaja: lo ves en la terminal de esa misma ejecución.
 
 Notas:
 
-- ⭐ **`Timezone=America/New_York` no es un detalle: es un requisito.** Anclar el timer a `Europe/Madrid` produciría una ejecución **una hora tarde durante ~4 semanas al año**, porque EE. UU. y Europa cambian de hora en fechas distintas (`plan.md` §8.3). Anclando a la hora de Nueva York, la ejecución siempre cae en el mismo punto relativo a la sesión.
-- `Persistent=true` relanza la ejecución si el PC estaba apagado. ⚠️ **Pero la guardia de obsolescencia de §8.4 es obligatoria**: si el PC llevaba tres días apagado, el pipeline arranca y **no debe emitir recomendación accionable**.
-- La comprobación de "¿es día de sesión válido?" la hace el propio pipeline: `systemd` no conoce los festivos de NYSE/Nasdaq ni las medias sesiones.
-- ⚠️ **El timer de cierre a las 16:20 ET es un mecanismo de registro, no de cierre.** El cierre de la posición es manual y está respaldado por la orden bracket y la alarma de las 15:45 ET (`plan.md` §12, regla 16). No confundir ambos.
-- `loginctl enable-linger iker` para que los timers funcionen sin tener sesión abierta.
+- ⭐ **El anclaje a `America/New_York` no desaparece: cambia de dueño.** Sin `systemd` no hay `Timezone=` que lo resuelva, así que la conversión ET/UTC ↔ Madrid **la hace el código**, no el sistema operativo (`plan.md` §8.3). Sigue siendo obligatorio calcular en ET/UTC y usar Madrid solo para presentar: la sesión se desplaza una hora dos veces al año.
+- **La guardia de obsolescencia de §8.4 es obligatoria.** Sin timer que relance nada, sigue siendo posible ejecutar con datos de hace tres días (basta con no haber lanzado el pipeline), y **no debe producir una recomendación accionable**.
+- **La comprobación de "¿es día de sesión válido?" la hace el propio pipeline**: los festivos de NYSE/Nasdaq y las medias sesiones son responsabilidad del código (`plan.md` §8.3).
+- **No hay registro de cierre automatizado.** No hay un segundo disparo a las 16:20 ET que recoja el cierre: el cierre de la posición y su registro los haces tú en la misma sesión de trabajo (`plan.md` §12, regla 16).
+- **Un fallo se ve al terminar.** Sin *heartbeat* ni alertas, la señal de que algo fue mal es el código de salida y la traza del `run_log`. Es la contrapartida aceptada de no tener notificaciones.
+- **Ni `flock` ni `loginctl enable-linger`**: sin disparos automáticos no hay solapamiento posible y no hay unidades de usuario que mantener.
 
 ### 8.2 Backup y recuperación
 
@@ -720,13 +678,12 @@ Notas:
 ### 8.3 Gestión del PC
 
 - **Los datos viven en el PC, no en la nube.** Si el PC falla y no hay copia de `data/raw/`, se pierden años de descargas (recuperables parcialmente, pero a coste de tiempo).
-- **Apagados programados**: si el PC se apaga de noche, `Persistent=true` recupera la ejecución pendiente.
-- **Hibernación vs ejecución**: verificar que el timer se dispara correctamente tras reanudar.
+- **No hay nada que se dispare solo.** Como la ejecución es manual, apagar el PC, suspenderlo o hibernarlo **no tiene ningún efecto sobre el pipeline**: simplemente no se ejecuta hasta que lo lances tú. Desaparece toda la casuística de disparos perdidos y recuperados.
 - **Consumo**: el pipeline diario tarda minutos y consume poco. Con el LLM por API, **el consumo local es despreciable**: el trabajo pesado lo hace el proveedor. La carga del PC se limita a ingesta, features y entrenamiento puntual.
 
 ### 8.4 Guardia de obsolescencia (principio 11) — **obligatoria**
 
-`Persistent=true` hace que un timer perdido se ejecute al arrancar el PC. Eso es útil y **peligroso**: si has estado tres días fuera, el sistema arranca y podría producir una recomendación calculada con datos de hace tres sesiones, con la apariencia de ser la de hoy. **Una recomendación obsoleta es peor que ninguna recomendación**, porque se presenta con el mismo formato y la misma confianza que una buena.
+Al no haber scheduler, nadie ejecuta el pipeline por ti. Pero el peligro persiste y de hecho **aumenta**: si has estado tres días fuera y lanzas el pipeline sin más, podría producir una recomendación calculada con datos de hace tres sesiones, con la apariencia de ser la de hoy. **Una recomendación obsoleta es peor que ninguna recomendación**, porque se presenta con el mismo formato y la misma confianza que una buena.
 
 **Reglas duras:**
 
@@ -745,7 +702,7 @@ Notas:
 2. **Sin recomendación por datos insuficientes u obsoletos** — que es distinto de `NOTHING`.
 3. **Error** (fallo técnico).
 
-Confundir (2) con `NOTHING` es un error de concepto: `NOTHING` significa "he evaluado el mercado y hoy no veo oportunidad"; el estado (2) significa "**no sé**". El `decision log` debe registrarlos por separado, y la notificación al usuario debe ser visualmente distinta.
+Confundir (2) con `NOTHING` es un error de concepto: `NOTHING` significa "he evaluado el mercado y hoy no veo oportunidad"; el estado (2) significa "**no sé**". El `decision log` debe registrarlos por separado, y el informe debe presentarlos de forma visualmente distinta.
 
 > **Regla adicional de reincorporación:** tras una ausencia de más de una semana, el sistema entra en **modo observación durante 5 sesiones**. La primera semana después de una pausa es cuando más probable es que el usuario opere mal por exceso de confianza o por querer "recuperar" lo no operado. El sistema debe ayudar a no hacerlo.
 
@@ -755,7 +712,7 @@ Confundir (2) con `NOTHING` es un error de concepto: `NOTHING` significa "he eva
 
 | Riesgo | Probabilidad | Impacto | Plan de contingencia |
 |---|---|---|---|
-| `yfinance` se rompe | **Alta** | Medio | Adaptador propio + `fallback` automático a Stooq + alerta de dato *stale* |
+| `yfinance` se rompe | **Alta** | Medio | Adaptador propio + `fallback` automático a Stooq + marcado de dato *stale* en el informe |
 | Una API gratuita cambia de condiciones | Media | Medio | El raw ya descargado sigue siendo válido; el adaptador permite cambiar de fuente |
 | Una librería queda sin mantenimiento | Media | Bajo–Medio | Licencias permisivas y formatos abiertos ⇒ sustitución posible. Por eso el núcleo usa pocas dependencias |
 | LangGraph introduce *breaking changes* | Alta | Bajo | **Pin exacto** y confinado a `orchestration/`. El gate y el backtest no dependen de él |
@@ -786,8 +743,6 @@ El stack está diseñado para poder sustituirse pieza a pieza. Umbrales concreto
 | Tracking propio (`runs/`) | Si se superan ~200 experimentos y cuesta encontrar resultados | MLflow local |
 | **API LLM (OpenAI / DeepSeek)** | Si el coste se vuelve significativo, si la privacidad pasa a importar, o si el proveedor deja de dar garantías de estabilidad del modelo | **Ollama + modelo local** (plan B ya documentado en §4.9). La interfaz `LLMClient` hace que el cambio no toque `agents/` ni `orchestration/` |
 | Proveedor LLM concreto | Si el otro proveedor mejora en coste, calidad o estabilidad de modelo | El otro proveedor vía la misma interfaz. Ambos son compatibles con el SDK de `openai`: cambiar `base_url` y `model` |
-| Telegram vía httpx | Si se quieren ≥ 2 canales de notificación | Apprise |
-| systemd timer | Si se migra a macOS o Windows | launchd / Task Scheduler |
 | Sin visualización | Fase 4–5, para revisar la curva de equity | Streamlit |
 
 **Regla de oro:** ninguna migración se hace por moda ni por "está más de moda". Se hace **cuando se cruza un umbral medido**, y se anota en el registro de cambios con la medición que la motivó.
@@ -818,8 +773,7 @@ El stack está diseñado para poder sustituirse pieza a pieza. Umbrales concreto
 | Caché LLM | diskcache | Apache-2.0 |
 | *Fallback* LLM | Ollama (contingencia) | MIT |
 | Orquestación | LangGraph (pin exacto) | MIT |
-| Scheduling | systemd timer | LGPL-2.1 |
-| Notificaciones | httpx → Telegram, o Apprise | BSD-2 |
+| Informe | Rich + Jinja2 | MIT / BSD-3 |
 | Logging | loguru | MIT |
 | Tests | pytest + hypothesis | MIT / MPL-2.0 |
 | Exploración | marimo | Apache-2.0 |
@@ -1008,3 +962,4 @@ Como el sistema decide **una vez al día**, los artefactos de decisión son **un
 | 2026-09-16 | **2.0** | ⚠️ **REVISIÓN POR CAMBIO DE INSTRUMENTO A CFD DEL S&P 500.** Cambian: título y cabecera. §2.1 desglose de disco (tickers y ETFs sectoriales americanos). §2.3 horario del pipeline (13:30 → informe 15:00 → registro 22:15). §4.5 fuentes: **FRED pasa a primaria** y ECB a contexto, se añaden `^GSPC`/`ES=F`/`SPY`/`^VIX`/ETFs sectoriales, calendario de resultados de mega-caps. §4.11 y §8.1: **el scheduler se ancla a `America/New_York` en lugar de `Europe/Madrid`**, con timer de registro de cierre. §5.1, §6.1, §6.2, §8.4, §11 y §12.4 actualizados. **No cambia** el modelo de persistencia (§12), ni la arquitectura, ni la capa LLM, ni el resto del stack | **Decisión del usuario: operar el CFD del S&P 500.** El anclaje del scheduler a la hora de Nueva York es el cambio técnico más importante: anclar a hora local produciría una ejecución una hora tarde durante ~4 semanas al año |
 | 2026-09-16 | **2.1** | 🔧 **Corrección de dos horas heredadas del flujo matinal, tras fijar el calendario canónico en `plan.md` v2.2.** §2.3: la entrega del informe pasa de 09:30 a **09:00 ET** (09:30 ET es la apertura, no una hora de entrega). §4.13: el *heartbeat* pasa de 08:50 a **09:05 ET**, que es cuando el informe ya debería estar entregado | Al cerrar el calendario en `plan.md` §4.1 aparecieron dos horas incoherentes con él. **Queda pendiente una tercera, ajena a este cambio:** el registro de cierre es **16:15 ET** en `plan.md` §4.1/§13 y aquí §2.3, pero **16:20 ET** en el ejemplo de §8.1 y en las tareas #41 y #43. Se unifica cuando la tarea #41 implemente los timers |
 | 2026-09-17 | **2.2** | 🔒 **Contrato del almacén cerrado en código (tarea #2).** Nuevo `src/cfdtrader/data/store.py`, único punto de acceso al almacén, con: layout `<raíz>/<capa>/<dataset>/source=<source>/year=<año de as_of>/*.parquet` en Parquet **ZSTD**; las **seis columnas obligatorias** de `plan.md` §8.2 más `series_id`; identidad `(dataset, source, series_id, as_of)`; `version` como **contador de revisión del dato** (no versión de esquema → #49); `append` idempotente e `ImmutableWriteError` ante contenido distinto, `append_revision` con `version = max + 1`, `replace` **solo** en `derived`; visibilidad *point-in-time* por `published_at` con caída a `fetched_at` cuando es `NULL`, y **`as_of` nunca decide visibilidad**; DuckDB como **motor de consulta puro** sobre los Parquet, sin catálogo `.duckdb`. Queda escrito en el módulo que el `as_of` de una barra diaria es el **cierre de sesión (16:00 ET) en UTC**, no medianoche; y las **vistas SQL exponen una sola fila por identidad** (la revisión vigente), de modo que un `replace` en `derived` no deja legible el valor sustituido | Primera tarea de código de la Fase 0 tras el bootstrap. **Corregido tras el QA de la #2:** la vista era un `SELECT *` sin filtrar por versión, así que un dataset de `derived` devolvía a la vez el valor viejo y el nuevo. Las decisiones de esquema se cerraron con el usuario en el *grooming* de la #2 y el contrato se escribió **dentro del módulo** para que no viva solo en la issue |
+| 2026-09-18 | **2.3** | 🚫 **RETIRADA DE LA AUTOMATIZACIÓN Y DE LAS NOTIFICACIONES.** **§2.2:** la tabla de sistemas operativos deja de argumentar sobre schedulers; se especifica asumiendo **solo Linux**. **§2.3:** «ejecución batch diaria» → **ejecución manual y a demanda**; se declara que no hay scheduler, timer ni disparo automático, y que el sistema **no envía nada a ningún sitio**. **§3.1:** `systemd` deja de ser excepción de licencia (solo queda el servicio LLM por API). **§4.2:** fuera `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`. **§4.11** reescrita: de «Scheduling y ejecución local» con `systemd timer` + `flock` + journald a **«Ejecución local»** con disparador manual, sin scheduler, sin *lock* y con `run_log`; se conserva explícitamente el **anclaje a `America/New_York`**, que pasa del sistema operativo al código. **§4.12** reescrita: de «Notificaciones» (Telegram, Apprise, ntfy, `smtplib`, `python-telegram-bot`) a **«Informe y salida»** (Rich + Jinja2 + Markdown/JSON en `data/derived/reports/`). **§4.13:** fuera las filas de alertas de fallo y *heartbeat*; **Sentry descartado**; los fallos quedan en el `run_log` y el código de salida. **§5.2, §6.1, §10 y §11:** fuera las partidas de scheduling y notificaciones, dentro «Informe». **§6.4:** «alerta por Telegram» → **aviso registrado** en el informe y el `run_log`. **§8.1** reescrita: de los tres ficheros de unidad de `systemd` a un **comando manual**; se conserva la nota de secretos adaptada al `.env` local. **§8.3:** desaparece la casuística de disparos perdidos y de `Persistent=true`. **§8.4:** la guardia de obsolescencia se mantiene y su motivación se adapta (el riesgo **aumenta** sin scheduler, porque nadie te obliga a ejecutar). **§8.4** y **§9:** «notificación al usuario» → «el informe»; «alerta de dato *stale*» → «marcado en el informe» | **Decisión del usuario (2026-09-18): ejecución manual a demanda, sin Telegram y sin automatización.** No hay nada que notificar a distancia porque el usuario está delante cuando el sistema se ejecuta. La obligación de cierre a las 16:00 ET se mantiene, pero la garantiza el usuario, no el software |

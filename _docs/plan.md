@@ -2,8 +2,8 @@
 
 | Campo | Valor |
 |---|---|
-| **Versión** | **2.2** |
-| **Fecha** | 2026-09-16 |
+| **Versión** | **2.3** |
+| **Fecha** | 2026-09-18 |
 | **Estado** | Diseño — pendiente de ejecutar Fase 0 |
 | **Instrumento** | **SPX500:CFD**, cotizando en el horario de la sesión regular estadounidense; las horas se calculan en `America/New_York` y se presentan en `Europe/Madrid` |
 | **Ámbito** | Decisión de apoyo (*decision support*). La ejecución es siempre manual. |
@@ -118,7 +118,7 @@ $$c = \underbrace{\tfrac{1}{2}s_{entry} + \tfrac{1}{2}s_{exit}}_{\text{spread}} 
 Puntos clave:
 
 - El **spread es proporcional al nocional**, así que escala con tu tamaño y con el apalancamiento. Es el coste dominante.
-- La **financiación** no debería aparecer: la estrategia es intradía puro y el CFD solo cotiza en horario de contado. Pero **si no cierras a las 16:00 ET, la posición pasa la noche y sí se cobra**, además de quedar expuesta a un gap de aproximadamente 17,5 horas. Por eso el cierre no es una intención, es un **mecanismo obligatorio** (§12, regla 16). ⚠️ VERIFICAR la hora exacta de corte de tu bróker.
+- La **financiación** no debería aparecer: la estrategia es intradía puro y el CFD solo cotiza en horario de contado. Pero **si no cierras a las 16:00 ET, la posición pasa la noche y sí se cobra**, además de quedar expuesta a un gap de aproximadamente 17,5 horas. Por eso el cierre no es una intención, es una **obligación operativa que asumes tú manualmente** (§12, regla 16). ⚠️ VERIFICAR la hora exacta de corte de tu bróker.
 - **El spread no es constante**: se ensancha en la apertura, en el cierre, en eventos macro y **especialmente en los 15 minutos posteriores a la apertura**. Un backtest con spread constante subestima el coste real en los momentos en que más operas.
 - **El `close` de tu bróker no es el `close` del índice.** El P&L de tu operación depende del precio que te dé el bróker en el momento de cerrar tú, no del cierre oficial.
 - **El CFD es en USD o en EUR según el bróker.** Si el nocional se liquida en otra divisa, hay un coste de conversión que hay que identificar y sumar. ⚠️ VERIFICAR.
@@ -179,7 +179,7 @@ $$\text{nocional} = \frac{\text{capital} \times \text{riesgo por operación}}{\t
 | **Entrega del informe** | **09:00** | **15:00** | Dirección, probabilidad, EV neto, stop, objetivo, tier y contra-argumento |
 | Instante de acción | **09:20–09:30** (manual) | 15:20–15:30 | Deadline duro. La orden debe estar puesta **antes** de la subasta |
 | **Apertura de la sesión** | **09:30** | **15:30** | Subasta de apertura. `open` de referencia. **Entrada** |
-| Alarma de cierre | **15:45** | 21:45 | Aviso inequívoco: quedan 15 minutos |
+| Comprobación previa al cierre | **15:45** | 21:45 | Comprobación **humana**: quedan 15 minutos. Sin alarma del sistema (§12, regla 16) |
 | **Cierre de la sesión** | **16:00** | **22:00** | Subasta de cierre. `close` de referencia. **Salida obligatoria** |
 | Cierre de registro | **16:15** | 22:15 | P&L, costes efectivos, atribución por agente |
 
@@ -191,13 +191,13 @@ $$\text{nocional} = \frac{\text{capital} \times \text{riesgo por operación}}{\t
 
 | Situación | Efecto | Tratamiento |
 |---|---|---|
-| **Desplazamiento por DST** | La hora equivalente en Madrid cambia cuando EE. UU. y Europa cambian de hora en fechas distintas | El scheduler, los costes y las alarmas deben anclarse a `America/New_York`, nunca a una hora local fija |
+| **Desplazamiento por DST** | La hora equivalente en Madrid cambia cuando EE. UU. y Europa cambian de hora en fechas distintas | Las ventanas de decisión, los costes y el calendario deben anclarse a `America/New_York`, nunca a una hora local fija |
 | **Medias sesiones US** | Cierre a las **13:00 ET** (19:00 Madrid). Día después de Thanksgiving, 24 de diciembre y ocasionalmente el 3 de julio | Sesión de **3,5 h en vez de 6,5 h**. O se normaliza el rango esperado por duración, o se excluyen esos días |
 | **Festivos US** | Año Nuevo, MLK, Presidents' Day, Viernes Santo, Memorial Day, Juneteenth, 4 de julio, Labor Day, Thanksgiving, Navidad | No hay sesión. El pipeline no debe emitir recomendación |
 | **Roll del futuro ES** | Cuatro veces al año | Puede confundirse con un movimiento de mercado. Debe marcarse como evento |
 | **Días de FOMC** | Evento con timestamp oficial en ET | ⚠️ Se marca antes del gate; por defecto no se opera. Ver §12, regla 17 |
 
-> **⚠️ Aviso de DST para el diseño:** durante dos ventanas al año **todos los horarios de esta tabla se desplazan una hora hacia atrás**. Cualquier componente con una hora fija escrita a mano (scheduler, ventanas de features, tramos horarios del modelo de coste, la alarma de cierre) estará mal esos días. La hora de referencia es **siempre la de Nueva York**; la conversión a Madrid es solo de presentación.
+> **⚠️ Aviso de DST para el diseño:** durante dos ventanas al año **todos los horarios de esta tabla se desplazan una hora hacia atrás**. Cualquier componente con una hora fija escrita a mano (ventanas de features, tramos horarios del modelo de coste, ventana de decisión y registro) estará mal esos días. La hora de referencia es **siempre la de Nueva York**; la conversión a Madrid es solo de presentación.
 
 ### 4.2 Variable objetivo
 
@@ -577,7 +577,7 @@ class Recommendation(BaseModel):
 
 - **Festivos de Estados Unidos** (el mercado objetivo): Año Nuevo, MLK, Presidents' Day, Viernes Santo, Memorial Day, Juneteenth, 4 de julio, Labor Day, Thanksgiving, Navidad. Los festivos españoles **solo** importan para tu disponibilidad para operar, no para el mercado.
 - **Medias sesiones US**: cierre a las 13:00 ET. La hora equivalente en Madrid depende del DST. La sesión dura **3,5 h en vez de 6,5 h** → o se normaliza el rango esperado por duración, o se excluyen.
-- **Cambio horario (DST)** — ⚠️ **es un problema directo, no de solape**. EE. UU. y Europa cambian en fechas distintas. **Toda hora fija escrita a mano queda mal esos días**: el scheduler, la alarma de cierre, los tramos horarios del modelo de coste y las ventanas de features.
+- **Cambio horario (DST)** — ⚠️ **es un problema directo, no de solape**. EE. UU. y Europa cambian en fechas distintas. **Toda hora fija escrita a mano queda mal esos días**: los tramos horarios del modelo de coste, las ventanas de features y la ventana de decisión.
   - **Regla de diseño:** la hora de referencia es **siempre `America/New_York`**. La conversión a `Europe/Madrid` es **solo para presentación**. Guardar todo en UTC.
 - **Roll del futuro ES**: cuatro veces al año. Marcar como evento; puede confundirse con un movimiento de mercado.
 - **Días de FOMC**: usar el timestamp oficial del evento en ET/UTC y marcarlo antes del gate. Ver §12, regla 17.
@@ -761,11 +761,11 @@ Se fijan **antes** de ver resultados. No se mueven.
 11. **`NOTHING` por defecto.** El sistema debe operar **10–30% de los días como máximo**.
 12. **Nunca ampliar posición perdedora.** Nunca mover el stop en contra. Nunca "promediar a la baja".
 13. **Guardia de obsolescencia: si el `as_of` del snapshot no es la fecha de hoy, NO se emite recomendación accionable.** Un PC apagado varios días no puede producir una recomendación con datos viejos que parezca la de hoy. Especificación en `tech_stack.md` §8.4.
-14. **"No sé" no es `NOTHING`.** El sistema distingue cuatro estados: recomendación, sin recomendación por datos obsoletos, sin recomendación por calidad de datos, y error. Se registran y se notifican por separado (§19.2).
+14. **"No sé" no es `NOTHING`.** El sistema distingue cuatro estados: recomendación, sin recomendación por datos obsoletos, sin recomendación por calidad de datos, y error. Se registran y se presentan por separado (§19.2).
 15. **Modo observación tras una ausencia** de más de una semana: 5 sesiones sin operar, aunque haya señal tier A. La vuelta de una pausa es cuando más probable es operar mal por querer recuperar lo no operado.
-16. **⭐ El cierre a las 16:00 ET no es una intención, es un mecanismo.** El requisito de "intradía puro" solo se cumple si algo lo garantiza:
+16. **⭐ El cierre a las 16:00 ET no es una intención, es una obligación.** El requisito de "intradía puro" solo se cumple si el cierre ocurre de verdad:
     - Al entrar, colocar **inmediatamente una orden bracket** (objetivo y stop) en el bróker, para que la posición se cierre sola si el precio toca alguno de los límites.
-    - **Alarma inequívoca a las 15:45 ET**, no negociable.
+    - El cierre lo ejecutas **tú, manualmente**, con el informe delante. **No hay alarma, ni scheduler, ni automatismo que lo garantice**: la ejecución es a demanda y la supervisión es tuya. Esto es una decisión de diseño, no una carencia.
     - Si a las 16:00 ET la posición sigue abierta, se cierra en cuanto abra el mercado siguiente asumiendo el *gap* y la financiación, y se registra como **incumplimiento** en el diario.
     - *Motivo, ahora cuantificado (§3.3):* el CFD solo cotiza en horario de contado. Si no cierras a las 16:00 ET, la posición queda abierta aproximadamente **17,5 horas** y pagas **0,0182 % de tenencia por noche en un largo** —más de cuatro veces el diferencial de ida y vuelta— además de quedar expuesto a un *gap* que contiene toda la sesión europea.
 17. **Días de FOMC: `NOTHING`, o tamaño reducido.** El evento se identifica mediante su timestamp oficial en ET y su reacción puede ser violenta. Es riesgo binario que un stop no gestiona. **Regla por defecto: no operar en días de FOMC**, salvo que un backtest específico demuestre lo contrario con significación.
@@ -784,6 +784,8 @@ Se fijan **antes** de ver resultados. No se mueven.
 ## 13. Flujo diario y operativa
 
 > **Todos los horarios operativos se definen en `America/New_York`.** Se convierten a `Europe/Madrid` únicamente para presentar el informe. La referencia interna y el almacenamiento son UTC/ET.
+>
+> **No hay scheduler ni automatización.** La ejecución es **manual y a demanda**: lanzas el pipeline tú mismo (`uv run python -m cfdtrader.delivery.run_daily`) cuando quieres. Esta tabla describe **el orden y el anclaje temporal** de cada paso, no un plan de disparos automáticos.
 
 | Hora ET | Madrid | Acción |
 |---|---|---|
@@ -795,7 +797,7 @@ Se fijan **antes** de ver resultados. No se mueven.
 | **09:00** | 15:00 | **Informe:** dirección, probabilidad calibrada, EV neto, stop, objetivo, tier y contra-argumento |
 | **09:20–09:30** | 15:20–15:30 | ⏰ **Deadline. Tú decides** (y registras si anulas la recomendación, con motivo). La orden debe estar puesta **antes** de la subasta |
 | **09:30** | 15:30 | **Apertura US.** Entrada en la subasta. Colocar **orden bracket** inmediatamente (§12, regla 16) |
-| **15:45** | 21:45 | 🔔 **Alarma de cierre.** No negociable |
+| **15:45** | 21:45 | Última comprobación manual antes del cierre. **No hay alarma del sistema**: la responsabilidad es tuya (§12, regla 16) |
 | **16:00** | 22:00 | **Cierre US.** Salida obligatoria |
 | **16:15** | 22:15 | Registrar cierre, P&L, costes efectivos y atribución por agente |
 | **Semanal** | — | Evaluación de drift y recalibración |
@@ -805,9 +807,11 @@ Se fijan **antes** de ver resultados. No se mueven.
 ### 13.1 Dos consecuencias del nuevo horario que hay que tener presentes
 
 **a) Ventana de decisión comprimida.** Entre el dato macro de las **08:30 ET** y la entrega del informe a las **09:00 ET** hay **30 minutos**, y el snapshot se congela a las **08:45 ET**. Es un presupuesto de latencia mucho más ajustado que el de un flujo con horas de margen.
-- **Mitigación de diseño:** todo lo que no dependa del dato macro (ingesta, features de mercado, noticias, agentes) se calcula **antes de las 08:30 ET**. Solo la incorporación de la sorpresa macro y el meta-learner están en el camino crítico. Los días sin publicación a las 08:30 ET, el pipeline puede cerrar antes, hacia las **08:15 ET**.
+- **Mitigación de diseño:** todo lo que no dependa del dato macro (ingesta, features de mercado, noticias, agentes) se calcula **antes de las 08:30 ET**. Solo la incorporación de la sorpresa macro y el meta-learner están en el camino crítico. Los días sin publicación a las 08:30 ET, el pipeline puede cerrar antes, hacia las **08:15 ET**. Con ejecución manual este presupuesto solo aprieta si lanzas el pipeline justo antes del `t0`; **el orden de cómputo es obligatorio en cualquier caso**.
 
-**b) El compromiso abarca la mañana y la tarde, y la parte frágil es la de tarde.** La primera acción está en la subasta de apertura (**09:20–09:30 ET**), pero la **salida obligatoria a las 16:00 ET (22:00 Madrid)** exige estar disponible cada día a esa hora. Esto **no es un detalle operativo, es una condición del proyecto**: si un día no puedes cerrar, tienes overnight involuntario con 17,5 horas de gap. Ver §12, regla 16.
+**b) El compromiso abarca la mañana y la tarde, y la parte frágil es la de tarde.** La primera acción está en la subasta de apertura (**09:20–09:30 ET**), pero la **salida obligatoria a las 16:00 ET (22:00 Madrid)** exige estar delante cada día a esa hora. Esto **no es un detalle operativo, es una condición del proyecto**: si un día no puedes cerrar, tienes overnight involuntario con 17,5 horas de gap. Ver §12, regla 16.
+
+**El sistema no te lo recuerda por ningún canal.** La ejecución es manual y a demanda, y **no hay notificaciones, ni scheduler, ni alarma**: la disponibilidad a las 16:00 ET la garantizas tú, no el software. Es una decisión operativa consciente, no una red de seguridad.
 
 ### 13.2 Sobre el *deadline* y las anulaciones
 
@@ -873,8 +877,8 @@ cfdtrader/
 │   │   ├── decision_log.py
 │   │   └── attribution.py
 │   └── delivery/
-│       ├── telegram.py
-│       └── run_daily.py         # entrypoint programado
+│       ├── report.py            # informe en consola / Markdown
+│       └── run_daily.py         # entrypoint manual (a demanda)
 ├── tests/
 │   ├── test_golden_features.py  # regresión sobre features
 │   ├── test_gate.py             # determinismo de la decisión
@@ -901,9 +905,9 @@ ML:          scikit-learn (LogisticRegression, HistGradientBoosting), lightgbm,
 Backtest:    motor propio (~200 líneas, auditable). vectorbt (OSS) solo para barridos.
 Agentes:     LangGraph + Pydantic; temperature=0; caché + hash de prompt
 LLM:         API (OpenAI / DeepSeek) vía SDK openai tras una interfaz LLMClient propia
-Scheduler:   systemd timer con Timezone=America/New_York
+Ejecución:   manual y a demanda (`uv run python -m cfdtrader.delivery.run_daily`)
+Informe:     consola (Rich) + Markdown/JSON en data/derived/reports/
 Tracking:    runs/<hash>/ con JSON + modelo (sin MLflow)
-Alertas:     httpx contra la Bot API de Telegram (informe 09:00 ET, alarma de cierre 15:45 ET)
 Tests:       pytest + golden dataset de features + test de no-look-ahead
 Secretos:    .env local con permisos 600
 ```
@@ -929,7 +933,7 @@ def backtest(dates, feature_fn, model, gate_fn, costs, initial=10_000.0):
     return equity, trades
 ```
 
-Todo lo demás —LangGraph, Telegram, el informe en prosa— es presentación alrededor de esto.
+Todo lo demás —LangGraph, el informe en prosa— es presentación alrededor de esto.
 
 ---
 
@@ -1070,12 +1074,12 @@ Sin diario no hay atribución, no hay detección de drift, y **no hay forma de d
 
 El registro debe distinguir con claridad tres situaciones **que no son lo mismo**, más el fallo técnico:
 
-| Estado | Significado | Se notifica como |
+| Estado | Significado | Se presenta como |
 |---|---|---|
 | `recommendation` | "He evaluado el mercado" → `LONG` / `SHORT` / `NOTHING` | Recomendación normal |
-| `no_recommendation_stale_data` | **"No sé"**: el `as_of` no es de hoy (PC apagado, ausencia) | ⚠️ Aviso **visualmente distinto** de `NOTHING` |
-| `no_recommendation_data_quality` | **"No sé"**: falló la validación de datos | ⚠️ Aviso distinto |
-| `error` | Fallo técnico del pipeline | Alerta de error |
+| `no_recommendation_stale_data` | **"No sé"**: el `as_of` no es de hoy (PC apagado, ausencia) | ⚠️ Salida **visualmente distinta** de `NOTHING` |
+| `no_recommendation_data_quality` | **"No sé"**: falló la validación de datos | ⚠️ Salida distinta |
+| `error` | Fallo técnico del pipeline | Error visible en la terminal y en el `run_log` de la ejecución |
 
 > **`NOTHING` significa "hoy no veo oportunidad". "No sé" significa que no hay juicio que hacer.** Confundirlos es un error de concepto grave: presentar una recomendación obsoleta con el mismo formato que una válida es peor que no emitir ninguna. Ver `tech_stack.md` §8.4.
 
@@ -1136,7 +1140,7 @@ El registro debe distinguir con claridad tres situaciones **que no son lo mismo*
 11. ⭐ **¿Dónde está el drift?** Es la pregunta de la Fase 0: si `open→close` no tiene drift positivo, no se puede justificar una estrategia larga pasiva; una estrategia selectiva o corta necesita una hipótesis y una validación específica.
 12. ¿Cuál es tu **umbral de tolerancia** a drawdown antes de abandonar?
 13. ¿Cuántas operaciones al año estás dispuesto a hacer realmente? (Define la frecuencia objetivo).
-14. ⭐ **¿Puedes comprometerte a estar disponible a las 16:00 ET todos los días de operación?** Si la respuesta no es un sí claro, el requisito de intradía puro no se sostiene y hay que replantear el horizonte.
+14. ✅ **¿Puedes comprometerte a estar disponible a las 16:00 ET todos los días de operación?** — **RESUELTA (2026-09-18): sí, por diseño.** La ejecución es **manual y a demanda** y el cierre lo ordenas tú con el pipeline delante. Por eso **no hay alarma, ni scheduler, ni notificaciones**: la disponibilidad es una decisión operativa tuya, no un requisito que el software deba vigilar.
 15. ⚠️ **¿Aceptas que el sistema probablemente no sea validable por resultado en un plazo razonable?** Con $p^* \approx 50{,}2\%$ y un edge esperado del orden del 52 %, harían falta ~4.900 operaciones (§4.5 y §4.6). Si necesitas ver resultados concluyentes en meses, este proyecto no los va a dar.
 
 ---
@@ -1211,3 +1215,4 @@ El registro debe distinguir con claridad tres situaciones **que no son lo mismo*
 | 2026-09-16 | **2.0** | ⚠️ **REPLANTEO COMPLETO: el instrumento pasa de CFD sobre IBEX 35 a CFD sobre S&P 500.** Nuevo §1.1 con los dos hallazgos específicos del índice (hipótesis del drift nocturno y dureza del baseline "siempre largo"). §3.1–3.3 reescritas: instrumento, futuro ES, gap de 17,5 h, coste de divisa. §4.1 reescrita con el nuevo calendario (decisión 14:45, informe 15:00, entrada 15:30, cierre 22:00). §7.1: nuevo `MacroAgent` (Fed funds, UST 10y, DXY) y nota de concentración en mega-cap tech. §8 completa: FRED como fuente primaria, ETFs sectoriales contra el sesgo de supervivencia, VIX, calendario US y **aviso de DST como problema directo**. §12: reglas duras 16–18 (mecanismo obligatorio de cierre, FOMC, medias sesiones). §13 reescrita de flujo matinal a flujo de tarde. §9, §11, §15, §17, §20, §21 y §22 actualizadas | **Decisión del usuario: operar el CFD del S&P 500 en lugar del IBEX 35.** Configuración elegida: decisión a las 15:00, entrada en la apertura US (15:30), cierre en el cierre US (22:00), CFD solo en horario de contado, intradía puro sin overnight |
 | 2026-09-16 | **2.1** | ⭐ **INCORPORACIÓN DE LOS COSTES REALES DEL BRÓKER.** Nueva §3.3 con la tabla de costes declarada (diferencial 0,0042 %, tenencia +0,0182 %/noche largo y −0,0018 %/noche corto, cambio de divisa 0 %), verificada y comentada. §4.4 reescrita: **$p^*$ baja de ~54 % a ~50,2 %**. Nueva **§4.6: el traslado de la dificultad del coste a la estadística**, con el cálculo de que un edge del 52 % requiere ~4.900 operaciones. §1.1 pasa a tres hallazgos, con el de costes. §11.2 distingue tres listones (open→close, close→close de CFD con financiación, índice puro). §11.6 reformulado: el criterio principal pasa a ser estadístico y batir a close→close deja de ser evidencia. §8.5, §12 regla 16, §16 Fase 0 y §21 actualizadas | **Datos de coste aportados por el usuario.** El análisis revela dos cosas que el plan no contemplaba: el diferencial es ~19× más barato de lo estimado, y la financiación tiene un coste asimétrico de 6,66 %/año en el lado largo que rebaja drásticamente el listón del baseline «comprar y aguantar» y refuerza la racionalidad del intradía |
 | 2026-09-16 | **2.2** | 🔧 **CORRECCIÓN Y CIERRE DEL CALENDARIO.** §4.1 reescrita como calendario canónico con **columna ET (referencia interna) y columna Madrid (solo presentación)**: snapshot `t0` 09:15 → **08:45 ET**, informe 09:30 → **09:00 ET**, instante de acción 09:55–10:00 → **09:20–09:30 ET**, entrada explícita **en la subasta de apertura** y frase de cierre del ciclo (estimación antes de abrir, operación `open→close`, sin overnight). Corregida §1, donde «09:30 ET —antes de la apertura americana—» era falso: 09:30 ET **es** la apertura. §13 pasa a tres columnas (ET/Madrid/acción) y se elimina la contradicción de orden entre informe, deadline y entrada. Sustituidas por su equivalente ET las horas fijas de Madrid de §3.5, §8.4, §8.5, §13.1, §15, §17, §19.4 y el Apéndice A. §21 pregunta 7 queda como **único** punto abierto del calendario | **Pregunta del usuario:** «¿queda claro que lo que quiero es una estimación antes de que abra la bolsa?». La revisión mostró **dos calendarios incompatibles conviviendo**: el decidido en la v2.0 (decisión 14:45 → informe 15:00 → entrada 15:30) solo sobrevivía en §13.1, §8.4 y el Apéndice A, mientras §4.1 fijaba el informe a la hora de la apertura y la acción 25–30 minutos **después** de abrir, contradiciendo la entrada en la subasta y el propio §3.3 (el spread se ensancha justo ahí). Se cierra la ambiguidad porque de ella dependen el scheduler, las ventanas de features y el etiquetado tri-barrera |
+| 2026-09-18 | **2.3** | 🚫 **RETIRADA DE LA AUTOMATIZACIÓN Y DE LAS NOTIFICACIONES.** **§4.1:** la fila «Alarma de cierre» pasa a «Comprobación previa al cierre», **humana y sin alarma del sistema**. **§12 regla 16 reescrita:** se mantienen la obligación de cierre a las 16:00 ET, la orden *bracket* al entrar y el registro del incumplimiento; se elimina la alarma de las 15:45 y se declara explícitamente que no hay ningún automatismo que respalde el cierre. Regla 14: «se notifican» → «se presentan». **§4.1, §8.3 y §13:** las enumeraciones de componentes sensibles al DST dejan de citar el scheduler y las alarmas. **§13:** nota de cabecera de que **no hay scheduler**, y la tabla pasa a describir orden y anclaje temporal, no disparos; fila de las 15:45 reformulada. **§13.1b:** nuevo párrafo de que el sistema no recuerda nada por ningún canal. **§15:** fuera `systemd timer` y «Alertas: httpx contra la Bot API de Telegram»; entran ejecución manual a demanda e informe en consola/Markdown. **§15 árbol:** `delivery/telegram.py` → `delivery/report.py` y `run_daily.py` como *entrypoint* **manual**. **§19.2:** columna «Se notifica como» → «Se presenta como». **§21 pregunta 14 resuelta** (disponibilidad por diseño). **§3.3:** «mecanismo obligatorio» → «obligación operativa que asumes tú manualmente» | **Decisión del usuario (2026-09-18): ejecución manual a demanda, sin Telegram y sin automatización.** No hay nada que notificar a distancia porque el usuario está delante cuando el sistema se ejecuta |

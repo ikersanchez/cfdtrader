@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     # ── HTTP e ingesta ──────────────────────────────────────────────────────
-    # Un solo cliente HTTP para FRED, ECB, GDELT, RSS y Telegram (tech_stack.md §3.3.4)
+    # Un solo cliente HTTP para FRED, ECB, GDELT y RSS (tech_stack.md §3.3.4)
     "httpx>=0.27,<1",
     "tenacity>=8.2,<10",
     # ── Fuentes de datos ────────────────────────────────────────────────────
