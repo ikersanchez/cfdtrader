@@ -61,18 +61,24 @@ El precio de entrada es un parametro obligatorio
 etiquetador nunca lee el ``open`` por su cuenta. Las fuentes permitidas estan en el
 registro declarado ``ENTRY_PRICE_SOURCES``:
 
-- ``session_open`` — el ``open`` de la subasta de apertura (09:30 ET), **disponible**
-  hoy y el que usa este modulo. Es un **proxy declarado**: no es la referencia que
-  fijo el propietario y contradice ``plan.md`` §4.1.
-- ``t0_snapshot_0845_et`` — la referencia del propietario (snapshot congelado de
-  ``t0``, 08:45 ET). **No disponible**: el almacen no tiene ningun precio de las
-  08:45 ET (la primera barra intradia es de las 13:30 UTC, 09:30 ET) y a esa hora ni
-  el indice ni el CFD cotizan, asi que el precio no es ejecutable. Con esta fuente el
-  modulo falla con un error declarado (``state: unavailable`` + ``reason``) y **no
-  escribe nada**; esta **prohibido** caer al ``open`` en silencio.
+- ``session_open`` — el ``open`` de la subasta de apertura (09:30 ET): es la
+  **decision del propietario del 2026-09-18** (registrada en la decision abierta 6 →
+  **#61**) y **coincide** con lo que ya prescribe ``plan.md`` §4.1, que **no** se
+  reescribe. Sigue siendo un **proxy declarado**: el precio usado es el del indice
+  ``^GSPC``, **no** la cotizacion del ``SPX500:CFD`` (**#50**).
+- ``t0_snapshot_0845_et`` — la **propuesta anterior del propietario, descartada el
+  2026-09-18** (snapshot congelado de ``t0``, 08:45 ET). Sigue **declarada** a
+  proposito: es la prueba de que **no hay *fallback* silencioso**. **No disponible**:
+  el almacen no tiene ningun precio de las 08:45 ET (la primera barra intradia es de
+  las 13:30 UTC, 09:30 ET) y a esa hora ni el indice ni el CFD cotizan, asi que el
+  precio no es ejecutable. Con esta fuente el modulo falla con un error declarado
+  (``state: unavailable`` + ``reason``) y **no escribe nada**; esta **prohibido**
+  caer al ``open`` en silencio.
 
-La divergencia y la contradiccion se declaran en el informe (``entry_price``), no se
-corrigen: ``plan.md`` no se reescribe aqui. La cierra la decision abierta 6 → **#61**.
+El anclaje se **declara** en el informe (``entry_price``) y no se parchea ``plan.md``.
+Ahi va tambien ``auction_verification``, que comprueba **sobre el almacen** que el
+``open`` diario que se usa es el *print* de la subasta de apertura: medida, no
+supuesta (0,0 bp de diferencia en las 59 sesiones con intradia).
 
 Puerta de Fase 0: se construye con ``fail``, y se declara
 --------------------------------------------------------
@@ -105,8 +111,10 @@ Limitaciones
 ------------
 
 Las declaradas, con los numeros medidos, van en el artefacto (``limitations``): el
-intradia solo cubre ~60 sesiones (``#50``, ``#57``), el precio de entrada es un proxy
-de ``^GSPC`` que no es el del CFD (``#61``, ``#50``), la etiqueta no lleva spread ni
+intradia solo cubre ~60 sesiones (``#50``, ``#57``), el precio de entrada es el
+``open`` de la subasta de ``^GSPC`` —decision ya cerrada, con anclaje **proxy** del
+CFD (``#50``)—, los numeros heredan el *look-ahead* de la muestra completa de #7
+(``#63``) y la etiqueta no lleva spread ni
 *slippage* por operacion (``#11``), la muestra usa el corte limpio de ``#52``, el
 calentamiento de #7 queda sin etiqueta, las medias sesiones se etiquetan pero el gate
 no las opera (``plan.md`` §12, regla 18) y ``k`` es ilustrativo (``#60``).
@@ -124,7 +132,7 @@ import json
 import math
 import sys
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Final, cast
@@ -153,6 +161,7 @@ from cfdtrader.data.settings import ConfigurationError, load_settings
 from cfdtrader.data.store import ImmutableWriteError, Store, UnknownDatasetError, WriteOutcome
 
 __all__ = [
+    "AUCTION_VERIFICATION_TOLERANCE_BP",
     "BARS_PER_HOUR",
     "BP_PER_UNIT",
     "DEFAULT_ENTRY_PRICE_SOURCE",
@@ -177,6 +186,7 @@ __all__ = [
     "SampleSession",
     "SelectionInconclusiveError",
     "SessionLabel",
+    "auction_verification",
     "barrier_levels",
     "label_and_write",
     "label_history",
@@ -189,6 +199,7 @@ __all__ = [
     "report_payload",
     "resolve_candidate",
     "summarise_rows",
+    "write_outcome_reason",
     "write_outputs",
 ]
 
@@ -283,6 +294,24 @@ ENTRY_PRICE_SESSION_OPEN: Final[str] = "session_open"
 ENTRY_PRICE_T0_SNAPSHOT: Final[str] = "t0_snapshot_0845_et"
 DEFAULT_ENTRY_PRICE_SOURCE: Final[str] = ENTRY_PRICE_SESSION_OPEN
 
+#: Decision vigente del propietario sobre el precio de entrada (2026-09-18, A1).
+#: Cierra la decision abierta 6, que se **registra** en `_docs/**` por la issue #61.
+ENTRY_PRICE_DECISION_DATE: Final[str] = "2026-09-18"
+ENTRY_PRICE_DECISION_PROVENANCE: Final[str] = "decision del propietario"
+ENTRY_PRICE_OWNER_DECISION: Final[str] = (
+    "el `open` de la subasta de apertura (09:30 ET), que es la fuente `session_open`"
+)
+#: Propuesta **anterior** del propietario, descartada el 2026-09-18 (A1, A4).
+ENTRY_PRICE_PREVIOUS_DECISION: Final[str] = "t0 a las 08:45 ET (snapshot congelado)"
+#: El precio usado es el del **indice**, no el del CFD: es un *proxy* declarado (A3).
+ENTRY_PRICE_PROXY_OF: Final[str] = "SPX500:CFD"
+ENTRY_PRICE_PROXY_ISSUE: Final[int] = 50
+
+#: Tolerancia declarada de la verificacion de la subasta: el `open` diario y la primera
+#: barra de las 09:30 ET deben coincidir dentro de **1 bp** (A6, procedencia #64). No
+#: relaja ni sustituye el precio declarado: es solo el listón de la comprobacion.
+AUCTION_VERIFICATION_TOLERANCE_BP: Final[float] = 1.0
+
 
 class LabelsError(Exception):
     """Base de los errores del etiquetado tri-barrera."""
@@ -325,17 +354,23 @@ ENTRY_PRICE_SOURCES: Final[dict[str, EntryPriceSource]] = {
     ENTRY_PRICE_SESSION_OPEN: EntryPriceSource(
         name=ENTRY_PRICE_SESSION_OPEN,
         state="available",
-        provenance="plan.md §4.1 y §4.2 (precio de la subasta de apertura, 09:30 ET)",
+        provenance=(
+            "decision del propietario, 2026-09-18: el `open` de la subasta de apertura "
+            "(09:30 ET), que coincide con `plan.md` §4.1 y §4.2"
+        ),
         reason=None,
         is_proxy=True,
         tradable=True,
-        diverges_from_owner_decision=True,
+        diverges_from_owner_decision=False,
         spot_et="09:30",
     ),
     ENTRY_PRICE_T0_SNAPSHOT: EntryPriceSource(
         name=ENTRY_PRICE_T0_SNAPSHOT,
         state="unavailable",
-        provenance="declaracion del usuario, 2026-09-18 (decision abierta 6 → #61)",
+        provenance=(
+            "propuesta anterior del propietario, descartada el 2026-09-18 (decision abierta 6, "
+            "registrada por #61)"
+        ),
         reason=(
             "el almacen no tiene ningun precio de las 08:45 ET: la primera barra intradia de "
             "^GSPC 5m es de las 13:30 UTC (09:30 ET) y a esa hora ni el indice ni el CFD "
@@ -343,7 +378,7 @@ ENTRY_PRICE_SOURCES: Final[dict[str, EntryPriceSource]] = {
         ),
         is_proxy=False,
         tradable=False,
-        diverges_from_owner_decision=False,
+        diverges_from_owner_decision=True,
         spot_et="08:45",
     ),
 }
@@ -378,31 +413,154 @@ def phase0_context() -> dict[str, object]:
     }
 
 
-def _entry_price_block(*, source_used: str, evidence: Mapping[str, object]) -> dict[str, object]:
-    """Bloque ``entry_price`` del informe: procedencia, contradiccion y evidencia (A10)."""
+def _entry_price_block(
+    *, source_used: str, evidence: Mapping[str, object], auction: Mapping[str, object]
+) -> dict[str, object]:
+    """Bloque ``entry_price``: decision vigente, *proxy* declarado y verificacion (A1-A7)."""
     spec = ENTRY_PRICE_SOURCES[source_used]
     return {
-        "owner_decision": "t0 a las 08:45 ET (snapshot congelado)",
-        "decided_on": "2026-09-18",
-        "provenance": "declaracion del usuario",
+        "owner_decision": ENTRY_PRICE_OWNER_DECISION,
+        "decided_on": ENTRY_PRICE_DECISION_DATE,
+        "provenance": ENTRY_PRICE_DECISION_PROVENANCE,
+        "previous_owner_decision": ENTRY_PRICE_PREVIOUS_DECISION,
+        "previous_owner_decision_discarded_on": ENTRY_PRICE_DECISION_DATE,
+        "previous_owner_decision_note": (
+            "se conserva como rastro: fue la propuesta del propietario hasta el 2026-09-18 y "
+            "sigue **declarada** en el registro de fuentes para que no haya *fallback* silencioso"
+        ),
         "source_used": source_used,
+        "default_source": DEFAULT_ENTRY_PRICE_SOURCE,
         "source_state": spec.state,
         "source_is_proxy": spec.is_proxy,
+        "proxy_of": ENTRY_PRICE_PROXY_OF,
+        "proxy_note": (
+            f"el precio usado es el `open` diario de `{MARKET_SERIES_ID}` (el indice), un "
+            f"**proxy declarado** del `{ENTRY_PRICE_PROXY_OF}`: no es la cotizacion del CFD"
+        ),
         "source_tradable": spec.tradable,
         "diverges_from_owner_decision": spec.diverges_from_owner_decision,
-        "contradicts_plan_md_4_1": True,
-        "plan_md_4_1_proposes": "el `open` de la subasta de apertura (09:30 ET), `plan.md` §4.1",
-        "not_tradable": True,
-        "not_tradable_reason": (
-            "el CFD solo cotiza en horario de contado 09:30-16:00 ET: el precio de las 08:45 ET "
-            "no es un precio ejecutable"
+        "diverges_from_owner_decision_reason": (
+            "el anclaje usado (`session_open`) **es** la decision del propietario del "
+            f"{ENTRY_PRICE_DECISION_DATE} y **coincide** con `plan.md` §4.1: no diverge de "
+            "ninguna de las dos"
         ),
-        "follow_up_issue": 61,
+        "contradicts_plan_md_4_1": False,
+        "contradicts_plan_md_4_1_reason": (
+            "la decision del propietario del 2026-09-18 **hace coincidir** el anclaje con "
+            "`plan.md` §4.1 (`open` de la subasta de apertura, 09:30 ET): el conflicto se "
+            "resuelve **por decision**, no parcheando el documento"
+        ),
+        "plan_md_4_1_proposes": "el `open` de la subasta de apertura (09:30 ET), `plan.md` §4.1",
+        "not_tradable": False,
+        "not_tradable_reason": (
+            "el instante de la subasta de apertura (09:30 ET) **si** es un instante en el que "
+            "el CFD cotiza: es la apertura de la sesion regular"
+        ),
+        "follow_up_issue": ENTRY_PRICE_PROXY_ISSUE,
+        "decision_issue": 61,
         "registry": {name: asdict(entry) for name, entry in sorted(ENTRY_PRICE_SOURCES.items())},
+        "auction_verification": dict(auction),
         "evidence": dict(evidence),
         "declared": (
-            "la divergencia se declara, no se corrige: `plan.md` no se reescribe en esta tarea"
+            "la coincidencia con `plan.md` §4.1 se **declara** y `plan.md` **no** se reescribe "
+            "en esta tarea; la anotacion en los documentos es #61 y #65"
         ),
+    }
+
+
+def auction_verification(
+    sessions: Sequence[SampleSession], *, tolerance_bp: float = AUCTION_VERIFICATION_TOLERANCE_BP
+) -> dict[str, object]:
+    """Comprueba que el precio usado es el *print* de la subasta de apertura (A6, A7).
+
+    Compara, sesion a sesion, el `open` diario que usa el etiquetador
+    (`raw.market_daily.open`) con el `open` de la **primera barra de 09:30 ET** del mismo
+    dia, alli donde hay intradia con cobertura suficiente. Es una comprobacion de **solo
+    lectura**: no cambia ninguna etiqueta, no excluye ninguna sesion y **no** introduce
+    ninguna fuente de precio nueva.
+    """
+    compared = 0
+    identical = 0
+    max_abs_diff_bp: float | None = None
+    mismatches: list[dict[str, object]] = []
+    for item in sessions:
+        if item.unlabelled_reason is not None or item.entry_px is None or item.open_utc is None:
+            continue
+        source, _coverage, _incomplete = order_source_for(
+            observed_bars=len(item.intraday), expected_bars=item.expected_bars
+        )
+        if source != INTRADAY_ORDER_SOURCE:
+            continue
+        opening = next((bar for bar in item.intraday if bar.as_of == item.open_utc), None)
+        if opening is None:
+            continue
+        difference_bp = abs(item.entry_px - opening.open) / opening.open * BP_PER_UNIT
+        compared += 1
+        max_abs_diff_bp = (
+            difference_bp if max_abs_diff_bp is None else max(max_abs_diff_bp, difference_bp)
+        )
+        if difference_bp <= tolerance_bp:
+            identical += 1
+        else:
+            mismatches.append(
+                {
+                    "session": item.session.isoformat(),
+                    "daily_open": item.entry_px,
+                    "auction_open": opening.open,
+                    "diff_bp": difference_bp,
+                }
+            )
+    if compared == 0:
+        status = "not_evaluable"
+        reason = (
+            "ninguna sesion tiene intradia con cobertura suficiente para comparar el `open` "
+            "diario con la primera barra de las 09:30 ET"
+        )
+    elif mismatches:
+        status = "mismatch"
+        reason = (
+            f"{len(mismatches)} de {compared} sesiones comparadas superan la tolerancia "
+            f"declarada de {AUCTION_VERIFICATION_TOLERANCE_BP} bp; ninguna etiqueta cambia por "
+            "ello: la verificacion es de solo lectura"
+        )
+    else:
+        status = "ok"
+        reason = (
+            f"las {compared} sesiones comparadas coinciden dentro de la tolerancia declarada "
+            f"({AUCTION_VERIFICATION_TOLERANCE_BP} bp): el `open` diario **es** el *print* de la "
+            "subasta de apertura"
+        )
+    return {
+        "status": status,
+        "reason": reason,
+        "sessions_compared": compared,
+        "identical": identical,
+        "max_abs_diff_bp": max_abs_diff_bp,
+        "mismatches": mismatches,
+        "read_only": True,
+        "read_only_note": (
+            "la comprobacion no decide el precio ni descarta sesiones: el precio sigue siendo "
+            "el declarado y con un desajuste sintetico las filas no cambian"
+        ),
+        "price_source": {
+            "price_used": "raw.market_daily.open",
+            "series_id": SERIES_ID,
+            "reference": (
+                "la primera barra intradia de las 09:30 ET de `raw.market_intraday` "
+                f"(`{SERIES_ID}` a {INTERVAL})"
+            ),
+            "rule": (
+                "solo las sesiones con cobertura >= "
+                "`MIN_INTRADAY_COVERAGE` sobre las barras esperadas de la sesion"
+            ),
+        },
+        "tolerance": {
+            "name": "AUCTION_VERIFICATION_TOLERANCE_BP",
+            "value_bp": AUCTION_VERIFICATION_TOLERANCE_BP,
+            "unit": "bp",
+            "provenance": "A6 del enunciado de #64 (tolerancia declarada, <= 1 bp)",
+            "note": "por encima de esta diferencia la sesion se lista en `mismatches`",
+        },
     }
 
 
@@ -604,6 +762,8 @@ class SampleSession:
     intraday: tuple[IntradayBar, ...]
     expected_bars: int
     unlabelled_reason: str | None
+    #: Apertura de la sesion en UTC: identifica la barra de las 09:30 ET (A6).
+    open_utc: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -900,6 +1060,7 @@ def _sample_sessions(
                 ),
                 expected_bars=expected_bars,
                 unlabelled_reason=reason,
+                open_utc=info.open_utc,
             )
         )
 
@@ -943,6 +1104,40 @@ class LabelsRun:
     selection_verdict: str
     limitations: tuple[str, ...]
     notes: tuple[str, ...]
+    #: Resultado declarado de la regeneracion de ``derived.labels`` (A8):
+    #: ``created`` / ``unchanged`` / ``superseded``. ``None`` mientras el run no se ha
+    #: escrito, porque el etiquetado en si es una **funcion pura**.
+    write_outcome: str | None = None
+    #: ``version`` vigente del almacen tras la escritura: el almacen es su dueno.
+    stored_version: int | None = None
+
+
+#: Vocabulario declarado del resultado de la escritura (A8).
+WRITE_OUTCOME_CREATED: Final[str] = "created"
+WRITE_OUTCOME_UNCHANGED: Final[str] = "unchanged"
+WRITE_OUTCOME_SUPERSEDED: Final[str] = "superseded"
+
+
+def write_outcome_reason(outcome: str | None) -> str:
+    """Motivo declarado del resultado de la escritura (A8). Nunca un valor mudo."""
+    if outcome is None:
+        return (
+            "el etiquetado es una funcion pura y este run no se ha escrito en el almacen: "
+            "no hay resultado de escritura que declarar"
+        )
+    if outcome == WRITE_OUTCOME_UNCHANGED:
+        return (
+            "las filas son **identicas** a las ya almacenadas (el anclaje ya era `session_open`): "
+            "la regeneracion no cambia ningun dato, no se escribe nada y **no** se toca `version`"
+        )
+    if outcome == WRITE_OUTCOME_SUPERSEDED:
+        return (
+            "las identidades ya existian con otro contenido: se escribio una revision con "
+            "`version` + 1 (*supersede* de la capa `derived`) y ningun fichero se borra"
+        )
+    return (
+        "el almacen no tenia filas previas para estas identidades: se escribio su primera `version`"
+    )
 
 
 def _sigma_series(sessions: Sequence[SampleSession]) -> tuple[tuple[date, float], ...]:
@@ -1069,6 +1264,10 @@ def label_history(
     coverage["bars_at_0845_et"] = _bars_at_0845_et(store)
     coverage["follow_up_issues"] = [50, 57]
 
+    # A6/A7: verificacion del anclaje contra la primera barra de las 09:30 ET. Es de
+    # **solo lectura**: no cambia ninguna etiqueta ni excluye ninguna sesion.
+    auction = auction_verification(sessions)
+
     warmup_from = None if first_index == 0 else frame_sessions[0].isoformat()
     warmup_to = None if first_index == 0 else frame_sessions[first_index - 1].isoformat()
     sigmas = [sigma for _, sigma in sigma_series]
@@ -1080,6 +1279,7 @@ def label_history(
         "entry_price_source": entry_price_source,
         "daily_sessions": coverage["daily_sessions"],
         "intraday_coverage": coverage,
+        "auction_verification": auction,
         "sigma": {
             "candidate": candidate,
             "selection_verdict": selection.verdict,
@@ -1198,9 +1398,12 @@ def _limitations(
         f"que {fallback_share:.1%} de las {labelled} etiquetas vienen del respaldo diario "
         "**conservador**: `p_target` es una **cota inferior** (#50 fuente intradia; #57 RV "
         "intradia)",
-        "el precio de entrada usado es el `open` de sesion de `^GSPC`, un **proxy declarado** que "
-        "**contradice** la decision del propietario (`t0` a las 08:45 ET) y `plan.md` §4.1, y "
-        "**no** es el precio ejecutable del CFD (#61, #50)",
+        "el precio de entrada usado es el `open` de la subasta de apertura (09:30 ET) de "
+        "`^GSPC`: la decision del propietario esta **cerrada** (2026-09-18) y **coincide** con "
+        "`plan.md` §4.1, que **no** se reescribe; el precio sigue siendo el del **indice** y "
+        "**no** el del **CFD** (#50; registro de la decision en #61), y los numeros publicados "
+        "**heredan el *look-ahead* de la muestra completa de #7** (#63) y **no** son una "
+        "validacion de la estrategia",
         "la etiqueta es de `^GSPC`, **no** del CFD, y **no** lleva spread ni *slippage* por "
         "operacion (el modelo de coste del motor es #11)",
         "la muestra usa el corte limpio de #52: el `open` diario de la fuente repite el cierre "
@@ -1390,24 +1593,45 @@ def record_for(row: LabelRow, *, run: LabelsRun, now: datetime) -> dict[str, obj
     }
 
 
-def persist_rows(store: Store, records: Sequence[dict[str, object]]) -> WriteOutcome:
+def persist_rows(store: Store, records: Sequence[dict[str, object]]) -> str:
     """Escribe las etiquetas en ``derived.labels`` por la API del ``Store``.
 
     ``append`` para identidades nuevas y ``replace`` (solo ``derived``, que es
     recomputable) cuando el contenido cambia: es la semantica de *supersede* de la
     capa, la vista sigue devolviendo una fila vigente por sesion y **ningun fichero
-    se borra**. Una ejecucion identica es un no-op.
+    se borra**. Una ejecucion identica es un no-op. Devuelve el resultado declarado
+    (``created`` / ``unchanged`` / ``superseded``), que el informe publica (A8).
     """
     if not records:
-        return WriteOutcome.UNCHANGED
+        return WRITE_OUTCOME_UNCHANGED
     try:
-        return store.append(LABELS_LAYER, LABELS_DATASET, list(records))
+        outcome = store.append(LABELS_LAYER, LABELS_DATASET, list(records))
     except ImmutableWriteError:
         logger.info(
             "las etiquetas cambian para identidades ya almacenadas: se escribe una revision "
             "(`replace` en `derived.labels`, supersede con `version` + 1)"
         )
-        return store.replace(LABELS_LAYER, LABELS_DATASET, list(records))
+        store.replace(LABELS_LAYER, LABELS_DATASET, list(records))
+        return WRITE_OUTCOME_SUPERSEDED
+    return WRITE_OUTCOME_UNCHANGED if outcome is WriteOutcome.UNCHANGED else WRITE_OUTCOME_CREATED
+
+
+def _stored_version(store: Store) -> int | None:
+    """``version`` vigente de ``derived.labels``, o ``None`` si no hay filas.
+
+    Se lee con ``store.sql()`` (nunca con ``read_pit``, que responde «que sabiamos en
+    T» y no sirve para esto). El almacen es el dueno del numero: aqui solo se publica.
+    """
+    try:
+        frame = store.sql(
+            f"SELECT max(version) AS version FROM {LABELS_LAYER}.{LABELS_DATASET}"  # noqa: S608
+        )
+    except (UnknownDatasetError, duckdb.Error):
+        return None
+    if frame.height == 0:
+        return None
+    value = frame.get_column("version").to_list()[0]
+    return None if value is None else int(str(value))
 
 
 @dataclass(frozen=True, slots=True)
@@ -1418,6 +1642,8 @@ class LabelsOutputs:
     sessions: int
     json_path: Path
     markdown_path: Path
+    #: El run **con** el resultado de la escritura ya declarado (A8).
+    run: LabelsRun | None = None
 
 
 def report_payload(run: LabelsRun) -> dict[str, object]:
@@ -1541,7 +1767,11 @@ def report_payload(run: LabelsRun) -> dict[str, object]:
                 "note": f"`{INTRADAY_UNUSED_SERIES}` se cuenta pero no ordena barreras",
             },
         ],
-        "entry_price": _entry_price_block(source_used=run.entry_price_source, evidence=coverage),
+        "entry_price": _entry_price_block(
+            source_used=run.entry_price_source,
+            evidence=coverage,
+            auction=cast("dict[str, object]", run.inputs["auction_verification"]),
+        ),
         "inputs": run.inputs,
         "sample": run.sample,
         "summary": run.summary,
@@ -1563,8 +1793,23 @@ def report_payload(run: LabelsRun) -> dict[str, object]:
                 "vista sigue devolviendo **una** fila vigente por sesion; ningun fichero se borra"
             ),
             "outcome_note": (
-                "el resultado de la escritura no va al informe: asi el JSON es identico byte a "
-                "byte entre ejecuciones con el mismo `--now`"
+                "el resultado de la escritura **si** se publica (`write_outcome`): dos "
+                "ejecuciones que parten del mismo estado del almacen producen el mismo JSON "
+                "byte a byte, y el resultado no se toca a mano"
+            ),
+            "write_outcome": run.write_outcome,
+            "write_outcome_vocabulary": [
+                WRITE_OUTCOME_CREATED,
+                WRITE_OUTCOME_UNCHANGED,
+                WRITE_OUTCOME_SUPERSEDED,
+            ],
+            "write_outcome_state": ("declared" if run.write_outcome is not None else "not_written"),
+            "write_outcome_reason": write_outcome_reason(run.write_outcome),
+            "rows": len(run.rows) if run.write_outcome is not None else None,
+            "version": run.stored_version,
+            "version_note": (
+                "el `version` lo posee el almacen: una regeneracion identica **no** lo toca, y "
+                "forzar un cambio de version a mano esta prohibido"
             ),
             "verification": (
                 "la recomputacion se comprueba con `store.sql()` (y **no** con `read_pit`, cuya "
@@ -1618,6 +1863,7 @@ def render_markdown(run: LabelsRun) -> str:
     coverage = cast("dict[str, object]", run.inputs["intraday_coverage"])
     sigma = _block(run.inputs["sigma"])
     entry_price = _block(report_payload(run)["entry_price"])
+    auction = _block(entry_price["auction_verification"])
     labelled = cast("int", sample["labelled"])
     full_sessions = cast("int", sample["labelled_full_sessions"])
     half_sessions = cast("int", sample["labelled_half_sessions"])
@@ -1698,22 +1944,37 @@ def render_markdown(run: LabelsRun) -> str:
         "- Las barreras son **simetricas**: la asimetria queda fuera de alcance. Los valores `R = "
         "0,5 / 1,0 / 1,5 %` de `plan.md` §4.4 se citan solo como ejemplo.",
         "",
-        "## Precio de entrada: la decision del propietario y la contradiccion",
+        "## Precio de entrada: decision del propietario, cerrada el 2026-09-18",
         "",
-        f"- El propietario fijo ({decided_on}, procedencia *{provenance}*): "
+        f"- El propietario **cerro** la cuestion el {decided_on} (procedencia: *{provenance}*): "
         f"**{entry_price['owner_decision']}**.",
-        f"- Fuente que usa este artefacto: **`{entry_price['source_used']}`** "
-        f"(`source_is_proxy` = `{proxy_text}`): el `open` de la subasta de las 09:30 ET.",
+        f"- El anclaje **coincide** con `plan.md` §4.1 ({entry_price['plan_md_4_1_proposes']}), "
+        "que **no** se reescribe: la coincidencia se **declara**, no se parchea el documento "
+        "(la anotacion en los documentos es #61 y #65).",
+        f"- Rastro de lo sustituido: `previous_owner_decision` = "
+        f"**{entry_price['previous_owner_decision']}**, descartada el "
+        f"{entry_price['previous_owner_decision_discarded_on']}.",
         f"- **`diverges_from_owner_decision` = `{diverges_text}`** y "
-        f"**`contradicts_plan_md_4_1` = `{contradicts_text}`**: `plan.md` §4.1 propone "
-        f"{entry_price['plan_md_4_1_proposes']}, y la referencia del propietario es el "
-        "snapshot de las 08:45 ET. Las dos no pueden ser ciertas a la vez.",
+        f"**`contradicts_plan_md_4_1` = `{contradicts_text}`**: "
+        f"{entry_price['contradicts_plan_md_4_1_reason']}.",
         f"- **`not_tradable` = `{tradable_text}`**: {entry_price['not_tradable_reason']}.",
+        f"- `source_used` = `{entry_price['source_used']}` (fuente por defecto: "
+        f"`{entry_price['default_source']}`), con `source_is_proxy` = `{proxy_text}`.",
+        f"- El precio usado es el del **indice** (`{run.series_id}`), **no** el del **CFD** "
+        f"(`{entry_price['proxy_of']}`): {entry_price['proxy_note']} → "
+        f"**#{entry_price['follow_up_issue']}**.",
+        "- `t0_snapshot_0845_et` **sigue declarada** en el registro de fuentes con "
+        "`state: unavailable`, y pedirla **falla con un motivo declarado** (codigo 2, sin "
+        "escribir informe ni dataset): **no** hay *fallback* silencioso.",
+        f"- Verificacion de la subasta (solo lectura): **{auction['sessions_compared']}** "
+        f"sesiones comparadas, **{auction['identical']}** identicas, `max_abs_diff_bp` = "
+        f"{auction['max_abs_diff_bp']} y `status` = `{auction['status']}` con la tolerancia "
+        f"declarada de {_block(auction['tolerance'])['value_bp']} bp.",
         f"- Evidencia medida en el almacen: la primera barra intradia de `{run.series_id}` es "
         f"`{coverage['first_bar_utc']}` ({coverage['first_bar_et']}) y hay "
         f"**{coverage['bars_at_0845_et']}** barras a las 08:45 ET.",
-        f"- Lo cierra la decision abierta 6 → **#{entry_price['follow_up_issue']}**. Esta tarea "
-        "**declara** la divergencia y **no** reescribe `plan.md`.",
+        "- Los numeros publicados **heredan el *look-ahead* de la muestra completa de #7** "
+        "(**#63**) y **no** son una validacion de la estrategia.",
         "",
         "## Fuente del orden y cobertura",
         "",
@@ -1848,22 +2109,24 @@ def render_markdown(run: LabelsRun) -> str:
 # Escritura y CLI
 # ─────────────────────────────────────────────────────────────────────────────
 def write_outputs(run: LabelsRun, *, store: Store, reports_dir: Path) -> LabelsOutputs:
-    """Persiste ``derived.labels`` y escribe el informe JSON + Markdown (A26, A32)."""
+    """Persiste ``derived.labels`` y escribe el informe JSON + Markdown (A8, A26, A32)."""
     records = [record_for(row, run=run, now=run.as_of) for row in run.rows]
     outcome = persist_rows(store, records)
+    written = replace(run, write_outcome=outcome, stored_version=_stored_version(store))
     reports_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{REPORT_PREFIX}_{run.as_of.date().isoformat()}"
     json_path = reports_dir / f"{stem}.json"
     markdown_path = reports_dir / f"{stem}.md"
     json_path.write_text(
-        json.dumps(report_payload(run), ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        json.dumps(report_payload(written), ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    markdown_path.write_text(render_markdown(run), encoding="utf-8")
+    markdown_path.write_text(render_markdown(written), encoding="utf-8")
     return LabelsOutputs(
-        outcome=outcome.value,
+        outcome=outcome,
         sessions=len(records),
         json_path=json_path,
         markdown_path=markdown_path,
+        run=written,
     )
 
 
@@ -1880,7 +2143,8 @@ def label_and_write(
     run = label_history(
         store=store, now=now, k_sigma=k_sigma, entry_price_source=entry_price_source
     )
-    return run, write_outputs(run, store=store, reports_dir=reports_dir)
+    outputs = write_outputs(run, store=store, reports_dir=reports_dir)
+    return (outputs.run if outputs.run is not None else run), outputs
 
 
 def main(argv: Sequence[str] | None = None) -> int:

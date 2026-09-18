@@ -16,6 +16,7 @@ comprueba que la sesion de tests no lo toca (A34).
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 from datetime import UTC, date, datetime, timedelta
 from datetime import time as dtime
@@ -37,6 +38,7 @@ from cfdtrader.data.calendar import FULL_SESSION_HOURS, HALF_SESSION_HOURS, Mark
 from cfdtrader.data.settings import ConfigurationError
 from cfdtrader.data.store import Store
 from cfdtrader.models.labels import (
+    AUCTION_VERIFICATION_TOLERANCE_BP,
     CARRIER_PREVIOUS_LABELLED,
     CARRIER_WALK_FORWARD,
     COST_SENSITIVITY_SCENARIOS,
@@ -65,7 +67,9 @@ from cfdtrader.models.labels import (
     IntradayBar,
     LabelsError,
     LabelsRun,
+    SampleSession,
     SessionLabel,
+    auction_verification,
     barrier_levels,
     label_and_write,
     label_history,
@@ -76,6 +80,7 @@ from cfdtrader.models.labels import (
     render_markdown,
     report_payload,
     resolve_candidate,
+    write_outcome_reason,
     write_outputs,
 )
 
@@ -825,29 +830,271 @@ def test_the_returns_of_a_target_and_a_stop_are_the_barrier_distance(run: Labels
 # Precio de entrada (A9, A10)
 # ─────────────────────────────────────────────────────────────────────────────
 def test_the_entry_price_sources_are_declared(run: LabelsRun) -> None:
-    """A9/A10: registro de fuentes, con estado y procedencia, y la contradiccion declarada."""
+    """A1/A2/A3/A4: registro de fuentes y decision vigente del precio de entrada."""
     assert set(ENTRY_PRICE_SOURCES) == {DEFAULT_ENTRY_PRICE_SOURCE, ENTRY_PRICE_T0_SNAPSHOT}
     open_source = ENTRY_PRICE_SOURCES[DEFAULT_ENTRY_PRICE_SOURCE]
     t0_source = ENTRY_PRICE_SOURCES[ENTRY_PRICE_T0_SNAPSHOT]
     assert open_source.state == "available" and open_source.is_proxy is True
+    assert open_source.diverges_from_owner_decision is False
     assert t0_source.state == "unavailable" and t0_source.tradable is False
     assert t0_source.spot_et == "08:45"
-    assert "2026-09-18" in t0_source.provenance
+    # A4: la procedencia de `t0` ya **no** es la decision vigente del propietario.
+    assert "descartada el 2026-09-18" in t0_source.provenance
+    assert "declaracion del usuario, 2026-09-18 (decision abierta 6" not in t0_source.provenance
 
     entry = _dict(report_payload(run)["entry_price"])
-    assert entry["owner_decision"] == "t0 a las 08:45 ET (snapshot congelado)"
+    assert "subasta de apertura" in str(entry["owner_decision"])
     assert entry["decided_on"] == "2026-09-18"
-    assert entry["provenance"] == "declaracion del usuario"
+    assert entry["provenance"] == "decision del propietario"
     assert entry["source_used"] == "session_open"
+    assert entry["default_source"] == DEFAULT_ENTRY_PRICE_SOURCE
     assert entry["source_is_proxy"] is True
-    assert entry["diverges_from_owner_decision"] is True
-    assert entry["contradicts_plan_md_4_1"] is True
-    assert entry["not_tradable"] is True
-    assert entry["follow_up_issue"] == 61
+    assert entry["diverges_from_owner_decision"] is False
+    assert entry["contradicts_plan_md_4_1"] is False
+    assert entry["not_tradable"] is False
+    assert entry["follow_up_issue"] == 50
+    assert entry["decision_issue"] == 61
+    # A1: el rastro de lo sustituido queda declarado y **no** como decision vigente.
+    assert "08:45" in str(entry["previous_owner_decision"])
+    assert entry["previous_owner_decision_discarded_on"] == "2026-09-18"
+    assert "08:45" not in str(entry["owner_decision"])
+    # A2: los dos motivos existen, no estan vacios y nombran §4.1.
+    for key in ("diverges_from_owner_decision_reason", "contradicts_plan_md_4_1_reason"):
+        assert "§4.1" in str(entry[key]), key
+    # A3: el *proxy* se declara de forma explicita, con su issue y sin llamar CFD al precio.
+    assert entry["proxy_of"] == "SPX500:CFD"
+    note = str(entry["proxy_note"])
+    assert "indice" in note and "CFD" in note and "proxy declarado" in note
     evidence = _dict(entry["evidence"])
     assert _number(evidence["bars_at_0845_et"]) == 0
     assert "13:30" in str(evidence["first_bar_utc"]) or evidence["first_bar_utc"] is None
     assert set(_dict(entry["registry"])) == set(ENTRY_PRICE_SOURCES)
+
+
+def test_a6_the_auction_verification_compares_the_declared_price_with_the_0930_bar(
+    tmp_path: Path,
+) -> None:
+    """A6: la comprobacion declara sesiones, coincidencias, diferencia maxima y tolerancia."""
+    root = tmp_path / "aligned"
+    _build_store_aligned(root)
+    aligned = label_history(store=Store(root), now=NOW)
+    entry = _dict(report_payload(aligned)["entry_price"])
+    auction = _dict(entry["auction_verification"])
+    assert auction["status"] == "ok"
+    assert auction["sessions_compared"] == 4  # 3 al alza + 1 a la baja; la corta no llega al 0,95
+    assert auction["identical"] == auction["sessions_compared"]
+    assert _number(auction["max_abs_diff_bp"]) == 0.0
+    assert auction["mismatches"] == []
+    assert auction["read_only"] is True
+    source = _dict(auction["price_source"])
+    assert source["price_used"] == "raw.market_daily.open"
+    assert source["series_id"] == SERIES_ID
+    assert "09:30" in str(source["reference"])
+    tolerance = _dict(auction["tolerance"])
+    assert tolerance["name"] == "AUCTION_VERIFICATION_TOLERANCE_BP"
+    assert _number(tolerance["value_bp"]) == AUCTION_VERIFICATION_TOLERANCE_BP <= 1.0
+    assert tolerance["unit"] == "bp" and tolerance["provenance"]
+
+
+def _session_with_bars(day: date, *, entry: float, auction_open: float) -> SampleSession:
+    """Sesion sintetica con 78 barras planas que arrancan en ``auction_open``."""
+    info = EASTERN.session(day)
+    assert info.open_utc is not None and info.close_utc is not None
+    bars = tuple(
+        IntradayBar(
+            as_of=info.open_utc + timedelta(minutes=5 * index),
+            open=auction_open,
+            high=auction_open,
+            low=auction_open,
+            close=auction_open,
+        )
+        for index in range(78)
+    )
+    return SampleSession(
+        session=day,
+        close_utc=info.close_utc,
+        is_half_day=False,
+        duration_hours=info.duration_hours,
+        entry_px=entry,
+        daily=DailyBar(high=auction_open, low=auction_open, close=auction_open),
+        sigma=SIGMA,
+        sigma_carrier=CARRIER_WALK_FORWARD,
+        intraday=bars,
+        expected_bars=78,
+        unlabelled_reason=None,
+        open_utc=info.open_utc,
+    )
+
+
+def test_a6_a_synthetic_mismatch_is_listed_with_its_difference() -> None:
+    """A6: con un desajuste sintetico el estado es `mismatch` y la sesion queda listada."""
+    day = DAYS[-1]
+    good = _session_with_bars(day, entry=100.0, auction_open=100.0)
+    bad = _session_with_bars(day, entry=100.0, auction_open=100.0 * (1.0 + 0.00468))
+
+    ok = auction_verification([good])
+    assert ok["status"] == "ok" and ok["identical"] == 1
+
+    broken = auction_verification([bad])
+    assert broken["status"] == "mismatch"
+    assert broken["identical"] == 0
+    mismatches = cast("list[dict[str, object]]", broken["mismatches"])
+    assert len(mismatches) == 1
+    assert mismatches[0]["session"] == day.isoformat()
+    assert _number(mismatches[0]["diff_bp"]) == pytest.approx(46.6, abs=0.2)
+    assert _number(broken["max_abs_diff_bp"]) == pytest.approx(46.6, abs=0.2)
+
+    empty = auction_verification([])
+    assert empty["status"] == "not_evaluable"
+    assert empty["sessions_compared"] == 0 and empty["max_abs_diff_bp"] is None
+
+
+def _build_store_aligned(root: Path, *, gap_bp: float = 0.0) -> Store:
+    """Almacen sintetico con la primera barra de cada sesion en el `open` diario.
+
+    La fixture general arranca el intradia en el `open` diario **mas** el desplazamiento
+    del recorrido; aqui la primera barra de cada sesion se alinea con el `open`
+    declarado (lo que hace el almacen real: 0,0 bp en 59/59 sesiones) y, si se pide, se
+    le mete un desajuste de `gap_bp` en **una** sesion para ejercitar el `mismatch`.
+    """
+    store = Store(root)
+    daily = _records()
+    store.append("raw", "market_daily", daily)
+    opens = {
+        cast("datetime", record["as_of"]): float(cast("float", record["open"])) for record in daily
+    }
+    intraday: list[dict[str, object]] = []
+    for index in INTRADAY_UP_AT:
+        intraday.extend(_intraday_records(DAYS[index], 78, drift=0.01))
+    intraday.extend(_intraday_records(DAYS[INTRADAY_DOWN_AT], 78, drift=-0.01))
+    intraday.extend(_intraday_records(DAYS[INTRADAY_SHORT_AT], 70, drift=0.01))
+    gapped_at = EASTERN.session(DAYS[INTRADAY_UP_AT[0]]).open_utc
+    for record in intraday:
+        moment = cast("datetime", record["as_of"])
+        day = MarketCalendar.to_et(moment).date()
+        if moment != EASTERN.session(day).open_utc:
+            continue
+        factor = 1.0 + (gap_bp / 10_000.0 if moment == gapped_at else 0.0)
+        record["open"] = opens[_at(day)] * factor
+    store.append("raw", "market_intraday", intraday)
+    return store
+
+
+def test_a7_a_synthetic_mismatch_changes_no_label_and_excludes_no_session(
+    tmp_path: Path,
+) -> None:
+    """A7: la verificacion es de solo lectura; el precio sigue siendo el declarado."""
+    base_root = tmp_path / "base"
+    gapped_root = tmp_path / "gapped"
+    _build_store_aligned(base_root, gap_bp=0.0)
+    _build_store_aligned(gapped_root, gap_bp=50.0)
+
+    base = label_history(store=Store(base_root), now=NOW)
+    other = label_history(store=Store(gapped_root), now=NOW)
+
+    assert other.rows == base.rows, "un desajuste de la subasta no puede mover una etiqueta"
+    assert other.sample["labelled"] == base.sample["labelled"]
+    assert other.sample["unlabelled_total"] == base.sample["unlabelled_total"]
+
+    base_auction = _dict(_dict(report_payload(base)["entry_price"])["auction_verification"])
+    other_auction = _dict(_dict(report_payload(other)["entry_price"])["auction_verification"])
+    assert base_auction["status"] == "ok"
+    assert other_auction["status"] == "mismatch"
+    assert _number(other_auction["sessions_compared"]) == _number(base_auction["sessions_compared"])
+    assert len(cast("list[object]", other_auction["mismatches"])) == 1
+
+
+def test_a5_the_t0_source_fails_with_2_and_the_omitted_flag_is_session_open(
+    tmp_path: Path, synthetic_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A5: sin *fallback* silencioso y omitir el flag equivale a `session_open`."""
+    stem = f"triple_barrier_{NOW.date().isoformat()}.json"
+    digests: list[str] = []
+    for index, extra in enumerate(([], ["--entry-price-source", "session_open"])):
+        root = tmp_path / f"cli{index}"
+        shutil.copytree(synthetic_root, root)
+        assert main(["--data-root", str(root), "--now", NOW.isoformat(), *extra]) == 0
+        report = (root / "derived" / "reports" / stem).read_bytes()
+        digests.append(hashlib.sha256(report).hexdigest())
+        used = (
+            Store(root)
+            .sql("SELECT DISTINCT entry_price_source AS s FROM derived.labels")
+            .get_column("s")
+            .to_list()
+        )
+        assert used == [DEFAULT_ENTRY_PRICE_SOURCE]
+    assert digests[0] == digests[1]
+
+    t0_root = tmp_path / "cli-t0"
+    shutil.copytree(synthetic_root, t0_root)
+    code = main(
+        [
+            "--data-root",
+            str(t0_root),
+            "--now",
+            NOW.isoformat(),
+            "--entry-price-source",
+            ENTRY_PRICE_T0_SNAPSHOT,
+        ]
+    )
+    assert code == 2
+    assert "08:45" in capsys.readouterr().err
+    assert not (t0_root / "derived").exists(), "con la fuente no disponible no se escribe nada"
+
+
+def test_a8_the_report_publishes_the_write_outcome_and_the_second_run_is_unchanged(
+    writable_root: Path,
+) -> None:
+    """A8: `write_outcome` declarado, segunda ejecucion `unchanged` y ningun fichero borrado."""
+    store = Store(writable_root)
+    reports = writable_root / "derived" / "reports"
+    _run, first = label_and_write(data_root=writable_root, reports_dir=reports, now=NOW)
+    files = sorted((writable_root / "derived" / "labels").rglob("*.parquet"))
+    rows = store.sql("SELECT * FROM derived.labels ORDER BY session").to_dicts()
+    first_payload = json.loads(first.json_path.read_text(encoding="utf-8"))
+    first_persistence = _dict(first_payload["persistence"])
+    assert first_persistence["write_outcome"] in {"created", "unchanged", "superseded"}
+    assert first_persistence["write_outcome_state"] == "declared"
+    assert first_persistence["write_outcome_reason"]
+    assert _number(first_persistence["rows"]) == len(rows)
+    assert _number(first_persistence["version"]) == 1
+
+    _run2, second = label_and_write(data_root=writable_root, reports_dir=reports, now=NOW)
+    assert second.outcome == "unchanged"
+    second_payload = json.loads(second.json_path.read_text(encoding="utf-8"))
+    second_persistence = _dict(second_payload["persistence"])
+    assert second_persistence["write_outcome"] == "unchanged"
+    assert "identicas" in str(second_persistence["write_outcome_reason"])
+    assert _number(second_persistence["version"]) == 1, "no se fuerza un cambio de version"
+    assert sorted((writable_root / "derived" / "labels").rglob("*.parquet")) == files
+    assert store.sql("SELECT * FROM derived.labels ORDER BY session").to_dicts() == rows
+    versions = store.sql("SELECT DISTINCT version AS v FROM derived.labels")
+    assert versions.get_column("v").to_list() == [1]
+
+
+def test_a12_two_runs_from_the_same_state_produce_the_same_json(writable_root: Path) -> None:
+    """A12: con el almacen ya poblado, dos ejecuciones identicas dan el mismo `sha256`."""
+    reports = writable_root / "derived" / "reports"
+    label_and_write(data_root=writable_root, reports_dir=reports, now=NOW)
+    digests: list[str] = []
+    frames: list[list[dict[str, Any]]] = []
+    for _ in range(2):
+        _run, outputs = label_and_write(data_root=writable_root, reports_dir=reports, now=NOW)
+        assert outputs.outcome == "unchanged"
+        digests.append(hashlib.sha256(outputs.json_path.read_bytes()).hexdigest())
+        frame = Store(writable_root).sql("SELECT * FROM derived.labels ORDER BY session")
+        frames.append(frame.to_dicts())
+    assert digests[0] == digests[1]
+    assert frames[0] == frames[1]
+
+
+def test_a12_the_write_outcome_reason_is_declared_for_every_state() -> None:
+    """A8: el motivo del resultado nunca es un valor mudo."""
+    for outcome in (None, "created", "unchanged", "superseded"):
+        assert write_outcome_reason(outcome)
+    assert "identicas" in write_outcome_reason("unchanged")
+    assert "version" in write_outcome_reason("superseded")
+    assert "funcion pura" in write_outcome_reason(None)
 
 
 def test_the_t0_entry_price_fails_declared_and_never_falls_back_silently(
@@ -1051,7 +1298,7 @@ def test_a_second_identical_run_is_a_no_op_and_another_k_supersedes(writable_roo
     assert row_count() == expected
 
     third = label_and_write(data_root=writable_root, reports_dir=reports, now=NOW, k_sigma=1.5)
-    assert third[1].outcome == "created"
+    assert third[1].outcome == "superseded"
     assert row_count() == expected, "la vista devuelve una sola fila vigente por sesion"
     versions = (
         store.sql("SELECT DISTINCT version AS version FROM derived.labels")
@@ -1206,22 +1453,30 @@ def test_the_report_declares_the_persistence_conventions(run: LabelsRun) -> None
 
 
 def test_the_markdown_states_the_semantics_and_the_divergence(run: LabelsRun) -> None:
-    """A1/A6/A10/A16/A33: el ``.md`` dice lo mismo que el JSON, en prosa."""
+    """A9/A10: el ``.md`` dice lo mismo que el JSON, en prosa y con la decision cerrada."""
     markdown = render_markdown(run)
     for text in (
         "favorable",
         "adversa",
         "sin redondear",
         "no del CFD",
-        "`not_tradable` = `true`",
-        "`diverges_from_owner_decision` = `true`",
-        "`contradicts_plan_md_4_1` = `true`",
+        "`not_tradable` = `false`",
+        "`diverges_from_owner_decision` = `false`",
+        "`contradicts_plan_md_4_1` = `false`",
+        "coincide",
+        "§4.1",
         "#61",
+        "#63",
+        "son una validacion de la estrategia",
         "cota inferior",
         "13:00 ET",
         "16:00 ET",
     ):
         assert text in markdown, f"falta {text!r} en el informe legible"
+    assert "**no** se reescribe" in markdown
+    assert "t0_snapshot_0845_et" in markdown and "falla con un motivo declarado" in markdown
+    limitations = cast("list[str]", report_payload(run)["limitations"])
+    assert not any("contradice" in item for item in limitations), limitations
 
 
 def test_a_custom_k_is_published_as_its_own_scenario(writable_root: Path) -> None:
@@ -1271,3 +1526,10 @@ def test_the_real_store_reproduces_the_declared_coverage() -> None:
     assert _number(result.sample["labelled"]) > 2600
     assert len(result.limitations) >= 7
     assert _number(_dict(result.inputs["clean_sample"])["clean_sessions"]) == 3192
+    # A6/A7 sobre el almacen real: el `open` diario **es** el *print* de la subasta.
+    auction = _dict(_dict(report_payload(result)["entry_price"])["auction_verification"])
+    assert auction["status"] == "ok"
+    assert _number(auction["sessions_compared"]) == 59
+    assert _number(auction["identical"]) == 59
+    assert _number(auction["max_abs_diff_bp"]) == 0.0
+    assert auction["mismatches"] == []
