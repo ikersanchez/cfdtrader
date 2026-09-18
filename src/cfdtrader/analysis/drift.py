@@ -24,6 +24,12 @@ Se calcula también la **tasa base** (% de sesiones alcistas y distribución de
 **régimen de volatilidad** (terciles de volatilidad realizada de 20 sesiones,
 medida *antes* de la sesión: nunca con datos del futuro).
 
+La regla de la muestra limpia (el artefacto del `open` repetido, issue #52) es la
+**definición única** del proyecto: la comparten este estudio y el de volatilidad
+(#7). Vive en :func:`session_stale_open`, :func:`clean_sample_cutoff` y
+:func:`clean_sample`, que el estudio de volatilidad importa de aquí en lugar de
+reimplementarla.
+
 Limitación que el informe declara en vez de esconder: esto se mide sobre
 **``^GSPC``**, que es el subyacente, no el ``SPX500:CFD``. El CFD lo replica con
 diferencial y financiación, así que **el signo de la conclusión se traslada, la
@@ -240,20 +246,12 @@ def load_sessions(store: Store, *, series_id: str) -> pl.DataFrame:
             f"{frame.height}. Ejecuta antes la ingesta de mercado (tarea #3)."
         )
 
-    frame = frame.with_columns(
-        pl.col("close").shift(1).alias("prev_close"),
-        pl.col("as_of").dt.convert_time_zone("America/New_York").dt.date().alias("session"),
-    ).filter(pl.col("prev_close").is_not_null())
+    frame = session_stale_open(frame).filter(pl.col("prev_close").is_not_null())
 
     frame = frame.with_columns(
         (pl.col("close") / pl.col("open") - 1.0).alias(DriftSegment.INTRADAY.value),
         (pl.col("open") / pl.col("prev_close") - 1.0).alias(DriftSegment.OVERNIGHT.value),
         (pl.col("close") / pl.col("prev_close") - 1.0).alias(DriftSegment.TOTAL.value),
-        # Artefacto de la fuente: en el histórico antiguo de Yahoo el `open` diario
-        # del índice es el **cierre anterior repetido**, y eso hace que el tramo
-        # nocturno de esa sesión sea 0 por construcción y que la sesión se quede
-        # con todo el retorno. Hay que medirlo antes de creerse el veredicto.
-        (pl.col("open") == pl.col("prev_close")).alias("open_stale"),
     )
     # Volatilidad realizada de las 20 sesiones ANTERIORES: régimen ex-ante, sin
     # mirar la sesión que se está clasificando.
@@ -288,8 +286,8 @@ def decompose(frame: pl.DataFrame, *, series_id: str, source: str, as_of: dateti
     by_year = tuple(_by_year(frame))
 
     stale_share = _float_of(frame.get_column("open_stale").mean())
-    clean_from = _clean_from(by_year)
-    clean = _clean_frame(frame, clean_from)
+    clean_from = clean_sample_cutoff(frame)
+    clean = clean_sample(frame, cutoff=clean_from)
     clean_segments = (
         tuple(_segment(clean, name) for name in DRIFT_SEGMENTS) if clean is not None else ()
     )
@@ -354,30 +352,95 @@ def decompose(frame: pl.DataFrame, *, series_id: str, source: str, as_of: dateti
     )
 
 
-def _clean_from(by_year: tuple[dict[str, object], ...]) -> date | None:
+def _float_of(value: object) -> float:
+    """Número de un escalar de polars, o 0.0 si no lo es."""
+    return float(value) if isinstance(value, (int, float)) else 0.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Muestra limpia (#52) — DEFINICIÓN ÚNICA
+# ─────────────────────────────────────────────────────────────────────────────
+# La regla del artefacto del `open` repetido vive **aquí y solo aquí**: la
+# comparten el estudio del drift (#6) y el de volatilidad (#7,
+# `analysis/volatility_forecast.py`), que la importa. Duplicarla permitiría que
+# los dos estudios decidieran sobre muestras distintas sin que nadie se enterase.
+# Las constantes `STALE_OPEN_TOLERANCE` y `MIN_CLEAN_SESSIONS` forman parte de la
+# definición y se declaran arriba, junto al resto de parámetros del estudio.
+
+
+def session_stale_open(frame: pl.DataFrame) -> pl.DataFrame:
+    """Añade ``prev_close``, ``session`` (fecha ET) y ``open_stale`` a un frame OHLC.
+
+    ``open_stale`` es el artefacto de la fuente que documenta #52: en el histórico
+    antiguo de Yahoo el ``open`` diario del índice es el **cierre anterior
+    repetido**, así que el tramo nocturno de esa sesión es cero por construcción y
+    la sesión se queda con todo el retorno. Vale ``True`` cuando ``open`` es
+    exactamente el cierre anterior; la primera fila queda a ``null`` (no hay sesión
+    anterior que la preceda). El frame debe venir ordenado por ``as_of`` y traer
+    ``open`` y ``close``.
+
+    La clave de sesión se deriva en **``America/New_York``** (nunca de la fecha
+    UTC): es lo que hace que las sesiones a caballo del cambio de hora sean
+    contiguas y no se dupliquen (A19).
+    """
+    return frame.with_columns(
+        pl.col("close").shift(1).alias("prev_close"),
+        pl.col("as_of").dt.convert_time_zone("America/New_York").dt.date().alias("session"),
+    ).with_columns((pl.col("open") == pl.col("prev_close")).alias("open_stale"))
+
+
+def yearly_stale_open_share(frame: pl.DataFrame) -> list[tuple[int, int, float]]:
+    """Por año: ``(año, sesiones, proporción de sesiones con el ``open`` repetido)``.
+
+    Requiere un frame que ya haya pasado por :func:`session_stale_open`.
+    """
+    grouped = (
+        frame.group_by(pl.col("session").dt.year().alias("year"))
+        .agg(
+            pl.len().alias("sessions"),
+            pl.col("open_stale").mean().alias("stale_open_share"),
+        )
+        .sort("year")
+    )
+    return [
+        (
+            int(str(row["year"])),
+            int(str(row["sessions"])),
+            _float_of(row["stale_open_share"]),
+        )
+        for row in grouped.iter_rows(named=True)
+    ]
+
+
+def clean_sample_cutoff(frame: pl.DataFrame) -> date | None:
     """Primer 1 de enero desde el que **ningún** año posterior tiene `open` repetido.
 
-    Se calcula con el dato, no con una fecha a mano: si mañana la fuente arregla el
-    histórico antiguo, la muestra limpia se amplía sola.
+    Regla de #52, una sola vez: se recorre cada año y se exige que **todos** los
+    años desde él cumplan la tolerancia. Se calcula con el dato, no con una fecha a
+    mano: si mañana la fuente arregla el histórico antiguo, la muestra limpia se
+    amplía sola. Devuelve ``None`` si ningún año la cumple.
+
+    Requiere un frame que ya haya pasado por :func:`session_stale_open`.
     """
-    years = sorted(int(str(row["year"])) for row in by_year)
-    stale = {int(str(row["year"])): _float_of(row["stale_open_share"]) for row in by_year}
+    yearly = yearly_stale_open_share(frame)
+    years = [year for year, _, _ in yearly]
+    stale = {year: share for year, _, share in yearly}
     for year in years:
         if all(stale[later] <= STALE_OPEN_TOLERANCE for later in years if later >= year):
             return date(year, 1, 1)
     return None
 
 
-def _float_of(value: object) -> float:
-    """Número de un escalar de polars, o 0.0 si no lo es."""
-    return float(value) if isinstance(value, (int, float)) else 0.0
+def clean_sample(frame: pl.DataFrame, *, cutoff: date | None) -> pl.DataFrame | None:
+    """Muestra sin el artefacto del `open` repetido, si alcanza para decidir.
 
-
-def _clean_frame(frame: pl.DataFrame, clean_from: date | None) -> pl.DataFrame | None:
-    """Muestra sin el artefacto del `open` repetido, si alcanza para decidir."""
-    if clean_from is None:
+    Exige el **mínimo de 250 sesiones** de #52. Devuelve ``None`` cuando no hay
+    corte o cuando la muestra resultante es más corta: decidir con menos sesiones
+    que eso no es decidir.
+    """
+    if cutoff is None:
         return None
-    clean = frame.filter(pl.col("session") >= clean_from).filter(~pl.col("open_stale"))
+    clean = frame.filter(pl.col("session") >= cutoff).filter(~pl.col("open_stale"))
     return clean if clean.height >= MIN_CLEAN_SESSIONS else None
 
 
