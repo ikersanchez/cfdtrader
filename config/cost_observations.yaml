@@ -1,0 +1,91 @@
+# Observaciones de coste del SPX500:CFD — plantilla de captura (tarea #8).
+#
+# Esquema: `src/cfdtrader/analysis/cost_audit.py` (Pydantic; un campo desconocido
+# NO se ignora en silencio: `extra="forbid"`).
+#
+# REGLA QUE MANDA EN TODO EL FICHERO: `null` significa «no medido» y **nunca** se
+# sustituye por 0. Un `0` numérico solo se admite en el informe acompañado de
+# `state: "measured"`, de su fuente y de su motivo. Un cero de relleno es
+# indistinguible de una medición y arruina la auditoría.
+#
+# Esta plantilla se commitea VACÍA a propósito: la rellena un humano a mano, porque
+# nadie mide por ti. Con todo a `null` el script escribe igualmente un informe
+# completo: la tabla declarada de `plan.md` §3.3 más las tres medidas en
+# `unmeasured`.
+#
+# Uso:
+#   uv run python -m cfdtrader.analysis.cost_audit [--template config/cost_observations.yaml]
+#
+# Códigos de salida: 0 = informe escrito (aunque falten medidas); 2 = no se puede
+# consolidar ni siquiera lo declarado (plantilla ilegible o campo obligatorio
+# ausente) ⇒ no se escribe informe y el motivo sale por stderr.
+
+# ── 1. Ventana de cotización (entrada CONFIRMADA, no es una medición) ────────────
+# Sesión regular del S&P 500, `09:30–16:00` en `America/New_York`, con procedencia
+# «declaración del usuario» y fecha 2026-09-18 (registradas en el código). Las
+# fronteras NO se escriben aquí: las deriva `cfdtrader.data.calendar.MarketCalendar`
+# en `America/New_York`, con el DST de EE. UU. incluido (nunca una hora fija Madrid/CET).
+# Se deja a `null` porque no hay nada que medir y no vuelve a marcarse como pendiente.
+trading_window: null
+
+# ── 2. Divisa de liquidación (entrada CONFIRMADA, no es una medición) ────────────
+# Confirmada como USD el 2026-09-18. Con el nocional liquidado en USD el coste de
+# conversión es 0 %, pero es un **cero con motivo**, no un cero silencioso: el
+# informe lo publica junto a su fuente. `null` = la declaración del usuario (USD).
+# OJO: eso es el *coste de conversión*; la **exposición de divisa** de una cuenta en
+# EUR con nocional en USD es otra cosa y queda fuera de alcance aquí → #27.
+settlement_currency: null
+
+# ── 3. Corte de financiación: SIGUE SIN VERIFICAR (a 2026-09-18) ─────────────────
+# ⚠️ Es la verificación más crítica de la Fase 0 (`plan.md` §8.5 y §21 pregunta 3).
+# `null` = desconocido, y así se publica (`state: "unverified"`, `value: null`).
+# PROHIBIDO asumir las 16:00 ET: si el corte cae antes, el intradía puro pagaría
+# tenencia igualmente. Pregunta literal al bróker (el informe la reproduce):
+#   «¿en qué instante exacto se cobra el coste de tenencia (*swap*) de una posición
+#    en `SPX500:CFD`, en hora del bróker y su equivalente en `America/New_York`?
+#    ¿Se cobra por noche de calendario o por sesión?»
+# Cuando el bróker conteste, se escribe aquí el instante ISO-8601 **con zona horaria**.
+financing_cut: null
+
+# ── 4. Mínimo absoluto de comisión o de spread en puntos (`plan.md` §21 pregunta 5) ──
+# Si el bróker aplica una comisión mínima fija o un spread mínimo en puntos, se
+# declara aquí y el informe marca `size_scaling_anomaly` en los tamaños afectados,
+# en vez de promediar. `null` = no declarado (no verificado), que NO es 0: un mínimo
+# de 0 sería «sin mínimo» y por eso el esquema lo rechaza. Debe ser > 0.
+minimum_commission_usd: null
+
+# ── 5. Spread cotizado: `ask − bid` anotado a mano, por tramo de sesión ──────────
+# Cada observación necesita su `timestamp_utc` **con zona horaria** (se guarda en
+# UTC), el nocional sobre el que se mide y `bid`/`ask`. El código asigna cada
+# observación a su tramo por su hora ET, relativa a la apertura y al cierre de la
+# sesión (09:20 pre-subasta, 09:35 recién abierto, 11:00 mediodía, 15:45 pre-cierre,
+# 16:00 cierre). El diferencial en % se calcula sobre el nocional, como declara
+# `plan.md` §3.3 (0,42 $ sobre 10.000 $ = 0,0042 %).
+spread_observations: []
+#   - timestamp_utc: "2026-09-18T13:20:00+00:00"   # = 09:20 ET (-04:00)
+#     notional_usd: 10000
+#     bid: 5000.00
+#     ask: 5000.42
+
+# ── 6. Tracking difference: CFD vs índice, pareados en el MISMO instante ────────
+# Nunca se aproxima con una media diaria: o hay par (mismo instante, dentro de la
+# tolerancia declarada de 1 s) o la medida sale `unmeasured`. Se publica en puntos
+# de índice y en % del índice.
+tracking_pairs: []
+#   - series_id: "^GSPC"                            # o "ES=F"
+#     cfd_timestamp_utc: "2026-09-18T13:20:00+00:00"
+#     cfd_price: 5000.50
+#     index_timestamp_utc: "2026-09-18T13:20:00+00:00"
+#     index_price: 5000.00
+
+# ── 7. Ejecuciones reales (hoy: NINGUNA) ────────────────────────────────────────
+# El *slippage* de ejecución solo se considera MEDIDO si existe una ejecución real o
+# una referencia ejecutable con timestamp preciso (`plan.md` §8.5). Hasta entonces el
+# informe publica `slippage_ejecucion.state = "unmeasured"`, `value = null`, el motivo
+# y el procedimiento para rellenarlo. Prohibido cualquier valor de relleno.
+executions: []
+#   - timestamp_utc: "2026-09-18T13:30:05+00:00"    # instante de la orden
+#     side: long                                    # long | short
+#     notional_usd: 10000
+#     reference_price: 5002.00                      # precio de referencia del instante
+#     filled_price: 5003.10                         # precio obtenido de verdad
