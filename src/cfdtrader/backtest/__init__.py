@@ -26,4 +26,17 @@ del plan y su ``run_sha256`` reproducible byte a byte. El reparto es «**#11 cob
 recorre y simula**»: el coste sale de una única llamada a ``cost_breakdown`` por operación.
 No lee el ``Store``, no construye los ``SessionInput`` y no escribe el informe: eso es el
 adaptador de almacén **#69**.
+
+Los **baselines triviales** viven en ``cfdtrader.backtest.baselines`` (tarea #14): las seis
+reglas de ``plan.md`` §11.2 —no operar, siempre largo (el listón **A** ``open`` -> cierre,
+explícitamente identificado), siempre corto, momentum 5d, reversión de *gap* y regla
+aleatoria con la misma frecuencia— como funciones **puras y deterministas** que entregan una
+``DecisionFn`` por fold. El reparto es «**#13 ejecuta y cobra; #14 solo decide**»: el módulo
+no llama a ``cost_breakdown``, no construye un ``CostBreakdown`` y su único camino de
+ejecución es ``run_walk_forward``, que exige ``cost_model`` y ``slippage`` sin valor por
+defecto, de modo que ningún baseline puede producir un resultado sin coste. Los listones
+**B** (aguantar la posición, con la financiación del CFD) y **C** (índice puro, no
+invertible) quedan **fuera** y declarados: son #70 y #28. La corrida real sobre el histórico
+y la tabla comparativa de métricas netas son el informe de Fase 1 (**#18**), con las
+métricas de **#15** y el adaptador de almacén **#69**.
 """
