@@ -44,7 +44,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from enum import Enum
 from fractions import Fraction
 from pathlib import Path
 from typing import Final, cast
@@ -730,11 +729,8 @@ def build_inputs(history: History, *, calendar: MarketCalendar) -> Universe:
         )
 
     daily_by_session: dict[date, Mapping[str, object]] = {}
-    for row in daily.iter_rows(named=True):
-        session = row["session"]
-        if session is None:
-            continue
-        daily_by_session[cast("date", session)] = cast("Mapping[str, object]", row)
+    for row in daily.filter(pl.col("session").is_not_null()).iter_rows(named=True):
+        daily_by_session[cast("date", row["session"])] = cast("Mapping[str, object]", row)
     clean_sessions = {cast("date", value) for value in clean.get_column("session").to_list()}
 
     grouped = _group_intraday(history.intraday)
@@ -750,10 +746,13 @@ def build_inputs(history: History, *, calendar: MarketCalendar) -> Universe:
         elif not _ohlc_complete(row):
             reason = "missing_ohlc"
         elif session not in clean_sessions:
-            if cutoff is not None and session < cutoff:
-                reason = "before_clean_cutoff"
-            elif row.get("open_stale") is None:
+            # Primero el defecto **estructural** de la fila (no hay sesion previa con la que
+            # comparar el `open`), y solo despues la ventana limpia: una fila antes del corte
+            # con `open` no fresco se atribuye a la ventana, no a la regla de #52 (A6, A7).
+            if row.get("open_stale") is None:
                 reason = "no_previous_session"
+            elif cutoff is not None and session < cutoff:
+                reason = "before_clean_cutoff"
             else:
                 reason = "stale_open"
         if reason is not None:
@@ -906,15 +905,20 @@ def _fraction_text(value: Fraction | None) -> str | None:
 
 
 def _exit_counts(sessions: Sequence[SessionOutcome]) -> dict[str, int]:
-    """Recuento por motivo de salida, con orden estable (A20, A23)."""
+    """Recuento por motivo de salida, con orden **estable** (A20, A23).
+
+    Los tres motivos declarados van siempre, aunque valgan 0 (un cero medido no es un valor
+    inventado); cualquier motivo que #13 pudiera anadir algun dia se publica tambien, al final
+    y en orden alfabetico, para que ninguna operacion desaparezca de la tabla.
+    """
     raw: dict[str, int] = {}
     for outcome in sessions:
         if outcome.exit_reason is None:
             continue
         raw[outcome.exit_reason] = raw.get(outcome.exit_reason, 0) + 1
     counts: dict[str, int] = {reason: raw.get(reason, 0) for reason in EXIT_REASONS}
-    for reason in sorted(set(raw) - set(EXIT_REASONS)):
-        counts[reason] = raw[reason]
+    for reason in sorted(raw):
+        counts.setdefault(reason, raw[reason])
     return counts
 
 
@@ -1008,9 +1012,10 @@ def _baseline_row(outcome: BaselineOutcome, *, n_inputs: int) -> dict[str, objec
 def _jsonable(value: object, *, where: str) -> object:
     """Traduce un valor a tipo JSON puro, o falla con error tipado (A24).
 
-    ``Decimal`` viaja como cadena decimal **exacta** (``format(d, 'f')``), las fechas como
-    ISO-8601, los ``Fraction`` como texto y los enums por su valor. Un ``float`` no finito es
-    un error: el JSON nunca lleva ``nan`` ni ``inf``, y **no** se escriben como ``0``.
+    ``Decimal`` viaja como cadena decimal **exacta** (``format(d, 'f')``) y los ``float`` no
+    finitos son un error: el JSON nunca lleva ``nan`` ni ``inf``, y **no** se escriben como
+    ``0``. Las fechas y los ``Fraction`` no llegan aqui: se convierten antes, en el sitio donde
+    se construye el bloque (``_date_text``, ``_fraction_text``).
     """
     if value is None or isinstance(value, (str, bool)):
         return value
@@ -1022,20 +1027,14 @@ def _jsonable(value: object, *, where: str) -> object:
         return value
     if isinstance(value, Decimal):
         return format(value, "f")
-    if isinstance(value, Fraction):
-        return _fraction_text(value)
-    if isinstance(value, Enum):
-        return str(value.value)
     if isinstance(value, Mapping):
         mapping = cast("Mapping[object, object]", value)
         return {str(key): _jsonable(item, where=f"{where}.{key}") for key, item in mapping.items()}
     if isinstance(value, (list, tuple)):
         sequence = cast("Sequence[object]", value)
         return [_jsonable(item, where=f"{where}[{index}]") for index, item in enumerate(sequence)]
-    if isinstance(value, (datetime, date)):
-        return value.isoformat()
     raise BacktestReportError(
-        f"{where}: el informe solo admite tipos JSON, Decimal, Fraction, Enum y fechas; llego "
+        f"{where}: el informe solo admite tipos JSON, Decimal y secuencias; llego "
         f"{type(value).__name__} (A24)"
     )
 
@@ -1455,15 +1454,15 @@ def _as_utc(value: datetime) -> datetime:
 
 
 def _calendar_years(daily: pl.DataFrame) -> tuple[int, ...]:
-    """Años que el calendario necesita materializar, tomados del dato (nunca del reloj)."""
+    """Años que el calendario necesita materializar, tomados del dato (nunca del reloj).
+
+    ``daily`` viene de :func:`load_history`, que ya rechaza un frame vacio: aqui se asume esa
+    precondicion y no se inventa ningun rango por defecto.
+    """
     sessions = daily.get_column("session")
-    if sessions.is_empty():
-        return ()
-    first = sessions.min()
-    last = sessions.max()
-    if first is None or last is None:
-        return ()
-    return tuple(range(int(str(first)[:4]), int(str(last)[:4]) + 1))
+    first = cast("date", sessions.min())
+    last = cast("date", sessions.max())
+    return tuple(range(first.year, last.year + 1))
 
 
 def analyse(

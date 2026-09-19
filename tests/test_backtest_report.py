@@ -76,7 +76,11 @@ from cfdtrader.backtest.baselines import (
     RANDOM_MATCHED,
     InvalidBaselineParameterError,
 )
-from cfdtrader.backtest.costs import declared_cost_model, declared_slippage_assumption
+from cfdtrader.backtest.costs import (
+    SlippageParameter,
+    declared_cost_model,
+    declared_slippage_assumption,
+)
 from cfdtrader.backtest.engine import (
     STATUS_TRADED,
     EngineInputError,
@@ -275,12 +279,19 @@ def _history_from_records(
     label_sessions: Sequence[date],
     intraday: Sequence[Mapping[str, object]] = (),
 ) -> History:
-    """``History`` en memoria: permite fijar el ``as_of`` de cada fila al segundo."""
+    """``History`` en memoria: permite fijar el ``as_of`` de cada fila al segundo.
+
+    Las etiquetas se **ordenan** por sesion, igual que el ``ORDER BY session`` de
+    ``load_history``: el helper reproduce el ``History`` que produce el adaptador y no uno en
+    desorden, que haria saltar la validacion de A12 por culpa de la fixture.
+    """
     daily_frame = pl.DataFrame([dict(item) for item in daily]).with_columns(
         pl.col("as_of").cast(pl.Datetime("us", "UTC"))
     )
-    labels_frame = pl.DataFrame({"session": list(label_sessions)}).with_columns(
-        pl.col("session").cast(pl.Date())
+    labels_frame = (
+        pl.DataFrame({"session": list(label_sessions)})
+        .with_columns(pl.col("session").cast(pl.Date()))
+        .sort("session")
     )
     if intraday:
         intraday_frame = (
@@ -457,6 +468,7 @@ def test_a3_as_of_is_mandatory_to_write(
     assert not reports.exists()
 
     stem = f"{REPORT_PREFIX}_{NOW.date().isoformat()}"
+    # Sin zona horaria: se interpreta como UTC (A2) y la fecha del nombre no cambia.
     assert (
         main(
             [
@@ -465,7 +477,7 @@ def test_a3_as_of_is_mandatory_to_write(
                 "--reports-dir",
                 str(reports),
                 "--as-of",
-                NOW.isoformat(),
+                "2026-09-19T00:00:00",
             ]
         )
         == 0
@@ -551,6 +563,29 @@ def test_a6_excluded_sessions_carry_a_reason(tmp_path: Path) -> None:
     assert excluded[orphan.isoformat()] == "no_daily_row"
     assert all(item.open_px is not None for item in report.universe.inputs)
     assert broken not in [item.session for item in report.universe.inputs]
+
+
+def test_a6_clean_rule_reasons_are_declared() -> None:
+    """A6/A7: los otros dos motivos de exclusion se declaran con su causa real."""
+    sessions = _business_days(date(2023, 1, 2), 600)
+    records = _daily_records(sessions)
+    stale_2024 = next(index for index, day in enumerate(sessions) if day.year == 2024)
+    for index, day in enumerate(sessions):
+        if index == 0:
+            continue
+        # 2023 entero con el `open` repetido de #52 (su cuota anual supera la tolerancia),
+        # mas una sola sesion de 2024 (su cuota anual no la supera).
+        if day.year == 2023 or index == stale_2024:
+            records[index] = {**records[index], "open": records[index - 1]["close"]}
+
+    history = _history_from_records(records, label_sessions=sessions)
+    universe = build_inputs(history, calendar=load_calendar(years=(2023, 2024, 2025)))
+    assert universe.clean_from == date(2024, 1, 1)
+    reasons = {_mapping(item)["session"]: _mapping(item)["reason"] for item in universe.excluded}
+    assert reasons[sessions[5].isoformat()] == "before_clean_cutoff"
+    assert reasons[sessions[stale_2024].isoformat()] == "stale_open"
+    assert reasons[sessions[0].isoformat()] == "no_previous_session"
+    assert all(item.open_px is not None for item in universe.inputs)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -653,6 +688,27 @@ def test_a10_intraday_counts_and_window(tmp_path: Path, real_report: BacktestRep
     assert reported["sessions_with_daily_fallback"] == len(report.universe.inputs) - 1
     partial = next(entry for entry in report.universe.inputs if entry.session != session)
     assert partial.bars is None
+
+
+def test_a10_null_rows_and_non_sessions_are_declared() -> None:
+    """A10: una barra con el rango incompleto se descarta y una fecha sin sesion no aporta."""
+    sessions = _business_days(date(2024, 1, 2), 260)
+    saturday = date(2024, 6, 8)  # no es sesion del mercado
+    records = _daily_records([*sessions, saturday])
+    intraday = [
+        *_intraday_records(sessions[5], ((15, 0),)),
+        *_intraday_records(saturday, ((15, 0),)),
+    ]
+    intraday[0] = {**intraday[0], "high": None, "low": None}
+
+    history = _history_from_records(
+        records, label_sessions=[*sessions, saturday], intraday=intraday
+    )
+    universe = build_inputs(history, calendar=load_calendar(years=(2024,)))
+    by_session = {item.session: item for item in universe.inputs}
+    assert by_session[sessions[5]].bars is None  # la unica barra venia con el rango incompleto
+    assert by_session[saturday].bars is None  # el calendario dice que ese dia no hay sesion
+    assert universe.intraday_sessions == 0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -954,6 +1010,14 @@ def test_a19_pnl_net_is_null_everywhere(real_report: BacktestReport) -> None:
     assert "SlippageParameter.measured" not in SOURCE
     assert _block(real_report, "limits", "slippage")["r_pct"] is None
 
+    # Un *slippage* sin medicion ni supuesto publica `null`, **nunca** 0 (regla `null != 0`).
+    unmeasured = SlippageParameter.unmeasured(reason="prueba: no hay medicion ni supuesto")
+    missing = backtest_report._slippage_payload(unmeasured)  # pyright: ignore[reportPrivateUsage]
+    assert missing["state"] == "unmeasured"
+    assert missing["pct_of_r"] is None
+    assert missing["pct_of_r_declared_percent"] is None
+    assert missing["r_pct"] is None
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # A20 · Tabla comparativa declarada
@@ -1082,6 +1146,18 @@ def test_a24_canonical_text_and_hash(real_report: BacktestReport) -> None:
     model = _block(real_report, "cost_model")
     assert isinstance(model["spread_entry_pct"], str)
     assert "e-" not in json.dumps(model, ensure_ascii=False)
+
+    # El serializador rechaza `nan`/`inf` y cualquier tipo que no sea JSON: la unica via
+    # admitida para un valor no medido es `null`, nunca un numero inventado.
+    serializer = backtest_report._jsonable  # pyright: ignore[reportPrivateUsage]
+    assert serializer(Decimal("0.20"), where="prueba") == "0.20"
+    assert serializer(None, where="prueba") is None
+    assert serializer([1, (2, "3")], where="prueba") == [1, [2, "3"]]
+    for poisoned in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(BacktestReportError):
+            serializer(poisoned, where="prueba")
+    with pytest.raises(BacktestReportError):
+        serializer(object(), where="prueba")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1277,6 +1353,41 @@ def test_a30_typed_errors_and_unwrapped_contract_errors(
     reports = tmp_path / "cli"
     assert main(["--data-root", str(tmp_path / "small"), "--reports-dir", str(reports)]) == 2
     assert not reports.exists()
+    # Con `--as-of` valido pero una muestra insuficiente: mismo codigo, sin escribir.
+    assert (
+        main(
+            [
+                "--data-root",
+                str(tmp_path / "small"),
+                "--reports-dir",
+                str(reports),
+                "--as-of",
+                NOW.isoformat(),
+            ]
+        )
+        == 2
+    )
+    assert not reports.exists()
+
+    # Un dataset que existe pero sin la serie pedida: recuento cero, error tipado.
+    other_series = Store(tmp_path / "other_series")
+    other_series.append(
+        "raw",
+        "market_daily",
+        [{**record, "series_id": "SPY"} for record in _daily_records(SYNTHETIC_SESSIONS[:20])],
+    )
+    with pytest.raises(MissingDatasetError):
+        load_history(other_series)
+
+    other_labels = Store(tmp_path / "other_labels")
+    other_labels.append("raw", "market_daily", _daily_records(SYNTHETIC_SESSIONS[:20]))
+    other_labels.append(
+        "derived",
+        "labels",
+        [{**record, "series_id": "SPY"} for record in _labels_records(SYNTHETIC_SESSIONS[:20])],
+    )
+    with pytest.raises(MissingDatasetError):
+        load_history(other_labels)
 
     # Un plan imposible por tamaño: el `InsufficientSessionsError` de #12 sale tal cual.
     ten = tuple(
