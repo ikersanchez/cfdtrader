@@ -39,4 +39,18 @@ defecto, de modo que ningún baseline puede producir un resultado sin coste. Los
 invertible) quedan **fuera** y declarados: son #70 y #28. La corrida real sobre el histórico
 y la tabla comparativa de métricas netas son el informe de Fase 1 (**#18**), con las
 métricas de **#15** y el adaptador de almacén **#69**.
+
+Las **métricas netas y de calibración** viven en ``cfdtrader.backtest.metrics`` (tarea #15):
+el límite de agregación que consume las ``SessionOutcome`` de #13 y publica Sharpe y Sortino
+netos con intervalo *bootstrap*, EV por operación, hit rate, payoff, *profit factor*,
+drawdown máximo y duración **en sesiones de la serie de riesgo**, Brier, *log-loss*, curva de
+calibración, rotación y coste total acumulado, además de la separación alfa/beta contra el
+*benchmark*. El reparto es «**#13 ejecuta; #15 agrega**»: nunca sustituye un ``pnl_net_pct``
+nulo por ``pnl_declared_pct`` ni por ``0``, no publica ``inf`` ni ``nan`` (``null != 0``) y
+suma el dinero en ``Decimal``. ``alpha_pct`` es el alfa de Jensen, no la diferencia de medias
+(esa va en ``mean_excess_return_pct``), y ``trades_per_year`` solo se publica si el span
+sostiene la anualización. Con el supuesto de *slippage* de #64 el total no se cierra y toda
+corrida operada es un error **declarado** (#62 mide el *slippage* y #60 decide ``R``). No lee
+el ``Store`` (adaptador #69), no alinea series por fecha, no escribe el informe (#18) y no
+decide (el *gate* es #27).
 """
