@@ -1002,14 +1002,14 @@ def _experiment_outcome(
             f"el experimento {name!r} tiene {len(matrix[0])} columnas y {len(records)} registros"
         )
     selected_index = select_variant(matrix)
+    selected_dsr = deflate_block(
+        returns=tuple(row[selected_index] for row in matrix), registry=registry
+    )
     pbo = pbo_block(returns_matrix=matrix, blocks=blocks)
     rows: list[dict[str, object]] = []
-    selected_dsr: dict[str, object] | None = None
     for index, record in enumerate(records):
         column = tuple(row[index] for row in matrix)
         dsr = deflate_block(returns=column, registry=registry)
-        if index == selected_index:
-            selected_dsr = dsr
         rows.append(
             {
                 "variant_id": record.config.variant_id,
@@ -1028,8 +1028,6 @@ def _experiment_outcome(
                 "verdict": dsr["verdict"],
             }
         )
-    if selected_dsr is None:  # pragma: no cover - `select_variant` siempre devuelve un indice
-        raise ExperimentLogError(f"el experimento {name!r} no tiene variante seleccionada")
     return ExperimentOutcome(
         name=name,
         matrix=matrix,
