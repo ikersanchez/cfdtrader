@@ -61,7 +61,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
-from typing import Final, Literal, overload
+from typing import Final, Literal
 
 import numpy as np
 import numpy.typing as npt
@@ -270,15 +270,8 @@ class PerformanceMetrics:
         }
 
 
-@overload
-def _outcomes(result: BacktestRun) -> tuple[SessionOutcome, ...]: ...
-
-
-@overload
-def _outcomes(result: Iterable[SessionOutcome]) -> tuple[SessionOutcome, ...]: ...
-
-
 def _outcomes(result: BacktestRun | Iterable[SessionOutcome]) -> tuple[SessionOutcome, ...]:
+    """The ordered session outcomes of a run (its folds) or of a plain iterable."""
     if isinstance(result, BacktestRun):
         return tuple(outcome for fold in result.folds for outcome in fold.sessions)
     return tuple(result)
@@ -675,30 +668,31 @@ def _probability_metrics(
     *,
     n_bins: int,
 ) -> tuple[float | None, float | None, tuple[CalibrationBin, ...]]:
-    with_probability = [
-        outcome
-        for outcome in traded
-        if outcome.decision is not None and outcome.decision.probability is not None
-    ]
-    if not with_probability:
+    """Brier, log-loss and the reliability curve of the declared probabilities (A11).
+
+    Either **all** traded sessions declare a probability or none does: a partial set would
+    silently change the sample the calibration is read on, so it is an error.
+    """
+    declared: list[float] = []
+    observed: list[bool] = []
+    answered = 0
+    for outcome in traded:
+        probability = None if outcome.decision is None else outcome.decision.probability
+        if probability is None:
+            continue
+        answered += 1
+        declared.append(probability)
+        observed.append(outcome.pnl_net_pct is not None and outcome.pnl_net_pct > 0.0)
+    if not declared:
         return None, None, ()
-    if len(with_probability) != len(traded):
+    if answered != len(traded):
         raise MetricsInputError("todas las operaciones deben declarar probability o ninguna")
-    probabilities: list[float] = []
-    for outcome in with_probability:
-        decision = outcome.decision
-        if decision is None or decision.probability is None:
-            raise MetricsInputError("probability no puede desaparecer durante la agregación")
-        probabilities.append(decision.probability)
-    probability_values = tuple(probabilities)
-    observed = tuple(
-        bool(outcome.pnl_net_pct is not None and outcome.pnl_net_pct > 0.0)
-        for outcome in with_probability
-    )
+    probabilities = tuple(declared)
+    outcomes = tuple(observed)
     return (
-        brier_score(probability_values, observed),
-        log_loss(probability_values, observed),
-        calibration_curve(probability_values, observed, n_bins=n_bins),
+        brier_score(probabilities, outcomes),
+        log_loss(probabilities, outcomes),
+        calibration_curve(probabilities, outcomes, n_bins=n_bins),
     )
 
 
