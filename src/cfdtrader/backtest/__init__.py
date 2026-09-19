@@ -53,4 +53,14 @@ sostiene la anualización. Con el supuesto de *slippage* de #64 el total no se c
 corrida operada es un error **declarado** (#62 mide el *slippage* y #60 decide ``R``). No lee
 el ``Store`` (adaptador #69), no alinea series por fecha, no escribe el informe (#18) y no
 decide (el *gate* es #27).
+
+La **corrección por sobreajuste** vive en ``cfdtrader.backtest.overfitting`` (tarea #16):
+el **Deflated Sharpe Ratio** de Bailey y López de Prado (con el número **real** de variantes
+probadas, derivado del registro de experimentos, nunca de un parámetro suelto) y la
+**probabilidad de sobreajuste** por validación cruzada combinatoriamente simétrica (CSCV)
+sobre la matriz de retornos de las variantes. Es puro: stdlib (``statistics.NormalDist``),
+``numpy`` y los contratos de #13/#15, **sin** ``scipy``, sin ``cfdtrader.data`` y **sin**
+``cfdtrader.backtest.splits`` (el CSCV no decide particiones de entrenamiento: eso es #67).
+Todo entra **por sesión** y se publica con veredicto explícito; el instante y el disco son
+de ``cfdtrader.analysis.experiment_log``, que es quien escribe ``runs/<hash>/``.
 """
