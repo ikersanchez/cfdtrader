@@ -679,6 +679,42 @@ def test_a14_inadmissible_inputs_raise_metrics_input_error() -> None:
     with pytest.raises(MetricsInputError, match="declarar probability"):
         calculate_metrics(mixed, n_bootstrap=50)
 
+    # El borde de `seed` (A14): todo valor que el contrato admite, `[0, MAX_SEED)`, da un
+    # intervalo valido; el extremo superior ya no escapa como `ValueError` sin tipar.
+    top_seed = metrics_module.MAX_SEED - 1
+    top = calculate_metrics(_series(1.0, -0.5, 0.8), n_bootstrap=50, seed=top_seed)
+    assert top.sharpe_ci.seed == top_seed
+    assert top.sortino_ci.seed == 0
+    assert top.sharpe_ci.lower <= top.sharpe_ci.upper
+    assert top.sortino_ci.lower <= top.sortino_ci.upper
+
+    initial = calculate_metrics(_series(1.0, -0.5, 0.8), n_bootstrap=50, seed=0)
+    assert initial.sharpe_ci.seed == 0
+    assert initial.sortino_ci.seed == 1
+
+    for inadmissible_seed in (-1, metrics_module.MAX_SEED, metrics_module.MAX_SEED + 1):
+        with pytest.raises(MetricsInputError, match="seed"):
+            calculate_metrics(_series(1.0, -0.5, 0.8), n_bootstrap=50, seed=inadmissible_seed)
+
+    # El minimo admisible de `n_bootstrap` funciona; el barrido de `confidence_level`
+    # recorre los extremos abiertos y deja tipados 0, 1, fuera de rango, `nan` e `inf`.
+    minimum = calculate_metrics(_series(1.0, -0.5, 0.8), n_bootstrap=1, n_calibration_bins=1)
+    assert minimum.sharpe_ci.n_bootstrap == 1
+    assert minimum.sortino_ci.n_bootstrap == 1
+
+    for edge in (1e-9, 0.5, 1.0 - 1e-9):
+        edge_metrics = calculate_metrics(
+            _series(1.0, -0.5, 0.8), n_bootstrap=50, confidence_level=edge
+        )
+        assert edge_metrics.sharpe_ci.confidence_level == edge
+        assert edge_metrics.sharpe_ci.lower <= edge_metrics.sharpe_ci.upper
+
+    for inadmissible_confidence in (0.0, 1.0, -0.1, math.nan, math.inf):
+        with pytest.raises(MetricsInputError, match="confidence_level"):
+            calculate_metrics(
+                _series(1.0, -0.5, 0.8), n_bootstrap=50, confidence_level=inadmissible_confidence
+            )
+
 
 def test_a15_empty_and_all_skipped_series() -> None:
     with pytest.raises(MetricsInputError, match="el resultado no contiene sesiones"):

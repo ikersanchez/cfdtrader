@@ -292,6 +292,20 @@ def _validate_bootstrap(n_bootstrap: int, seed: int) -> None:
         )
 
 
+def _derive_seed(seed: int, *, offset: int) -> int:
+    """A seed derived from an admissible one, kept inside the generator range (A14).
+
+    ``seed`` is validated against ``[0, MAX_SEED)``, so any seed derived from it must stay
+    in that very interval: a plain ``seed + offset`` escapes it at the top edge
+    (``MAX_SEED - 1 + 1 == MAX_SEED``) and ``numpy.random.RandomState`` raises a bare
+    ``ValueError`` instead of the typed :class:`MetricsInputError`.  The reduction modulo
+    ``MAX_SEED`` makes the bound explicit and is a no-op for every interior seed, so the
+    frozen golden values are preserved (with the default ``seed=42`` the derived seed used
+    by the Sortino interval is still ``43``).
+    """
+    return (seed + offset) % MAX_SEED
+
+
 def _validate_returns(values: Sequence[float]) -> tuple[float, ...]:
     result = tuple(float(value) for value in values)
     if not result:
@@ -769,6 +783,11 @@ def calculate_metrics(
     ``n_sessions == n_trades + n_no_trade + n_skipped == len(outcomes)``,
     ``len(returns) == n_sessions - n_skipped == len(equity)`` and
     ``total_return_pct == (equity[-1] - 1) * 100``.
+
+    Every ``seed`` accepted by the module contract (``[0, MAX_SEED)``) yields a valid
+    interval, the top edge ``MAX_SEED - 1`` included: the Sortino interval derives its seed
+    with :func:`_derive_seed`, which stays inside the generator range instead of
+    overflowing it (A14).
     """
     outcomes = _outcomes(result)
     if not outcomes:
@@ -800,7 +819,7 @@ def calculate_metrics(
         estimate=sortino,
         confidence_level=confidence_level,
         n_bootstrap=n_bootstrap,
-        seed=seed + 1,
+        seed=_derive_seed(seed, offset=1),
     )
     wins = tuple(value for value in trades if value > 0.0)
     losses = tuple(value for value in trades if value < 0.0)
