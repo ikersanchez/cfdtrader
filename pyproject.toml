@@ -130,7 +130,21 @@ reportMissingTypeStubs = false
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
-addopts = ["-ra", "--strict-markers", "--strict-config"]
+# `--basetemp` mantiene los `tmp_path` de los tests **dentro del workspace**
+# (`.scratch/` está gitignorado): por defecto pytest los crea en `/tmp`, que es
+# justo lo que la regla del proyecto prohíbe.
+# Comportamiento **verificado** (2026-09-19): pytest **vacía** `.scratch/pytest`
+# al arrancar cada sesión, así que no se acumula nada entre corridas. La
+# política `none` es defensa en profundidad por si alguien ejecuta pytest con
+# otro `--basetemp`: evita conservar sesiones anteriores.
+# ⚠️ No guardes nada más dentro de `.scratch/pytest` (pytest lo borra).
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--basetemp=.scratch/pytest",
+]
+tmp_path_retention_policy = "none"
 
 [tool.coverage.run]
 branch = true
