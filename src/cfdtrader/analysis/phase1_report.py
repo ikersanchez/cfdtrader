@@ -58,6 +58,7 @@ import polars as pl
 from loguru import logger
 
 from cfdtrader.analysis import backtest_report
+from cfdtrader.analysis.drift import clean_sample_cutoff
 from cfdtrader.analysis.phase0_report import (
     FILE_SELECTION_RULE,
     GATE_AGGREGATION_RULE,
@@ -524,6 +525,17 @@ def audit_lookahead(*, store: Store, base: backtest_report.BacktestReport) -> di
     history = backtest_report.load_history(store)
     calendar = load_calendar(years=_calendar_years(history.daily))
 
+    # La regla de muestra limpia de #52 se **importa** de `analysis.drift`: el corte que uso el
+    # universo tiene que ser el suyo, no uno recalculado aqui (A27).
+    cutoff = clean_sample_cutoff(history.daily)
+    if cutoff != base.universe.clean_from:
+        raise AuditInvariantError(
+            "el corte de la muestra limpia del universo no es el que da "
+            "`cfdtrader.analysis.drift.clean_sample_cutoff` ("
+            f"{base.universe.clean_from} frente a {cutoff}): la regla de #52 se importa, no se "
+            "reimplementa (A27)"
+        )
+
     test_positions = sorted({position for fold in base.split_plan.folds for position in fold.test})
     if not test_positions:
         raise AuditInvariantError(
@@ -553,7 +565,8 @@ def audit_lookahead(*, store: Store, base: backtest_report.BacktestReport) -> di
     )
 
     violations: list[dict[str, object]] = []
-    changed: list[dict[str, object]] = []
+    changed_sample: list[dict[str, object]] = []
+    changed_total = 0
     compared = 0
     for reference, hostile in _outcome_pairs(base, mutated_outcomes):
         if len(reference.run.folds) != len(hostile.run.folds):
@@ -577,8 +590,10 @@ def audit_lookahead(*, store: Store, base: backtest_report.BacktestReport) -> di
                 }
                 if left.session < session:
                     violations.append(entry)
-                elif len(changed) < CHANGED_SAMPLE_LIMIT:
-                    changed.append(entry)
+                else:
+                    changed_total += 1
+                    if len(changed_sample) < CHANGED_SAMPLE_LIMIT:
+                        changed_sample.append(entry)
 
     return {
         "state": str(HalfResult.PASS) if not violations else str(HalfResult.FAIL),
@@ -591,9 +606,17 @@ def audit_lookahead(*, store: Store, base: backtest_report.BacktestReport) -> di
             "open_untouched": True,
         },
         "compared_outcomes": compared,
-        "changed_count": len(changed),
-        "changed_sample": changed,
+        "changed_count": changed_total,
+        "changed_sample": changed_sample,
+        "changed_sample_truncated": changed_total > len(changed_sample),
         "violations": violations,
+        "clean_sample": {
+            "clean_from": None if cutoff is None else cutoff.isoformat(),
+            "matches_shared_rule": True,
+            "rule_source": (
+                "cfdtrader.analysis.drift.clean_sample_cutoff (regla de #52, importada)"
+            ),
+        },
         "note": (
             "se muta **una sesion posterior** y se re-corre el motor sobre una copia en memoria "
             "de la historia: ningun resultado de una sesion anterior puede cambiar (A11). La "
@@ -872,7 +895,7 @@ def costs_audit() -> dict[str, object]:
             "is_measurement": slippage.is_measurement,
             "pct_of_r": _pct_of_r_ratio(slippage),
             "pct_of_r_declared_percent": _pct_of_r_declared_percent(slippage),
-            "r_pct": None if slippage.r_pct is None else _dec(slippage.r_pct, "0.0001"),
+            "r_pct": None if slippage.r_pct is None else format(slippage.r_pct, "f"),
             "source": slippage.source,
             "issue": "#62",
         },
@@ -894,14 +917,14 @@ def _pct_of_r_ratio(slippage: SlippageParameter) -> str | None:
     """El supuesto como **ratio** sobre `R` (0,2 = 20 %), o `null` si no hay supuesto."""
     if slippage.pct_of_r is None:
         return None
-    return _dec(slippage.pct_of_r / Decimal(100), "0.0001")
+    return format(slippage.pct_of_r / Decimal(100), "f")
 
 
 def _pct_of_r_declared_percent(slippage: SlippageParameter) -> str | None:
     """El valor literal del parametro declarado de #8/#64, sin re-teclearlo."""
     if slippage.pct_of_r is None:
         return None
-    return _dec(slippage.pct_of_r, "0.01")
+    return format(slippage.pct_of_r, "f")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
