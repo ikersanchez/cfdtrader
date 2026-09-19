@@ -21,6 +21,7 @@ import subprocess
 import sys
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Final, cast
 
@@ -1004,3 +1005,73 @@ def test_a35_the_markdown_comes_from_the_same_payload(
     assert f"| {signal.dsr['dsr']!r} |" in markdown
     assert f"`{signal.gate['aggregate']}`" in markdown
     assert markdown.count("`not_significant`") >= 20
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Apoyo (no es un criterio): integridad del registro y salidas de error del CLI
+# ─────────────────────────────────────────────────────────────────────────────
+def test_registry_integrity_and_failure_paths_are_typed(tmp_path: Path) -> None:
+    """Ramas de error del registro y del CLI: tipadas y sin inventar un numero (A19-A22)."""
+    jsonable = experiment_log._jsonable  # pyright: ignore[reportPrivateUsage]
+    as_json_object = experiment_log._json_object  # pyright: ignore[reportPrivateUsage]
+    as_utc = experiment_log._as_utc  # pyright: ignore[reportPrivateUsage]
+    parse_as_of = experiment_log._parse_as_of  # pyright: ignore[reportPrivateUsage]
+    synthetic_matrix = experiment_log._synthetic_matrix  # pyright: ignore[reportPrivateUsage]
+
+    # `Decimal` viaja como cadena exacta; `Mapping` y secuencia se traducen; lo demas es error
+    assert jsonable(Decimal("1.2300"), where="sonda") == "1.2300"
+    assert jsonable({"b": 1, "a": (2, 3)}, where="sonda") == {"b": 1, "a": [2, 3]}
+    with pytest.raises(experiment_log.ExperimentLogError):
+        jsonable(object(), where="sonda")
+    with pytest.raises(experiment_log.ExperimentLogError):
+        as_json_object([1, 2], where="sonda")
+    # un instante sin zona se interpreta como UTC; el Sharpe registrado tiene que ser finito
+    assert as_utc(datetime(2026, 9, 19, 12)).tzinfo is UTC
+    with pytest.raises(experiment_log.ExperimentLogError):
+        experiment_log.ExperimentResult(
+            sharpe_per_session=float("inf"), n_observations=8
+        ).to_payload()
+    with pytest.raises(experiment_log.InvalidAsOfError):
+        parse_as_of("ayer")
+    with pytest.raises(experiment_log.ExperimentLogError):
+        synthetic_matrix("inventado")
+
+    # registro incompleto y con JSON no valido: error tipado, nunca una lista vacia
+    runs_root = tmp_path / "runs"
+    broken = runs_root / ("f" * 64)
+    broken.mkdir(parents=True)
+    with pytest.raises(experiment_log.RegistryIntegrityError):
+        experiment_log.load_registry(runs_root)
+    (broken / experiment_log.CONFIG_FILE).write_text("{no json", encoding="utf-8")
+    (broken / experiment_log.RESULT_FILE).write_text("{}", encoding="utf-8")
+    with pytest.raises(experiment_log.RegistryIntegrityError):
+        experiment_log.load_registry(runs_root)
+
+    # un `result.json` que declara otra identidad o un Sharpe no numerico
+    tampered = tmp_path / "tampered"
+    good = _record(tampered, "integrity-00", sharpe=0.1)
+    result_path = good.directory / experiment_log.RESULT_FILE
+    document = json.loads(result_path.read_text(encoding="utf-8"))
+    document["run_sha256"] = "0" * 64
+    result_path.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(experiment_log.RegistryIntegrityError):
+        experiment_log.load_registry(tampered)
+    document["run_sha256"] = good.run_sha256
+    document["result"]["sharpe_per_session"] = "alto"
+    result_path.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(experiment_log.RegistryIntegrityError):
+        experiment_log.load_registry(tampered)
+
+    # un registro de una sola variante no permite derivar `V[SR]` (A22)
+    single = _registry(tmp_path / "single", 1)
+    with pytest.raises(experiment_log.TrialsMismatchError):
+        experiment_log.require_trials_match_registry(n_trials=1, sr_variance=0.0, registry=single)
+
+    # el CLI sale 2 y no escribe nada cuando el registro esta corrupto
+    reports = tmp_path / "reports"
+    failed = _cli(
+        "--as-of", AS_OF.isoformat(), "--runs-root", str(runs_root), "--reports-dir", str(reports)
+    )
+    assert failed.returncode == 2
+    assert "no se puede emitir el informe de sobreajuste" in failed.stderr
+    assert not reports.exists()

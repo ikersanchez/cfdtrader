@@ -640,3 +640,27 @@ def test_the_core_module_is_pure() -> None:
         for alias in node.names
     }
     assert not imported & {"os", "subprocess", "pathlib", "shutil", "socket"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Apoyo (no es un criterio): degenerados que no caben en un `test_aN`
+# ─────────────────────────────────────────────────────────────────────────────
+def test_degenerate_and_defensive_paths_are_typed() -> None:
+    """Los degenerados que no caben en un `test_aN` siguen siendo error tipado (A19)."""
+    with pytest.raises(NonFiniteInputError):
+        deflated_sharpe_ratio((0.01, float("nan"), 0.02), n_trials=5, sr_variance=0.01)
+    with pytest.raises(NonFiniteInputError):
+        probability_of_backtest_overfitting(((0.01, 0.02), (float("inf"), 0.03)), blocks=2)
+    with pytest.raises(InsufficientObservationsError):
+        probability_of_backtest_overfitting((), blocks=2)
+    with pytest.raises(InsufficientVariantsError):
+        noise_matrix(n_variants=1, n_observations=16)
+    # `V[SR]` de un vector constante: 0.0 **exacto** (nada de residuos de coma flotante)
+    assert variant_sharpe_variance([0.25, 0.25, 0.25]) == 0.0
+    # los empates de rango se reparten la posicion media: dos columnas identicas
+    matrix = _matrix(rows=64, columns=4, seed=PROBE_SEED)
+    tied = tuple((row[0], row[0], row[1], row[2]) for row in matrix)
+    with_ties = probability_of_backtest_overfitting(tied, blocks=8)
+    assert with_ties.n_variants == 4
+    assert 0.0 <= with_ties.pbo <= 1.0
+    assert json.dumps(with_ties.to_payload(), allow_nan=False)
