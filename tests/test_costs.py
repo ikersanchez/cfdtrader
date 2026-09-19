@@ -232,10 +232,24 @@ def _payload_hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+#: Directorio de trabajo temporal del proyecto (gitignorado, `/.scratch/`). La
+#: sesion de tests crea ahi sus `tmp_path` (ver `--basetemp` en `pyproject.toml`),
+#: asi que sus `costs_*` se escriben a proposito y no dicen nada sobre la CLI.
+SCRATCH_DIR = REPO_ROOT / ".scratch"
+
+
 def _stray_costs_files() -> list[str]:
-    """Ficheros ``costs_*`` que aparezcan en el repositorio (la CLI no debe crear ninguno)."""
+    """Ficheros ``costs_*`` sueltos por el repositorio (la CLI no debe crear ninguno).
+
+    Se excluye ``.scratch/``, que es el directorio de trabajo del proyecto y donde
+    viven los ``tmp_path`` de los propios tests. El resto del arbol sigue vigilado:
+    un fichero de costes creado fuera de ``--out-dir`` (y fuera de ``.scratch/``)
+    hace fallar el test.
+    """
     return sorted(
-        str(path.relative_to(REPO_ROOT)) for path in REPO_ROOT.rglob("costs_*") if path.is_file()
+        str(path.relative_to(REPO_ROOT))
+        for path in REPO_ROOT.rglob("costs_*")
+        if path.is_file() and SCRATCH_DIR not in path.parents
     )
 
 
