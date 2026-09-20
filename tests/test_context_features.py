@@ -328,7 +328,12 @@ def _golden_matrix() -> pl.DataFrame:
 # ─────────────────────────────────────────────────────────────────────────────
 def test_a1_the_registry_declares_the_third_family() -> None:
     """El registro expone las tres familias y la spec de contexto se construye."""
-    assert sorted(store.CATALOG_BY_FEATURE_SET) == ["context_v1", "technical_v1", "volatility_v1"]
+    assert sorted(store.CATALOG_BY_FEATURE_SET) == [
+        "context_v1",
+        "macro_v1",
+        "technical_v1",
+        "volatility_v1",
+    ]
     assert store.CATALOG_BY_FEATURE_SET["context_v1"] is store.CONTEXT_FEATURE_CATALOG
     assert store.SOURCE_BY_FEATURE_SET["context_v1"] == CONTEXT_SOURCE
     assert CONTEXT_SOURCE not in {store.FEATURES_SOURCE, store.TECHNICAL_FEATURES_SOURCE}
@@ -950,6 +955,7 @@ def test_a9_the_sp500_return_is_not_duplicated_between_families() -> None:
         set(store.FEATURE_COLUMNS)
         | set(store.TECHNICAL_FEATURE_COLUMNS)
         | set(store.CONTEXT_FEATURE_COLUMNS)
+        | set(store.MACRO_FEATURE_COLUMNS)
     )
 
 

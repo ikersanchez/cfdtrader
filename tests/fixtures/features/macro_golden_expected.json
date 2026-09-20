@@ -1,0 +1,108 @@
+{
+  "_comment": [
+    "Golden dataset congelado del contrato de #22 (A13). Los INPUTS estan en dos",
+    "CSV: macro_golden_market.csv (barras de ^GSPC y DX-Y.NYB, una fila por sesion",
+    "de las ultimas 300 con session <= 2026-09-16) y macro_golden_series.csv (las",
+    "seis series macro con as_of >= 2024-01-01, de sobra para que cpi_yoy/pce_yoy no",
+    "salgan nulos por truncamiento). El par (code_version, digests) esta congelado",
+    "entero, asi que el test falla si el calculo se mueve sin subir",
+    "FEATURE_CODE_VERSION (y tambien si sube sin actualizar este fichero).",
+    "Nunca se regenera un golden dataset 'para que pase': si el digest cambia, o el",
+    "calculo se ha movido sin querer (se arregla el codigo) o se ha cambiado a",
+    "proposito (entonces sube FEATURE_CODE_VERSION y se actualiza el par con nota).",
+    "La ventana es distinta de la de #19-#21 a proposito: contiene el hueco DST de",
+    "marzo de 2026 (con publicaciones de DFF a 13:00 y 14:00 UTC), la doble",
+    "publicacion de PCEPI del 2026-01-22 y las rachas del shutdown de 2025."
+  ],
+  "generator": "tests/fixtures/features/macro_golden_market.csv (300 sesiones) + tests/fixtures/features/macro_golden_series.csv (6 series macro, as_of >= 2024-01-01)",
+  "code_version": 1,
+  "feature_set": "macro_v1",
+  "parameters": {},
+  "windows": {
+    "fed_funds": null,
+    "fed_funds_chg_5": 5,
+    "ust_10y": null,
+    "ust_10y_chg_5": 5,
+    "ust_2y": null,
+    "ust_2y_chg_5": 5,
+    "pendiente_2s10s": null,
+    "pendiente_2s10s_chg_5": 5,
+    "cpi_yoy": null,
+    "pce_yoy": null,
+    "dxy": null,
+    "ust_10y_z": 250,
+    "dxy_z": 250
+  },
+  "sources": [
+    [
+      "raw.macro",
+      "DFF"
+    ],
+    [
+      "raw.macro",
+      "DGS10"
+    ],
+    [
+      "raw.macro",
+      "DGS2"
+    ],
+    [
+      "raw.macro",
+      "T10Y2Y"
+    ],
+    [
+      "raw.macro",
+      "CPIAUCSL"
+    ],
+    [
+      "raw.macro",
+      "PCEPI"
+    ],
+    [
+      "raw.market_daily",
+      "^GSPC"
+    ],
+    [
+      "raw.market_daily",
+      "DX-Y.NYB"
+    ]
+  ],
+  "sessions": 300,
+  "feature_columns": [
+    "session",
+    "as_of",
+    "fed_funds",
+    "fed_funds_chg_5",
+    "ust_10y",
+    "ust_10y_chg_5",
+    "ust_2y",
+    "ust_2y_chg_5",
+    "pendiente_2s10s",
+    "pendiente_2s10s_chg_5",
+    "cpi_yoy",
+    "pce_yoy",
+    "dxy",
+    "ust_10y_z",
+    "dxy_z"
+  ],
+  "digest_format": "sha256:<hex>",
+  "feature_spec_sha256": "sha256:8eb2384202edbfe26bcc04c87e3a807938515d5319839905d9cbd39263f50f28",
+  "matrix_sha256": "sha256:5bc764af23c4c945bdbfe545064b99e77c9ea4ccc3e6c5a3860385ea8b7721ee",
+  "non_null": {
+    "session": 0,
+    "as_of": 0,
+    "fed_funds": 0,
+    "fed_funds_chg_5": 5,
+    "ust_10y": 0,
+    "ust_10y_chg_5": 5,
+    "ust_2y": 0,
+    "ust_2y_chg_5": 5,
+    "pendiente_2s10s": 0,
+    "pendiente_2s10s_chg_5": 5,
+    "cpi_yoy": 0,
+    "pce_yoy": 0,
+    "dxy": 0,
+    "ust_10y_z": 249,
+    "dxy_z": 249
+  }
+}
