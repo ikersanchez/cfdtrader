@@ -93,14 +93,23 @@ mismo dia.
 =====================  ================================  ======================
 ``volatility_v1``      ``cfdtrader.features.store``      :data:`FEATURE_CATALOG`
 ``technical_v1``       ``cfdtrader.features.technical``  :data:`TECHNICAL_FEATURE_CATALOG`
+``context_v1``         ``cfdtrader.features.context``    :data:`CONTEXT_FEATURE_CATALOG`
 =====================  ================================  ======================
 
 Los valores por defecto de :class:`FeatureSpec` siguen siendo los de
-``volatility_v1``: #20 anade features nuevas, no cambia el resultado de ninguna
-existente, asi que :data:`FEATURE_CODE_VERSION` **no** se mueve por anadirlas.
-:func:`build_matrix` sigue siendo la entrada de ``volatility_v1`` (congelada por
-su *golden*); la matriz tecnica la construye
-``cfdtrader.features.technical.technical_matrix``.
+``volatility_v1``: #20 y #21 anaden features nuevas, no cambian el resultado de
+ninguna existente, asi que :data:`FEATURE_CODE_VERSION` **no** se mueve por
+anadirlas. :func:`build_matrix` sigue siendo la entrada de ``volatility_v1``
+(congelada por su *golden*); las otras dos familias tienen su propia funcion de
+calculo, ``cfdtrader.features.technical.technical_matrix`` y
+``cfdtrader.features.context.context_matrix``.
+
+La familia de **contexto de mercado** (#21) es la unica que recibe **muchas**
+series: su entrada es un ``Mapping`` con una entrada por serie
+(:data:`CONTEXT_SERIES`), porque cada mercado trae su propio calendario y hay que
+poder alinearlos sin inventar un frame largo. Un ``Mapping`` incompleto, con una
+clave de mas o con una serie mal formada es :class:`ContextInputError`: el error
+nombra la serie, que es lo unico que se puede arreglar desde fuera.
 """
 
 from __future__ import annotations
@@ -129,6 +138,17 @@ from cfdtrader.features.volatility import (
 __all__ = [
     "ALL_FEATURE_COLUMNS",
     "CATALOG_BY_FEATURE_SET",
+    "CONTEXT_CORRELATION_WINDOW",
+    "CONTEXT_FEATURES_SOURCE",
+    "CONTEXT_FEATURE_CATALOG",
+    "CONTEXT_FEATURE_COLUMNS",
+    "CONTEXT_FEATURE_SET",
+    "CONTEXT_MARKET_SERIES",
+    "CONTEXT_MIN_SESSIONS",
+    "CONTEXT_SECTOR_SERIES",
+    "CONTEXT_SERIES",
+    "DEFAULT_CONTEXT_SOURCES",
+    "DEFAULT_CONTEXT_WINDOWS",
     "DEFAULT_TECHNICAL_SOURCES",
     "DEFAULT_TECHNICAL_WINDOWS",
     "FEATURES_DATASET",
@@ -150,6 +170,7 @@ __all__ = [
     "TECHNICAL_MIN_SESSIONS",
     "VOLATILITY_FEATURE_SET",
     "CatalogEntry",
+    "ContextInputError",
     "FeatureSpec",
     "FeatureStoreError",
     "InvalidFeatureMatrixError",
@@ -226,6 +247,17 @@ class InvalidFeatureMatrixError(FeatureStoreError):
 
 class InvalidSeriesIdError(FeatureStoreError):
     """``series_id`` vacio o con caracteres que no pueden viajar a una ruta o a SQL."""
+
+
+class ContextInputError(FeatureStoreError):
+    """El ``Mapping`` de series de la familia de contexto no cumple su contrato.
+
+    La familia ``context_v1`` (#21) no recibe un frame: recibe una serie por
+    mercado, porque cada uno trae su calendario. Falta una serie, sobra una
+    clave, falta ``session`` o ``close``, una sesion se repite o un ``as_of`` no
+    corresponde a su sesion: todo eso es un error de **entrada**, y el mensaje
+    nombra la serie, porque es lo unico que se puede arreglar desde fuera.
+    """
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -486,10 +518,171 @@ DEFAULT_TECHNICAL_WINDOWS: Final[dict[str, int | None]] = {
 #: Fuentes de entrada por defecto del conjunto tecnico: el indice, **sin** VIX.
 DEFAULT_TECHNICAL_SOURCES: Final[tuple[tuple[str, str], ...]] = (("raw.market_daily", "^GSPC"),)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Catalogo de la familia de contexto de mercado (#21)
+# ─────────────────────────────────────────────────────────────────────────────
+#: Identificador del conjunto de features de contexto (`_docs/plan.md` §7.1).
+CONTEXT_FEATURE_SET: Final[str] = "context_v1"
+
+#: ``source`` de las filas de contexto (mismo papel que el de la familia tecnica).
+CONTEXT_FEATURES_SOURCE: Final[str] = "cfdtrader.features.context"
+
+#: Ventana de las cuatro correlaciones moviles y de la beta del VIX, en sesiones
+#: del S&P 500: entra en el nombre de la columna.
+CONTEXT_CORRELATION_WINDOW: Final[int] = 60
+
+#: Sesiones minimas de la ventana **expandida** de ``sector_dispersion_1_z``.
+CONTEXT_MIN_SESSIONS: Final[int] = 250
+
+#: Series de ``raw.market_daily``: el indice (que es el ancla del calendario) y
+#: las siete series de contexto (VIX, tres indices europeos, dos asiaticos y DXY).
+CONTEXT_MARKET_SERIES: Final[tuple[str, ...]] = (
+    "^GSPC",
+    "^VIX",
+    "^GDAXI",
+    "^FTSE",
+    "^STOXX50E",
+    "^N225",
+    "^HSI",
+    "DX-Y.NYB",
+)
+
+#: Los **once** ETF sectoriales de ``raw.sectors`` (`_docs/plan.md` §7.1). Orden
+#: alfabetico a proposito: el orden no entra en ningun hash, y asi no se puede
+#: confundir con una jerarquia.
+CONTEXT_SECTOR_SERIES: Final[tuple[str, ...]] = (
+    "XLB",
+    "XLC",
+    "XLE",
+    "XLF",
+    "XLI",
+    "XLK",
+    "XLP",
+    "XLRE",
+    "XLU",
+    "XLV",
+    "XLY",
+)
+
+#: Las **19** series de entrada de la familia, en orden: 8 de ``raw.market_daily``
+#: y los 11 ETF de ``raw.sectors``. No es una lista descriptiva: el ``Mapping``
+#: que recibe ``context_matrix`` tiene que tener exactamente estas claves.
+CONTEXT_SERIES: Final[tuple[str, ...]] = (*CONTEXT_MARKET_SERIES, *CONTEXT_SECTOR_SERIES)
+
+#: Catalogo completo de la familia de contexto (11 entradas, #21). Las formulas
+#: viven en ``cfdtrader.features.context``; aqui esta la **declaracion** del
+#: contrato (ventana, fuente y cierre del que depende cada columna).
+CONTEXT_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
+    CatalogEntry(
+        "corr_dax_60",
+        "Pearson de (retorno logaritmico del S&P, retorno del DAX en su ultima sesion "
+        f"<= s) sobre las {CONTEXT_CORRELATION_WINDOW} sesiones s <= t-1",
+        CONTEXT_CORRELATION_WINDOW,
+        "raw.market_daily",
+        "cierre de la sesion t-1",
+    ),
+    CatalogEntry(
+        "corr_ftse_60",
+        "Pearson de (retorno logaritmico del S&P, retorno del FTSE 100 en su ultima "
+        f"sesion <= s) sobre las {CONTEXT_CORRELATION_WINDOW} sesiones s <= t-1",
+        CONTEXT_CORRELATION_WINDOW,
+        "raw.market_daily",
+        "cierre de la sesion t-1",
+    ),
+    CatalogEntry(
+        "corr_stoxx_60",
+        "Pearson de (retorno logaritmico del S&P, retorno del EURO STOXX 50 en su "
+        f"ultima sesion <= s) sobre las {CONTEXT_CORRELATION_WINDOW} sesiones s <= t-1",
+        CONTEXT_CORRELATION_WINDOW,
+        "raw.market_daily",
+        "cierre de la sesion t-1",
+    ),
+    CatalogEntry(
+        "corr_nikkei_60",
+        "Pearson de (retorno logaritmico del S&P, retorno del Nikkei 225 en su ultima "
+        f"sesion <= s) sobre las {CONTEXT_CORRELATION_WINDOW} sesiones s <= t-1",
+        CONTEXT_CORRELATION_WINDOW,
+        "raw.market_daily",
+        "cierre de la sesion t-1",
+    ),
+    CatalogEntry(
+        "asia_overnight_1",
+        "media de los retornos del Nikkei 225 y del Hang Seng de su ultima sesion <= t",
+        1,
+        "raw.market_daily",
+        "cierre asiatico de la sesion t",
+    ),
+    CatalogEntry(
+        "europe_prev_1",
+        "media de los retornos del DAX, del FTSE 100 y del EURO STOXX 50 de su ultima sesion < t",
+        1,
+        "raw.market_daily",
+        "cierre europeo de la sesion t-1",
+    ),
+    CatalogEntry(
+        "beta_vix_60",
+        "pendiente OLS del retorno logaritmico del S&P sobre el del VIX en los "
+        f"{CONTEXT_CORRELATION_WINDOW} pares s <= t-1",
+        CONTEXT_CORRELATION_WINDOW,
+        "raw.market_daily",
+        "cierre de la sesion t-1",
+    ),
+    CatalogEntry(
+        "dxy_ret_1",
+        "retorno logaritmico del indice dolar de la ultima sesion del DXY < t",
+        1,
+        "raw.market_daily",
+        "cierre de la sesion t-1",
+    ),
+    CatalogEntry(
+        "sector_dispersion_1",
+        "desviacion estandar muestral (ddof=1) del retorno de los ETF sectoriales con "
+        "dato en su ultima sesion < t",
+        1,
+        "raw.sectors",
+        "cierre de la sesion t-1",
+    ),
+    CatalogEntry(
+        "sector_count",
+        "numero de ETF sectoriales con retorno disponible (0-11) en su ultima sesion < t",
+        1,
+        "raw.sectors",
+        "cierre de la sesion t-1",
+    ),
+    CatalogEntry(
+        "sector_dispersion_1_z",
+        f"normalise_expanding(sector_dispersion_1, min_sessions={CONTEXT_MIN_SESSIONS})",
+        CONTEXT_MIN_SESSIONS,
+        "raw.sectors",
+        "cierre de la sesion t-1",
+    ),
+)
+
+#: Columnas de feature que persiste la matriz de contexto: **todas** las del catalogo.
+CONTEXT_FEATURE_COLUMNS: Final[tuple[str, ...]] = tuple(
+    entry.name for entry in CONTEXT_FEATURE_CATALOG
+)
+
+#: Ventanas por defecto de la spec de contexto: las del catalogo, sin excepciones.
+DEFAULT_CONTEXT_WINDOWS: Final[dict[str, int | None]] = {
+    entry.name: entry.window for entry in CONTEXT_FEATURE_CATALOG
+}
+
+#: Fuentes de entrada por defecto de la familia de contexto: las 19 series.
+DEFAULT_CONTEXT_SOURCES: Final[tuple[tuple[str, str], ...]] = (
+    *(("raw.market_daily", series_id) for series_id in CONTEXT_MARKET_SERIES),
+    *(("raw.sectors", series_id) for series_id in CONTEXT_SECTOR_SERIES),
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Registro de familias
+# ─────────────────────────────────────────────────────────────────────────────
 #: Registro de familias: el catalogo de cada ``feature_set`` declarado.
 CATALOG_BY_FEATURE_SET: Final[dict[str, tuple[CatalogEntry, ...]]] = {
     VOLATILITY_FEATURE_SET: FEATURE_CATALOG,
     TECHNICAL_FEATURE_SET: TECHNICAL_FEATURE_CATALOG,
+    CONTEXT_FEATURE_SET: CONTEXT_FEATURE_CATALOG,
 }
 
 #: ``source`` con el que se persiste cada familia (el discriminador de la
@@ -497,14 +690,17 @@ CATALOG_BY_FEATURE_SET: Final[dict[str, tuple[CatalogEntry, ...]]] = {
 SOURCE_BY_FEATURE_SET: Final[dict[str, str]] = {
     VOLATILITY_FEATURE_SET: FEATURES_SOURCE,
     TECHNICAL_FEATURE_SET: TECHNICAL_FEATURES_SOURCE,
+    CONTEXT_FEATURE_SET: CONTEXT_FEATURES_SOURCE,
 }
 
-#: Todas las columnas de feature conocidas, de las dos familias: es la lista con
+#: Todas las columnas de feature conocidas, de las tres familias: es la lista con
 #: la que el digest de una matriz comprueba que no haya ``NaN`` ni ``inf``. Se
-#: deduplica porque ``atr_norm`` existe en los dos catalogos (el solape lo declara
-#: y lo resuelve #72, no esta capa).
+#: deduplica porque ``atr_norm`` existe en dos catalogos (el solape lo declara y
+#: lo resuelve #72, no esta capa). Que las 11 columnas de contexto entren aqui no
+#: es cosmetico: sin ellas, ``matrix_sha256`` **no** detectaria un ``NaN`` ni un
+#: ``inf`` en la matriz de contexto (A1 de #21).
 ALL_FEATURE_COLUMNS: Final[tuple[str, ...]] = tuple(
-    dict.fromkeys((*FEATURE_COLUMNS, *TECHNICAL_FEATURE_COLUMNS))
+    dict.fromkeys((*FEATURE_COLUMNS, *TECHNICAL_FEATURE_COLUMNS, *CONTEXT_FEATURE_COLUMNS))
 )
 
 

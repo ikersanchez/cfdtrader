@@ -19,6 +19,15 @@ Módulos:
   (importados de :mod:`cfdtrader.features.store`). Se persiste con el **mismo**
   ``Store`` y convive con la familia de volatilidad en ``derived.features_daily``,
   que las separa por ``source``. No lee el ``open``.
+- :mod:`cfdtrader.features.context` — familia de **contexto de mercado** cerrada
+  (tarea #21): correlaciones móviles del S&P con Europa y el Nikkei, overnight
+  asiático, cierre europeo anterior, beta del VIX, retorno del dólar, dispersión
+  sectorial y su z-score (importado de :mod:`cfdtrader.features.store`). Es la
+  única familia con **muchas** series de entrada: recibe un ``Mapping`` con una
+  entrada por serie (19) porque cada mercado trae su **propio** calendario, y
+  declara el alineamiento entre ellos (``CONTEXT_MARKET_LAG``) en vez de
+  esconderlo. No publica ningún retorno del S&P 500: los ``ret_1``/``ret_5``/
+  ``ret_21`` siguen siendo de :mod:`cfdtrader.features.technical`.
 - :mod:`cfdtrader.features.store` — **infraestructura de persistencia** (tarea #19):
   identidad reproducible (``features_version`` por sesión y ``feature_spec_sha256``
   por contrato), esquema ancho en ``derived.features_daily``, catálogo documentado y

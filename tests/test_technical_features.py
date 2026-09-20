@@ -217,7 +217,8 @@ def _column(matrix: pl.DataFrame, name: str) -> list[float | None]:
 # ─────────────────────────────────────────────────────────────────────────────
 def test_a1_the_registry_declares_the_two_families() -> None:
     """El registro expone las dos familias y la spec tecnica se construye."""
-    assert sorted(store.CATALOG_BY_FEATURE_SET) == ["technical_v1", "volatility_v1"]
+    # #21 anade `context_v1`: el registro deja de ser solo el de esta familia
+    assert sorted(store.CATALOG_BY_FEATURE_SET) == ["context_v1", "technical_v1", "volatility_v1"]
     assert store.CATALOG_BY_FEATURE_SET["volatility_v1"] is store.FEATURE_CATALOG
     assert store.CATALOG_BY_FEATURE_SET["technical_v1"] is store.TECHNICAL_FEATURE_CATALOG
     assert store.SOURCE_BY_FEATURE_SET["technical_v1"] == TECHNICAL_SOURCE
