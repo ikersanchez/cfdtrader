@@ -12,6 +12,11 @@ Módulos:
   de la familia de volatilidad del proyecto (Parkinson, HAR y VIX, tarea #7). Las
   tareas #20 (features técnicas, que también nombra el ``atr_norm``) y #23 (features
   de régimen y volatilidad) **importan de ahí**, no reimplementan las fórmulas.
+- :mod:`cfdtrader.features.store` — **infraestructura de persistencia** (tarea #19):
+  identidad reproducible (``features_version`` por sesión y ``feature_spec_sha256``
+  por contrato), esquema ancho en ``derived.features_daily``, catálogo documentado y
+  normalización robusta de ventana expandida. Las familias de features (#20–#23) se
+  persistirán **a través de él**, no con su propio ``Store``.
 
 Se implementa en las tareas #19–#23.
 """
