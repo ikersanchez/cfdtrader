@@ -1,0 +1,71 @@
+{
+  "_comment": [
+    "Golden dataset congelado del contrato de #23 (A12). Los INPUTS son",
+    "regime_golden_inputs.csv: 800 sesiones REALES (2023-07-11 -> 2026-09-16,",
+    "las ultimas del ^GSPC con session <= 2026-09-16) con precios sinteticos",
+    "deterministas y agrupamiento de volatilidad, porque el GARCH necesita 500",
+    "filas de entrenamiento dentro del propio fixture para tener 300 pronosticos.",
+    "El par (code_version, digests) esta congelado entero, asi que el test falla si",
+    "el calculo se mueve sin subir FEATURE_CODE_VERSION (y tambien si sube sin",
+    "actualizar este fichero). Nunca se regenera un golden 'para que pase'."
+  ],
+  "generator": "tests/fixtures/features/regime_golden_inputs.csv (800 sesiones reales con precios sinteticos: sha256(index) como ruido y recursion GARCH-like, sin RNG global)",
+  "code_version": 1,
+  "feature_set": "regime_v1",
+  "parameters": {},
+  "windows": {
+    "day_of_week": null,
+    "efficiency_ratio_20": 20,
+    "garch_forecast": 500,
+    "garch_forecast_z": 250,
+    "is_es_roll_session": null,
+    "rv_percentile": 250,
+    "sessions_to_opex": null
+  },
+  "sources": [
+    [
+      "raw.market_daily",
+      "^GSPC"
+    ]
+  ],
+  "sessions": 800,
+  "first_session": "2023-07-11",
+  "last_session": "2026-09-16",
+  "feature_columns": [
+    "session",
+    "rv_percentile",
+    "garch_forecast",
+    "garch_forecast_z",
+    "efficiency_ratio_20",
+    "day_of_week",
+    "sessions_to_opex",
+    "is_es_roll_session"
+  ],
+  "digest_format": [
+    "Los dos digests van con el prefijo 'sha256:' a proposito: el modulo publica",
+    "features_version con ese prefijo y un hex desnudo de 64 caracteres dispara el",
+    "hook detect-secrets (falso positivo de alta entropia). El test lo quita al comparar."
+  ],
+  "feature_spec_sha256": "sha256:272d8125b9ec118d95ee27619982e6007283b885cb6dfb968e4373b0053e9a0d",
+  "matrix_sha256": "sha256:2f23fe4a2cfcfe621d67a75ee0ccf065f98e303f425fb13ddc3abfca602eaa2b",
+  "non_null": {
+    "rv_percentile": 251,
+    "garch_forecast": 500,
+    "garch_forecast_z": 749,
+    "efficiency_ratio_20": 20,
+    "day_of_week": 0,
+    "sessions_to_opex": 17,
+    "is_es_roll_session": 0
+  },
+  "calendar": {
+    "opex_sessions": 38,
+    "es_roll_sessions": 12,
+    "sessions_to_opex_min": 0,
+    "sessions_to_opex_max": 24,
+    "sessions_to_opex_nulls": 17,
+    "rolled_months": [
+      "2025-04-17 (Viernes Santo, por el 2025-04-18)",
+      "2026-06-18 (Juneteenth, por el 2026-06-19)"
+    ]
+  }
+}

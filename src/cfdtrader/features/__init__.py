@@ -36,6 +36,13 @@ Módulos:
   publicado al cierre de su sesión, con el ``published_at`` real de cada
   observación y sin interpolar ni censurar un valor viejo. Tampoco escribe en el
   almacén por su cuenta (lo hace :func:`cfdtrader.features.store.save_daily`).
+- :mod:`cfdtrader.features.regime` — familia de **régimen y volatilidad** cerrada
+  (tarea #23): percentil expandido de la volatilidad realizada de Parkinson,
+  pronóstico **GARCH(1,1)** (el candidato elegido en #7, con su motor importado de
+  :mod:`cfdtrader.features.volatility`), su z-score robusto, el *efficiency ratio*
+  de Kaufman y tres columnas de calendario derivadas **del propio frame** (día de
+  la semana, sesiones hasta el vencimiento mensual y marca del trimestral). No
+  publica ninguna columna de VIX ni duplica nada de las otras familias.
 - :mod:`cfdtrader.features.store` — **infraestructura de persistencia** (tarea #19):
   identidad reproducible (``features_version`` por sesión y ``feature_spec_sha256``
   por contrato), esquema ancho en ``derived.features_daily``, catálogo documentado y

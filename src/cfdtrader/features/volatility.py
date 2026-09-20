@@ -55,14 +55,18 @@ que se predice, no features.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Final
+from typing import Any, Final, cast
 
+import arch
 import numpy as np
 import polars as pl
 
 __all__ = [
     "ATR_WINDOW",
+    "GARCH_MIN_TRAIN",
+    "GARCH_REFIT_EVERY",
     "HAR_LAG_DAILY",
     "HAR_LAG_MONTHLY",
     "HAR_LAG_WEEKLY",
@@ -70,13 +74,19 @@ __all__ = [
     "HAR_WARMUP",
     "PARKINSON_DENOMINATOR",
     "VIX_MIN_SESSIONS",
+    "GarchFit",
     "HarCoefficients",
     "add_features",
+    "fit_garch",
     "fit_log_har",
+    "garch_fold_bounds",
+    "garch_forecasts",
+    "garch_one_step_forecast",
     "har_forecast",
     "har_regressors",
     "normalised_atr",
     "parkinson_variance",
+    "session_returns",
     "true_range",
     "vix_features",
 ]
@@ -107,6 +117,14 @@ HAR_MIN_TRAIN: Final[int] = 22
 
 #: Sesiones mínimas de historia para normalizar el VIX (ventana expandida).
 VIX_MIN_SESSIONS: Final[int] = 250
+
+#: Sesiones mínimas de entrenamiento del GARCH(1,1). Es el esquema que #7
+#: pre-registró y con el que el GARCH resultó elegido: subirlo o bajarlo cambia
+#: la serie de pronósticos, no solo su arranque.
+GARCH_MIN_TRAIN: Final[int] = 500
+
+#: Reajuste del GARCH cada N sesiones, el **mismo** para todos los candidatos de #7.
+GARCH_REFIT_EVERY: Final[int] = 21
 
 #: Denominador del estimador de Parkinson: ``4 · ln 2``.
 PARKINSON_DENOMINATOR: Final[float] = 4.0 * math.log(2.0)
@@ -309,6 +327,120 @@ def har_forecast(frame: pl.DataFrame, *, min_train: int = HAR_MIN_TRAIN) -> pl.D
         if predicted is not None:
             forecasts[index] = predicted
     return frame.with_columns(pl.Series("har_forecast", forecasts, nan_to_null=True))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GARCH(1,1): ajuste y pronóstico a un paso
+# ─────────────────────────────────────────────────────────────────────────────
+@dataclass(frozen=True, slots=True)
+class GarchFit:
+    """Parámetros ajustados de GARCH(1,1) y el estado de la varianza condicional.
+
+    ``sigma2`` es la varianza condicional de la última sesión de entrenamiento y
+    ``epsilon2`` el cuadrado de su residuo (media cero): con ellos, el pronóstico
+    a un paso es ``omega + alpha * epsilon2 + beta * sigma2``. Todo en fracción².
+    """
+
+    omega: float
+    alpha: float
+    beta: float
+    sigma2: float
+    epsilon2: float
+
+
+def fit_garch(returns: np.ndarray) -> GarchFit:
+    """Ajusta GARCH(1,1) con ``arch``: media cero, errores normales, sin exógenas.
+
+    ``rescale=False`` a propósito: los parámetros quedan en las unidades de la
+    serie (fracciones), no en una escala interna, para que la recursión de la
+    varianza condicional sea exacta. Un ajuste no finito o con varianza no
+    admisible es un ``ValueError``: el llamante decide si eso es un fallo o un
+    pronóstico que no existe.
+    """
+    model = arch.arch_model(
+        returns, mean="Zero", vol="GARCH", p=1, q=1, dist="normal", rescale=False
+    )
+    result = cast("Any", model.fit(disp="off", show_warning=False))
+    params = result.params
+    fit = GarchFit(
+        omega=float(params["omega"]),
+        alpha=float(params["alpha[1]"]),
+        beta=float(params["beta[1]"]),
+        sigma2=float(result.conditional_volatility[-1]) ** 2,
+        epsilon2=float(result.resid[-1]) ** 2,
+    )
+    if not all(math.isfinite(value) for value in (fit.omega, fit.alpha, fit.beta, fit.sigma2)):
+        raise ValueError("el ajuste GARCH no ha dado parámetros finitos")
+    if fit.omega <= 0.0 or fit.alpha < 0.0 or fit.beta < 0.0 or fit.sigma2 <= 0.0:
+        raise ValueError("el ajuste GARCH no ha dado una varianza admisible")
+    return fit
+
+
+def garch_one_step_forecast(returns: np.ndarray) -> float:
+    """Pronóstico de varianza **a un paso** de GARCH(1,1) ajustado con ``returns``.
+
+    Con los parámetros ajustados sobre ``returns``, la varianza pronosticada para
+    la sesión siguiente es ``sigma² = omega + alpha·eps²_T + beta·sigma²_T``, donde
+    ``T`` es la última sesión de entrenamiento. Los retornos van **en fracciones**
+    (``0,01`` = 1 %).
+
+    Se expone aparte de :func:`garch_forecasts` para poder comprobar la
+    especificación contra una serie de varianza conocida (#7, A8) sin montar el
+    *walk-forward* completo.
+    """
+    fit = fit_garch(returns)
+    return fit.omega + fit.alpha * fit.epsilon2 + fit.beta * fit.sigma2
+
+
+def garch_forecasts(
+    returns: np.ndarray, *, bounds: Sequence[tuple[int, int]]
+) -> tuple[np.ndarray, str | None]:
+    """Pronósticos de varianza a un paso de GARCH(1,1) con reajuste en cada fold.
+
+    Dentro del fold los parámetros están **congelados** (el reajuste es cada
+    ``GARCH_REFIT_EVERY`` sesiones, igual que para los demás candidatos) y la
+    varianza condicional se actualiza con la recursión de GARCH(1,1):
+    ``sigma²_t = omega + alpha·eps²_{t-1} + beta·sigma²_{t-1}``. El valor que se
+    guarda en ``t`` es esa recursión aplicada con la información de ``t-1``:
+    exactamente el pronóstico a un paso con lo disponible antes de la sesión ``t``
+    (incluida la primera sesión de cada fold, que si no quedaría un paso por
+    detrás).
+
+    Devuelve el vector de pronósticos (``NaN`` donde no hay) y, si algún fold no
+    se puede estimar, el motivo: ``arch`` falla de muchas formas distintas y
+    ninguna debe abortar el estudio ni publicarse como un número.
+    """
+    forecasts = np.full(returns.shape, np.nan)
+    for start, end in bounds:
+        try:
+            fit = fit_garch(returns[:start])
+        except Exception as error:  # `arch` falla de muchas formas distintas
+            return forecasts, f"GARCH(1,1) no estimable: {type(error).__name__}: {error}"
+        sigma2, epsilon2 = fit.sigma2, fit.epsilon2
+        for index in range(start, end):
+            sigma2 = fit.omega + fit.alpha * epsilon2 + fit.beta * sigma2
+            forecasts[index] = sigma2
+            epsilon2 = returns[index] ** 2
+    return forecasts, None
+
+
+def garch_fold_bounds(
+    sessions: int, *, min_train: int = GARCH_MIN_TRAIN, refit_every: int = GARCH_REFIT_EVERY
+) -> list[tuple[int, int]]:
+    """Tramos de reajuste: ventana expansiva, reajuste cada ``refit_every`` sesiones.
+
+    El primer tramo empieza en la posición ``min_train`` (las ``min_train``
+    primeras sesiones son entrenamiento puro) y el último se recorta al final de
+    la serie. Sin sesiones suficientes devuelve una lista vacía: quien decide si
+    eso es un error es el llamante.
+    """
+    bounds: list[tuple[int, int]] = []
+    start = min_train
+    while start < sessions:
+        end = min(start + refit_every, sessions)
+        bounds.append((start, end))
+        start = end
+    return bounds
 
 
 # ─────────────────────────────────────────────────────────────────────────────

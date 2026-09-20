@@ -137,6 +137,8 @@ import polars as pl
 from cfdtrader.data.store import Layer, StorageError, Store, UnknownDatasetError, WriteOutcome
 from cfdtrader.features.volatility import (
     ATR_WINDOW,
+    GARCH_MIN_TRAIN,
+    GARCH_REFIT_EVERY,
     HAR_LAG_MONTHLY,
     HAR_LAG_WEEKLY,
     VIX_MIN_SESSIONS,
@@ -178,6 +180,12 @@ __all__ = [
     "MAD_SCALE",
     "NORMALISED_SUFFIX",
     "RANGE_WINDOW",
+    "REGIME_EFFICIENCY_WINDOW",
+    "REGIME_FEATURES_SOURCE",
+    "REGIME_FEATURE_CATALOG",
+    "REGIME_FEATURE_COLUMNS",
+    "REGIME_FEATURE_SET",
+    "REGIME_MIN_SESSIONS",
     "RETURN_LAGS",
     "RSI_WINDOW",
     "SOURCE_BY_FEATURE_SET",
@@ -195,6 +203,7 @@ __all__ = [
     "InvalidFeatureSpecError",
     "InvalidSeriesIdError",
     "MacroInputError",
+    "RegimeInputError",
     "build_matrix",
     "daily_records",
     "feature_spec_sha256",
@@ -288,6 +297,16 @@ class MacroInputError(FeatureStoreError):
     es una fecha (o el de una barra no es un instante con zona), un valor no es
     finito o dos observaciones comparten instante y referencia: todo eso es un
     error de **entrada**, y el mensaje nombra la serie, que es lo unico que se
+    puede arreglar desde fuera.
+    """
+
+
+class RegimeInputError(FeatureStoreError):
+    """El frame de la familia de regimen no cumple su contrato de entrada.
+
+    La familia ``regime_v1`` (#23) recibe un ``pl.DataFrame`` con ``session`` y
+    OHLC. Falta una columna de las cinco que el calculo necesita: es un error de
+    **entrada**, y el mensaje nombra la que falta, porque es lo unico que se
     puede arreglar desde fuera.
     """
 
@@ -856,6 +875,96 @@ DEFAULT_MACRO_SOURCES: Final[tuple[tuple[str, str], ...]] = (
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Catalogo de la familia de regimen y volatilidad (#23)
+# ─────────────────────────────────────────────────────────────────────────────
+#: Identificador del conjunto de features de regimen (`_docs/plan.md` §9).
+REGIME_FEATURE_SET: Final[str] = "regime_v1"
+
+#: ``source`` de las filas de regimen (mismo papel que el de la familia tecnica).
+REGIME_FEATURES_SOURCE: Final[str] = "cfdtrader.features.regime"
+
+#: Sesiones minimas de la ventana **expandida** de ``rv_percentile`` y ``garch_forecast_z``.
+REGIME_MIN_SESSIONS: Final[int] = 250
+
+#: Ventana del *efficiency ratio* de Kaufman (el sufijo _20 del nombre es este numero).
+REGIME_EFFICIENCY_WINDOW: Final[int] = 20
+
+#: Catalogo completo de la familia de regimen (7 entradas, #23). Vive aqui, con la
+#: spec, y no en ``regime.py``: el catalogo es la **declaracion** del contrato y
+#: las formulas lo leen, de modo que no puede haber una segunda copia de las
+#: ventanas. ``regime.py`` importa de este modulo; la dependencia va en un solo
+#: sentido y no hay ciclos.
+REGIME_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
+    CatalogEntry(
+        "rv_percentile",
+        "fraccion de las parkinson_rv de las sesiones < t-1 que no superan la de t-1 "
+        f"(ventana expandida, {REGIME_MIN_SESSIONS} sesiones como minimo)",
+        REGIME_MIN_SESSIONS,
+        "raw.market_daily",
+        "cierre de la sesion t-1",
+    ),
+    CatalogEntry(
+        "garch_forecast",
+        "omega + alpha*eps^2_T + beta*sigma^2_T con ret_log hasta T = t-1 (varianza en "
+        f"fraccion^2, ajuste expansivo con reajuste cada {GARCH_REFIT_EVERY} sesiones)",
+        GARCH_MIN_TRAIN,
+        "raw.market_daily",
+        "cierre de la sesion t-1",
+    ),
+    CatalogEntry(
+        "garch_forecast_z",
+        f"normalise_expanding(garch_forecast, min_sessions={REGIME_MIN_SESSIONS})",
+        REGIME_MIN_SESSIONS,
+        "raw.market_daily",
+        "cierre de la sesion t-1",
+    ),
+    CatalogEntry(
+        "efficiency_ratio_20",
+        f"abs(C_t - C_{{t-{REGIME_EFFICIENCY_WINDOW}}}) / suma de "
+        f"abs(C_i - C_{{i-1}}) para i = t-{REGIME_EFFICIENCY_WINDOW - 1} ... t",
+        REGIME_EFFICIENCY_WINDOW,
+        "raw.market_daily",
+        "cierre de la sesion t",
+    ),
+    CatalogEntry(
+        "day_of_week",
+        "isoweekday() de la sesion (1 = lunes)",
+        None,
+        "raw.market_daily",
+        "de antemano",
+    ),
+    CatalogEntry(
+        "sessions_to_opex",
+        "sesiones hasta la proxima sesion OPEX (0 en ella); null si la siguiente cae fuera "
+        "del frame",
+        None,
+        "raw.market_daily",
+        "de antemano",
+    ),
+    CatalogEntry(
+        "is_es_roll_session",
+        "1 si la fila es la sesion OPEX de marzo, junio, septiembre o diciembre",
+        None,
+        "raw.market_daily",
+        "de antemano",
+    ),
+)
+
+#: Columnas de feature que persiste la matriz de regimen: **todas** las del catalogo.
+REGIME_FEATURE_COLUMNS: Final[tuple[str, ...]] = tuple(
+    entry.name for entry in REGIME_FEATURE_CATALOG
+)
+
+#: Ventanas por defecto de la spec de regimen: las del catalogo, sin excepciones.
+DEFAULT_REGIME_WINDOWS: Final[dict[str, int | None]] = {
+    entry.name: entry.window for entry in REGIME_FEATURE_CATALOG
+}
+
+#: Fuentes de entrada por defecto de la familia de regimen: el indice, **sin** VIX.
+DEFAULT_REGIME_SOURCES: Final[tuple[tuple[str, str], ...]] = (("raw.market_daily", "^GSPC"),)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Registro de familias
 # ─────────────────────────────────────────────────────────────────────────────
 #: Registro de familias: el catalogo de cada ``feature_set`` declarado.
@@ -864,6 +973,7 @@ CATALOG_BY_FEATURE_SET: Final[dict[str, tuple[CatalogEntry, ...]]] = {
     TECHNICAL_FEATURE_SET: TECHNICAL_FEATURE_CATALOG,
     CONTEXT_FEATURE_SET: CONTEXT_FEATURE_CATALOG,
     MACRO_FEATURE_SET: MACRO_FEATURE_CATALOG,
+    REGIME_FEATURE_SET: REGIME_FEATURE_CATALOG,
 }
 
 #: ``source`` con el que se persiste cada familia (el discriminador de la
@@ -873,9 +983,10 @@ SOURCE_BY_FEATURE_SET: Final[dict[str, str]] = {
     TECHNICAL_FEATURE_SET: TECHNICAL_FEATURES_SOURCE,
     CONTEXT_FEATURE_SET: CONTEXT_FEATURES_SOURCE,
     MACRO_FEATURE_SET: MACRO_FEATURES_SOURCE,
+    REGIME_FEATURE_SET: REGIME_FEATURES_SOURCE,
 }
 
-#: Todas las columnas de feature conocidas, de las **cuatro** familias: es la lista
+#: Todas las columnas de feature conocidas, de las **cinco** familias: es la lista
 #: con la que el digest de una matriz comprueba que no haya ``NaN`` ni ``inf``. Se
 #: deduplica porque ``atr_norm`` existe en dos catalogos (el solape lo declara y lo
 #: resuelve #72, no esta capa). Que las 13 columnas macro entren aqui no es
@@ -888,6 +999,7 @@ ALL_FEATURE_COLUMNS: Final[tuple[str, ...]] = tuple(
             *TECHNICAL_FEATURE_COLUMNS,
             *CONTEXT_FEATURE_COLUMNS,
             *MACRO_FEATURE_COLUMNS,
+            *REGIME_FEATURE_COLUMNS,
         )
     )
 )

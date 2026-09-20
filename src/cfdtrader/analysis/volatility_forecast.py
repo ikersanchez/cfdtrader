@@ -76,7 +76,6 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Final, cast
 
-import arch
 import duckdb
 import numpy as np
 import polars as pl
@@ -94,7 +93,16 @@ from cfdtrader.analysis.drift import (
 from cfdtrader.data.calendar import FULL_SESSION_HOURS, HALF_SESSION_HOURS, MarketCalendar
 from cfdtrader.data.settings import ConfigurationError, load_settings
 from cfdtrader.data.store import Store, UnknownDatasetError
-from cfdtrader.features.volatility import HAR_WARMUP, add_features, fit_log_har
+from cfdtrader.features.volatility import (
+    GARCH_MIN_TRAIN,
+    GARCH_REFIT_EVERY,
+    HAR_WARMUP,
+    add_features,
+    fit_log_har,
+    garch_fold_bounds,
+    garch_forecasts,
+    garch_one_step_forecast,
+)
 
 __all__ = [
     "CANDIDATES",
@@ -128,11 +136,13 @@ VIX_SERIES_ID: Final[str] = "^VIX"
 
 SOURCE: Final[str] = "yfinance"
 
-#: Sesiones mínimas de entrenamiento antes de empezar a evaluar (A12).
-MIN_TRAIN: Final[int] = 500
+#: Sesiones mínimas de entrenamiento antes de empezar a evaluar (A12). El valor
+#: vive en ``features.volatility`` (#23, decisión 3): aquí solo se re-expone para
+#: que el contrato publicado por este módulo no cambie de sitio.
+MIN_TRAIN: Final[int] = GARCH_MIN_TRAIN
 
 #: Reajuste del modelo cada N sesiones, **el mismo para todos los candidatos** (A12).
-REFIT_EVERY: Final[int] = 21
+REFIT_EVERY: Final[int] = GARCH_REFIT_EVERY
 
 #: Horizonte del pronóstico: siempre a un paso (A12).
 HORIZON: Final[int] = 1
@@ -529,17 +539,6 @@ def _har_forecasts(
     return forecasts, None
 
 
-@dataclass(frozen=True, slots=True)
-class _GarchFit:
-    """Parámetros ajustados de GARCH(1,1) y el estado de la varianza condicional."""
-
-    omega: float
-    alpha: float
-    beta: float
-    sigma2: float
-    epsilon2: float
-
-
 #: Banda declarada de cordura del GARCH (A8): sobre una serie de varianza
 #: constante, el pronóstico a un paso tiene que caer dentro de 0,5×–2× de la
 #: varianza realizada de las últimas ``GARCH_SANITY_SESSIONS`` sesiones. Fuera de
@@ -549,75 +548,6 @@ GARCH_VARIANCE_BAND: Final[tuple[float, float]] = (0.5, 2.0)
 
 #: Sesiones de la varianza realizada con la que se contrasta el GARCH (A8).
 GARCH_SANITY_SESSIONS: Final[int] = 250
-
-
-def _fit_garch(returns: np.ndarray) -> _GarchFit:
-    """Ajusta GARCH(1,1) con ``arch``: media cero, errores normales, sin exógenas.
-
-    ``rescale=False`` a propósito: los parámetros quedan en las unidades de la
-    serie (fracciones), no en una escala interna, para que la recursión de la
-    varianza condicional sea exacta.
-    """
-    model = arch.arch_model(
-        returns, mean="Zero", vol="GARCH", p=1, q=1, dist="normal", rescale=False
-    )
-    result = cast("Any", model.fit(disp="off", show_warning=False))
-    params = result.params
-    fit = _GarchFit(
-        omega=float(params["omega"]),
-        alpha=float(params["alpha[1]"]),
-        beta=float(params["beta[1]"]),
-        sigma2=float(result.conditional_volatility[-1]) ** 2,
-        epsilon2=float(result.resid[-1]) ** 2,
-    )
-    if not all(math.isfinite(value) for value in (fit.omega, fit.alpha, fit.beta, fit.sigma2)):
-        raise ValueError("el ajuste GARCH no ha dado parámetros finitos")
-    if fit.omega <= 0.0 or fit.alpha < 0.0 or fit.beta < 0.0 or fit.sigma2 <= 0.0:
-        raise ValueError("el ajuste GARCH no ha dado una varianza admisible")
-    return fit
-
-
-def garch_one_step_forecast(returns: np.ndarray) -> float:
-    """Pronóstico de varianza **a un paso** de GARCH(1,1) ajustado con ``returns``.
-
-    Con los parámetros ajustados sobre ``returns``, la varianza pronosticada para
-    la sesión siguiente es ``sigma² = ω + alpha·ε²_T + beta·sigma²_T``, donde ``T``
-    es la última sesión de entrenamiento. Los retornos van **en fracciones**
-    (``0,01`` = 1 %).
-
-    Se expone aparte de :func:`_garch_forecasts` para poder comprobar la
-    especificación contra una serie de varianza conocida (A8) sin montar el
-    *walk-forward* completo.
-    """
-    fit = _fit_garch(returns)
-    return fit.omega + fit.alpha * fit.epsilon2 + fit.beta * fit.sigma2
-
-
-def _garch_forecasts(
-    returns: np.ndarray, *, bounds: Sequence[tuple[int, int]]
-) -> tuple[np.ndarray, str | None]:
-    """Pronósticos de varianza a un paso de GARCH(1,1) con reajuste en cada fold.
-
-    Dentro del fold los parámetros están **congelados** (el reajuste es cada 21
-    sesiones, igual que para los demás candidatos) y la varianza condicional se
-    actualiza con la recursión de GARCH(1,1):
-    ``sigma²_t = ω + alpha·ε²_{t-1} + β·sigma²_{t-1}``. El valor que se guarda en
-    ``t`` es esa recursión aplicada con la información de ``t-1``: exactamente el
-    pronóstico a un paso con lo disponible antes de la sesión ``t`` (incluida la
-    primera sesión de cada fold, que si no quedaría un paso por detrás).
-    """
-    forecasts = np.full(returns.shape, np.nan)
-    for start, end in bounds:
-        try:
-            fit = _fit_garch(returns[:start])
-        except Exception as error:  # `arch` falla de muchas formas distintas
-            return forecasts, f"GARCH(1,1) no estimable: {type(error).__name__}: {error}"
-        sigma2, epsilon2 = fit.sigma2, fit.epsilon2
-        for index in range(start, end):
-            sigma2 = fit.omega + fit.alpha * epsilon2 + fit.beta * sigma2
-            forecasts[index] = sigma2
-            epsilon2 = returns[index] ** 2
-    return forecasts, None
 
 
 def _metrics(
@@ -639,19 +569,6 @@ def _metrics(
     qlike = float(np.mean(np.log(predicted) + observed / predicted))
     mse_log = float(np.mean((np.log(predicted) - np.log(observed)) ** 2))
     return Metrics(qlike=qlike, mse_log=mse_log, sessions=int(predicted.size))
-
-
-def _fold_bounds(
-    sessions: int, *, min_train: int = MIN_TRAIN, refit_every: int = REFIT_EVERY
-) -> list[tuple[int, int]]:
-    """Tramos de reajuste: ventana expansiva, reajuste cada ``refit_every`` sesiones."""
-    bounds: list[tuple[int, int]] = []
-    start = min_train
-    while start < sessions:
-        end = min(start + refit_every, sessions)
-        bounds.append((start, end))
-        start = end
-    return bounds
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -678,7 +595,7 @@ class WalkForward:
 def walk_forward(frame: pl.DataFrame) -> WalkForward:
     """Ejecuta el esquema pre-registrado para los cuatro candidatos."""
     sessions = frame.height
-    bounds = _fold_bounds(sessions)
+    bounds = garch_fold_bounds(sessions)
     if not bounds:
         raise ConfigurationError(
             f"no se puede estimar ningún candidato: {sessions} sesiones utilizables y el "
@@ -719,7 +636,7 @@ def walk_forward(frame: pl.DataFrame) -> WalkForward:
     reasons[Candidate.HAR_VIX] = har_vix_reason
 
     try:
-        garch_forecast, garch_reason = _garch_forecasts(returns, bounds=bounds)
+        garch_forecast, garch_reason = garch_forecasts(returns, bounds=bounds)
     except Exception as error:  # `arch` falla de muchas formas distintas
         garch_forecast, garch_reason = (
             np.full(sessions, np.nan),

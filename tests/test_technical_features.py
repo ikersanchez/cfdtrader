@@ -221,6 +221,7 @@ def test_a1_the_registry_declares_the_two_families() -> None:
     assert sorted(store.CATALOG_BY_FEATURE_SET) == [
         "context_v1",
         "macro_v1",
+        "regime_v1",
         "technical_v1",
         "volatility_v1",
     ]

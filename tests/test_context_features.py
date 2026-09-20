@@ -331,6 +331,7 @@ def test_a1_the_registry_declares_the_third_family() -> None:
     assert sorted(store.CATALOG_BY_FEATURE_SET) == [
         "context_v1",
         "macro_v1",
+        "regime_v1",
         "technical_v1",
         "volatility_v1",
     ]
@@ -948,7 +949,7 @@ def test_a9_the_sp500_return_is_not_duplicated_between_families() -> None:
 
     overlap = set(store.TECHNICAL_FEATURE_COLUMNS) & set(store.CONTEXT_FEATURE_COLUMNS)
     assert overlap == set()
-    # el unico solape entre los tres catalogos sigue siendo `atr_norm` (#72)
+    # el unico solape entre los cinco catalogos sigue siendo `atr_norm` (#72)
     assert set(store.FEATURE_COLUMNS) & set(store.TECHNICAL_FEATURE_COLUMNS) == {"atr_norm"}
     assert set(store.FEATURE_COLUMNS) & set(store.CONTEXT_FEATURE_COLUMNS) == set()
     assert len(store.ALL_FEATURE_COLUMNS) == len(
@@ -956,6 +957,7 @@ def test_a9_the_sp500_return_is_not_duplicated_between_families() -> None:
         | set(store.TECHNICAL_FEATURE_COLUMNS)
         | set(store.CONTEXT_FEATURE_COLUMNS)
         | set(store.MACRO_FEATURE_COLUMNS)
+        | set(store.REGIME_FEATURE_COLUMNS)
     )
 
 
