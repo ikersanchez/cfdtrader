@@ -12,11 +12,20 @@ Módulos:
   de la familia de volatilidad del proyecto (Parkinson, HAR y VIX, tarea #7). Las
   tareas #20 (features técnicas, que también nombra el ``atr_norm``) y #23 (features
   de régimen y volatilidad) **importan de ahí**, no reimplementan las fórmulas.
+- :mod:`cfdtrader.features.technical` — familia **técnica** cerrada (tarea #20):
+  retornos multi-ventana, ATR normalizado (importado de
+  :mod:`cfdtrader.features.volatility`), distancia a la media móvil, RSI de Wilder,
+  posición en el rango, ruptura del recorrido y dos z-scores de ventana expandida
+  (importados de :mod:`cfdtrader.features.store`). Se persiste con el **mismo**
+  ``Store`` y convive con la familia de volatilidad en ``derived.features_daily``,
+  que las separa por ``source``. No lee el ``open``.
 - :mod:`cfdtrader.features.store` — **infraestructura de persistencia** (tarea #19):
   identidad reproducible (``features_version`` por sesión y ``feature_spec_sha256``
   por contrato), esquema ancho en ``derived.features_daily``, catálogo documentado y
   normalización robusta de ventana expandida. Las familias de features (#20–#23) se
-  persistirán **a través de él**, no con su propio ``Store``.
+  persistirán **a través de él**, no con su propio ``Store``. También publica el
+  **registro de familias** (``CATALOG_BY_FEATURE_SET``): cada ``feature_set`` tiene
+  su catálogo y su ``source``, y una familia sin registrar es un error tipado.
 
 Se implementa en las tareas #19–#23.
 """

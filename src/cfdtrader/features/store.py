@@ -73,6 +73,34 @@ Sin *look-ahead*
   posteriores no cambia el valor de una sesion pasada.
 - El modulo **no** filtra sesiones ni aplica el corte de muestra limpia de
   ``analysis.drift``: eso es una restriccion de *estudio*, no del almacen.
+
+Familias de features
+--------------------
+
+El modulo publica el **registro de familias**: cada ``feature_set`` declarado
+(:data:`CATALOG_BY_FEATURE_SET`) tiene su catalogo y su ``source``
+(:data:`SOURCE_BY_FEATURE_SET`). Una familia sin registrar es un error tipado:
+no se inventa un catalogo por defecto.
+
+La identidad del almacen es ``(source, series_id, as_of)`` y el esquema de #19
+**no** guarda el ``feature_set`` (#49 todavia abierto), asi que el ``source`` es
+lo unico que separa dos familias dentro del **mismo** dataset: sin el, escribir
+la familia tecnica sustituiria las filas de volatilidad de la misma serie y el
+mismo dia.
+
+=====================  ================================  ======================
+``feature_set``        ``source``                        catalogo
+=====================  ================================  ======================
+``volatility_v1``      ``cfdtrader.features.store``      :data:`FEATURE_CATALOG`
+``technical_v1``       ``cfdtrader.features.technical``  :data:`TECHNICAL_FEATURE_CATALOG`
+=====================  ================================  ======================
+
+Los valores por defecto de :class:`FeatureSpec` siguen siendo los de
+``volatility_v1``: #20 anade features nuevas, no cambia el resultado de ninguna
+existente, asi que :data:`FEATURE_CODE_VERSION` **no** se mueve por anadirlas.
+:func:`build_matrix` sigue siendo la entrada de ``volatility_v1`` (congelada por
+su *golden*); la matriz tecnica la construye
+``cfdtrader.features.technical.technical_matrix``.
 """
 
 from __future__ import annotations
@@ -99,6 +127,10 @@ from cfdtrader.features.volatility import (
 )
 
 __all__ = [
+    "ALL_FEATURE_COLUMNS",
+    "CATALOG_BY_FEATURE_SET",
+    "DEFAULT_TECHNICAL_SOURCES",
+    "DEFAULT_TECHNICAL_WINDOWS",
     "FEATURES_DATASET",
     "FEATURES_LAYER",
     "FEATURES_SOURCE",
@@ -107,6 +139,15 @@ __all__ = [
     "FEATURE_VERSION_PREFIX",
     "MAD_SCALE",
     "NORMALISED_SUFFIX",
+    "RANGE_WINDOW",
+    "RETURN_LAGS",
+    "RSI_WINDOW",
+    "SOURCE_BY_FEATURE_SET",
+    "TECHNICAL_FEATURES_SOURCE",
+    "TECHNICAL_FEATURE_CATALOG",
+    "TECHNICAL_FEATURE_COLUMNS",
+    "TECHNICAL_FEATURE_SET",
+    "TECHNICAL_MIN_SESSIONS",
     "VOLATILITY_FEATURE_SET",
     "CatalogEntry",
     "FeatureSpec",
@@ -329,6 +370,145 @@ INPUT_COLUMNS: Final[tuple[str, ...]] = ("session", "open", "high", "low", "clos
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Catalogo de la familia tecnica (#20)
+# ─────────────────────────────────────────────────────────────────────────────
+#: Identificador del conjunto de features tecnicas (`_docs/plan.md` §9).
+TECHNICAL_FEATURE_SET: Final[str] = "technical_v1"
+
+#: ``source`` de las filas tecnicas. **No** es decorativo: es el discriminador de
+#: familia dentro de ``derived.features_daily`` mientras el ``feature_set`` no
+#: forme parte de la identidad del almacen (#49).
+TECHNICAL_FEATURES_SOURCE: Final[str] = "cfdtrader.features.technical"
+
+#: Sesiones minimas de la ventana **expandida** de las dos ``_z`` tecnicas.
+TECHNICAL_MIN_SESSIONS: Final[int] = 250
+
+#: Retardo de cada retorno multi-ventana, en sesiones.
+RETURN_LAGS: Final[tuple[tuple[str, int], ...]] = (("ret_1", 1), ("ret_5", 5), ("ret_21", 21))
+
+#: Ventana del RSI de Wilder (sesiones de historia del suavizado).
+RSI_WINDOW: Final[int] = 14
+
+#: Ventana de las features de media, rango y ruptura (`dist_sma_20`, `range_pos_20`,
+#: `vol_break_20`; el sufijo _20 del nombre es este mismo numero).
+RANGE_WINDOW: Final[int] = 20
+
+#: Catalogo completo de la familia tecnica (10 entradas, #20). Vive aqui, con la
+#: spec, y no en ``technical.py``: el catalogo es la **declaracion** del contrato
+#: y las formulas lo leen, de modo que no puede haber una segunda copia de las
+#: ventanas. ``technical.py`` importa de este modulo; la dependencia va en un solo
+#: sentido y no hay ciclos.
+TECHNICAL_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
+    CatalogEntry(
+        "ret_1",
+        "ln(C_t / C_{t-1})",
+        1,
+        "raw.market_daily",
+        "cierre de la sesion t",
+    ),
+    CatalogEntry(
+        "ret_5",
+        "ln(C_t / C_{t-5})",
+        5,
+        "raw.market_daily",
+        "cierre de la sesion t",
+    ),
+    CatalogEntry(
+        "ret_21",
+        "ln(C_t / C_{t-21})",
+        21,
+        "raw.market_daily",
+        "cierre de la sesion t",
+    ),
+    CatalogEntry(
+        "atr_norm",
+        f"media de true_range de t-{ATR_WINDOW} ... t-1 / C_{{t-1}} (importada de #7)",
+        ATR_WINDOW,
+        "raw.market_daily",
+        "cierre de la sesion t-1",
+    ),
+    CatalogEntry(
+        "dist_sma_20",
+        f"C_t / media(C_{{t-{RANGE_WINDOW - 1}}} ... C_t) - 1",
+        RANGE_WINDOW,
+        "raw.market_daily",
+        "cierre de la sesion t",
+    ),
+    CatalogEntry(
+        "rsi_14",
+        f"RSI de Wilder ({RSI_WINDOW}) sobre d_t = C_t - C_{{t-1}}, alpha = 1/{RSI_WINDOW}, "
+        f"semilla = media simple de los {RSI_WINDOW} primeros d",
+        RSI_WINDOW,
+        "raw.market_daily",
+        "cierre de la sesion t",
+    ),
+    CatalogEntry(
+        "range_pos_20",
+        f"(C_t - min(low de t-{RANGE_WINDOW - 1} ... t)) / "
+        f"(max(high de t-{RANGE_WINDOW - 1} ... t) - min(low de t-{RANGE_WINDOW - 1} ... t))",
+        RANGE_WINDOW,
+        "raw.market_daily",
+        "cierre de la sesion t",
+    ),
+    CatalogEntry(
+        "vol_break_20",
+        f"true_range_t / media(true_range de t-{RANGE_WINDOW} ... t-1)",
+        RANGE_WINDOW,
+        "raw.market_daily",
+        "cierre de la sesion t",
+    ),
+    CatalogEntry(
+        "atr_norm_z",
+        f"normalise_expanding(atr_norm, min_sessions={TECHNICAL_MIN_SESSIONS})",
+        TECHNICAL_MIN_SESSIONS,
+        "raw.market_daily",
+        "cierre de la sesion t-1",
+    ),
+    CatalogEntry(
+        "dist_sma_20_z",
+        f"normalise_expanding(dist_sma_20, min_sessions={TECHNICAL_MIN_SESSIONS})",
+        TECHNICAL_MIN_SESSIONS,
+        "raw.market_daily",
+        "cierre de la sesion t",
+    ),
+)
+
+#: Columnas de feature que persiste la matriz tecnica: **todas** las del catalogo.
+TECHNICAL_FEATURE_COLUMNS: Final[tuple[str, ...]] = tuple(
+    entry.name for entry in TECHNICAL_FEATURE_CATALOG
+)
+
+#: Ventanas por defecto de la spec tecnica: las del catalogo, sin excepciones.
+DEFAULT_TECHNICAL_WINDOWS: Final[dict[str, int | None]] = {
+    entry.name: entry.window for entry in TECHNICAL_FEATURE_CATALOG
+}
+
+#: Fuentes de entrada por defecto del conjunto tecnico: el indice, **sin** VIX.
+DEFAULT_TECHNICAL_SOURCES: Final[tuple[tuple[str, str], ...]] = (("raw.market_daily", "^GSPC"),)
+
+#: Registro de familias: el catalogo de cada ``feature_set`` declarado.
+CATALOG_BY_FEATURE_SET: Final[dict[str, tuple[CatalogEntry, ...]]] = {
+    VOLATILITY_FEATURE_SET: FEATURE_CATALOG,
+    TECHNICAL_FEATURE_SET: TECHNICAL_FEATURE_CATALOG,
+}
+
+#: ``source`` con el que se persiste cada familia (el discriminador de la
+#: decision 2 de #20). Toda familia del registro tiene que estar aqui.
+SOURCE_BY_FEATURE_SET: Final[dict[str, str]] = {
+    VOLATILITY_FEATURE_SET: FEATURES_SOURCE,
+    TECHNICAL_FEATURE_SET: TECHNICAL_FEATURES_SOURCE,
+}
+
+#: Todas las columnas de feature conocidas, de las dos familias: es la lista con
+#: la que el digest de una matriz comprueba que no haya ``NaN`` ni ``inf``. Se
+#: deduplica porque ``atr_norm`` existe en los dos catalogos (el solape lo declara
+#: y lo resuelve #72, no esta capa).
+ALL_FEATURE_COLUMNS: Final[tuple[str, ...]] = tuple(
+    dict.fromkeys((*FEATURE_COLUMNS, *TECHNICAL_FEATURE_COLUMNS))
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Spec e identidad
 # ─────────────────────────────────────────────────────────────────────────────
 @dataclass(frozen=True, slots=True)
@@ -405,10 +585,45 @@ def _canonical_json(payload: object) -> str:
         ) from error
 
 
+def _catalog_for(feature_set: str) -> tuple[CatalogEntry, ...]:
+    """Catalogo registrado de una familia.
+
+    Una familia sin registrar es un error tipado, nunca un catalogo vacio: una
+    spec que no casa con ningun contrato no puede llegar a escribir nada.
+    """
+    catalog = CATALOG_BY_FEATURE_SET.get(feature_set)
+    if catalog is None:
+        raise InvalidFeatureSpecError(
+            f"la familia de features '{feature_set}' no esta registrada: las declaradas son "
+            f"{sorted(CATALOG_BY_FEATURE_SET)}"
+        )
+    return catalog
+
+
+def _source_for(feature_set: str) -> str:
+    """``source`` con el que se persiste una familia (lo que la separa de las demas)."""
+    _catalog_for(feature_set)
+    return SOURCE_BY_FEATURE_SET[feature_set]
+
+
+def _feature_columns_for(feature_set: str) -> tuple[str, ...]:
+    """Columnas de feature publicadas por una familia, en el orden del catalogo."""
+    return tuple(entry.name for entry in _catalog_for(feature_set))
+
+
 def _validate_spec(spec: FeatureSpec) -> None:
-    """Comprueba los tipos de la spec y que sus ventanas no contradigan al catalogo."""
+    """Comprueba los tipos de la spec y que sus ventanas no contradigan a su catalogo.
+
+    Una familia **registrada** se valida contra **su** catalogo. Una familia sin
+    registrar se valida contra :data:`FEATURE_CATALOG`, que es exactamente el
+    contrato congelado de #19: su spec se tiene que poder **hashear** (el digest
+    identifica un contrato aunque la familia no este dada de alta) y lo que cae es
+    la **resolucion** de la familia, en :func:`_source_for`. Cambiar esto romperia
+    ``test_a1`` de #19, que exige que ``volatility_v2`` siga dando un digest.
+    """
     if not _is_text(spec.feature_set) or not spec.feature_set.strip():
         raise InvalidFeatureSpecError("'feature_set' es obligatorio y no puede estar vacio")
+    catalog = CATALOG_BY_FEATURE_SET.get(spec.feature_set, FEATURE_CATALOG)
     if not _is_int(spec.code_version):
         raise InvalidFeatureSpecError(
             f"'code_version' debe ser un entero >= 1, no {type(spec.code_version).__name__}"
@@ -419,12 +634,13 @@ def _validate_spec(spec: FeatureSpec) -> None:
         raise InvalidFeatureSpecError(
             "'windows' no puede estar vacio: declara al menos la ventana de una feature"
         )
+    by_name = {entry.name: entry for entry in catalog}
     for name, window in spec.windows.items():
-        entry = CATALOG_BY_NAME.get(name)
+        entry = by_name.get(name)
         if entry is None:
             raise InvalidFeatureSpecError(
-                f"'{name}' no esta en el catalogo: las features declaradas son "
-                f"{sorted(CATALOG_BY_NAME)}"
+                f"'{name}' no esta en el catalogo de '{spec.feature_set}': las features "
+                f"declaradas son {sorted(by_name)}"
             )
         if window != entry.window:
             raise InvalidFeatureSpecError(
@@ -599,6 +815,11 @@ def build_matrix(frame: pl.DataFrame, *, spec: FeatureSpec) -> pl.DataFrame:
         y con lo no computable a ``null``.
     """
     _validate_spec(spec)
+    if spec.feature_set != VOLATILITY_FEATURE_SET:
+        raise InvalidFeatureMatrixError(
+            f"'build_matrix' es la entrada de '{VOLATILITY_FEATURE_SET}': la familia "
+            f"'{spec.feature_set}' tiene su propia funcion de calculo"
+        )
     missing = [name for name in (*INPUT_COLUMNS, "vix_close") if name not in frame.columns]
     if missing:
         raise InvalidFeatureMatrixError(
@@ -630,9 +851,9 @@ def matrix_sha256(matrix: pl.DataFrame) -> str:
     if ordering:
         frame = frame.sort(ordering)
 
-    # El catalogo completo, no solo las columnas presentes: asi una matriz
-    # parcial (un subconjunto de features) tambien se puede hashear.
-    frame = _require_finite(frame, FEATURE_COLUMNS)
+    # El catalogo completo de las dos familias, no solo las columnas presentes: asi
+    # una matriz parcial (un subconjunto de features) tambien se puede hashear.
+    frame = _require_finite(frame, ALL_FEATURE_COLUMNS)
 
     rows: list[list[object]] = []
     for row in frame.iter_rows():
@@ -715,11 +936,13 @@ def daily_records(
     reloj).
 
     La matriz tiene que traer ``session`` y ``as_of`` (el cierre de sesion en
-    UTC), todas las columnas del catalogo y, opcionalmente, ``features_version``
-    y/o ``feature_spec_sha256`` ya calculados: si vienen, se **verifican** contra
-    el recalculo y una discrepancia es un error tipado (A7). Cualquier otra
-    columna es un error (A10): la matriz persistida es exactamente
-    ``session``+``as_of``+features.
+    UTC), todas las columnas del catalogo **de su familia** y, opcionalmente,
+    ``features_version`` y/o ``feature_spec_sha256`` ya calculados: si vienen, se
+    **verifican** contra el recalculo y una discrepancia es un error tipado (A7).
+    Cualquier otra columna es un error (A10): la matriz persistida es exactamente
+    ``session``+``as_of``+features. El ``source`` del registro sale de la familia
+    de la spec, no del llamante: es lo que impide que una familia sustituya a la
+    otra en el mismo dataset.
 
     Returns
     -------
@@ -730,7 +953,9 @@ def daily_records(
     prepared_series = _require_series_id(series_id)
     fetched = _as_utc(fetched_at, field="fetched_at", error=InvalidFeatureMatrixError)
 
-    required = [*IDENTITY_COLUMNS, *FEATURE_COLUMNS]
+    source = _source_for(spec.feature_set)
+    feature_columns = _feature_columns_for(spec.feature_set)
+    required = [*IDENTITY_COLUMNS, *feature_columns]
     missing = [name for name in required if name not in matrix.columns]
     if missing:
         raise InvalidFeatureMatrixError(f"faltan columnas en la matriz: {missing}")
@@ -739,7 +964,7 @@ def daily_records(
     if unknown:
         raise InvalidFeatureMatrixError(
             f"columnas fuera del catalogo: {unknown}. Toda columna persistida tiene que estar "
-            "en FEATURE_CATALOG"
+            f"en el catalogo de '{spec.feature_set}'"
         )
 
     sessions = _session_dates(matrix)
@@ -749,7 +974,7 @@ def daily_records(
     instants = _instants(matrix, field="as_of")
 
     features = {
-        name: _column_values(matrix.get_column(name), column=name) for name in FEATURE_COLUMNS
+        name: _column_values(matrix.get_column(name), column=name) for name in feature_columns
     }
     supplied_version = _optional_column(matrix, "features_version")
     supplied_spec = _optional_column(matrix, "feature_spec_sha256")
@@ -784,7 +1009,7 @@ def daily_records(
                 "ser exactamente el que entra en el hash"
             )
         record: dict[str, object] = {
-            "source": FEATURES_SOURCE,
+            "source": source,
             "series_id": prepared_series,
             "as_of": instant,
             "fetched_at": fetched,
@@ -832,22 +1057,37 @@ def save_daily(
     return store.replace(FEATURES_LAYER, FEATURES_DATASET, records)
 
 
-def load_daily(store: Store, *, series_id: str) -> pl.DataFrame:
-    """Revision **vigente** de la matriz de features de una serie, por sesion.
+def load_daily(
+    store: Store, *, series_id: str, feature_set: str = VOLATILITY_FEATURE_SET
+) -> pl.DataFrame:
+    """Revision **vigente** de una familia de features de una serie, por sesion.
 
     Lee con ``store.sql()`` a proposito: las vistas del almacen exponen una sola
     fila por identidad (la de mayor ``version``), que es justo lo que se quiere
     comparar contra una recomputacion. ``read_pit`` responde otra pregunta.
+
+    ``feature_set`` filtra por el ``source`` de la familia (decision 2 de #20):
+    las dos familias comparten dataset y hay que poder leer una sin la otra. La
+    familia pedida **tiene** que tener filas: devolver un frame vacio por un nombre
+    mal escrito seria el fallo silencioso que este almacen no admite.
     """
     prepared = _require_series_id(series_id)
+    source = _source_for(feature_set)
     if FEATURES_DATASET not in store.datasets(FEATURES_LAYER):
         raise UnknownDatasetError(
             f"'{FEATURES_LAYER}.{FEATURES_DATASET}' no tiene ningun Parquet en {store.root}: "
             "no hay matriz de features que leer"
         )
     literal = prepared.replace("'", "''")
+    source_literal = source.replace("'", "''")
     query = (
         f"SELECT * FROM {FEATURES_LAYER}.{FEATURES_DATASET} "  # noqa: S608 - nombre fijo + serie validada
-        f"WHERE series_id = '{literal}' ORDER BY as_of"
+        f"WHERE series_id = '{literal}' AND source = '{source_literal}' ORDER BY as_of"
     )
-    return store.sql(query)
+    frame = store.sql(query)
+    if frame.height == 0:
+        raise UnknownDatasetError(
+            f"'{FEATURES_LAYER}.{FEATURES_DATASET}' no tiene filas de la familia "
+            f"'{feature_set}' (source='{source}') para la serie '{prepared}'"
+        )
+    return frame
