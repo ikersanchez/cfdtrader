@@ -888,7 +888,11 @@ def test_support_degenerate_inputs_are_typed_errors(monkeypatch: pytest.MonkeyPa
     with pytest.raises(store.InvalidFeatureMatrixError, match="faltan columnas de entrada"):
         store.build_matrix(missing_inputs, spec=spec)
 
-    monkeypatch.setattr(store, "add_features", lambda frame: frame)
+    def identity(frame: pl.DataFrame) -> pl.DataFrame:
+        """Un calculo que no produce ninguna feature del catalogo."""
+        return frame
+
+    monkeypatch.setattr(store, "add_features", identity)
     with pytest.raises(store.InvalidFeatureMatrixError, match="no produjo estas features"):
         store.build_matrix(_inputs(SESSIONS), spec=spec)
     monkeypatch.undo()
