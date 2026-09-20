@@ -1,0 +1,67 @@
+{
+  "_comment": [
+    "Golden dataset congelado del contrato de #20 (A13). Los INPUTS son los de",
+    "golden_inputs.csv, el mismo fixture de #19: no se duplica. El par",
+    "(code_version, digests) esta congelado entero, asi que el test falla si el",
+    "calculo se mueve sin subir FEATURE_CODE_VERSION (y tambien si sube sin",
+    "actualizar este fichero).",
+    "Nunca se regenera un golden dataset 'para que pase': si el digest cambia, o el",
+    "calculo se ha movido sin querer (se arregla el codigo) o se ha cambiado a",
+    "proposito (entonces sube FEATURE_CODE_VERSION y se actualiza el par con una nota)."
+  ],
+  "generator": "tests/fixtures/features/golden_inputs.csv (300 sesiones, reutilizado de #19)",
+  "code_version": 1,
+  "feature_set": "technical_v1",
+  "parameters": {},
+  "windows": {
+    "atr_norm": 14,
+    "atr_norm_z": 250,
+    "dist_sma_20": 20,
+    "dist_sma_20_z": 250,
+    "range_pos_20": 20,
+    "ret_1": 1,
+    "ret_21": 21,
+    "ret_5": 5,
+    "rsi_14": 14,
+    "vol_break_20": 20
+  },
+  "sources": [
+    [
+      "raw.market_daily",
+      "^GSPC"
+    ]
+  ],
+  "sessions": 300,
+  "feature_columns": [
+    "session",
+    "ret_1",
+    "ret_5",
+    "ret_21",
+    "atr_norm",
+    "dist_sma_20",
+    "rsi_14",
+    "range_pos_20",
+    "vol_break_20",
+    "atr_norm_z",
+    "dist_sma_20_z"
+  ],
+  "digest_format": [
+    "Los dos digests van con el prefijo 'sha256:' a proposito: el modulo publica",
+    "features_version con ese prefijo y un hex desnudo de 64 caracteres dispara el",
+    "hook detect-secrets (falso positivo de alta entropia). El test lo quita al comparar."
+  ],
+  "feature_spec_sha256": "sha256:6e4d86aee66be928d860184e65d03f7de03da59fae58a87467b5acdc95b3b78b",
+  "matrix_sha256": "sha256:6dbe0a372a64534c07c52e8e44c104163a5f4c27159a40610f5cac9172c9650e",
+  "non_null": {
+    "ret_1": 1,
+    "ret_5": 5,
+    "ret_21": 21,
+    "atr_norm": 14,
+    "dist_sma_20": 19,
+    "rsi_14": 14,
+    "range_pos_20": 19,
+    "vol_break_20": 20,
+    "atr_norm_z": 263,
+    "dist_sma_20_z": 268
+  }
+}
