@@ -94,6 +94,7 @@ mismo dia.
 ``volatility_v1``      ``cfdtrader.features.store``      :data:`FEATURE_CATALOG`
 ``technical_v1``       ``cfdtrader.features.technical``  :data:`TECHNICAL_FEATURE_CATALOG`
 ``context_v1``         ``cfdtrader.features.context``    :data:`CONTEXT_FEATURE_CATALOG`
+``macro_v1``           ``cfdtrader.features.macro``      :data:`MACRO_FEATURE_CATALOG`
 =====================  ================================  ======================
 
 Los valores por defecto de :class:`FeatureSpec` siguen siendo los de
@@ -110,6 +111,13 @@ series: su entrada es un ``Mapping`` con una entrada por serie
 poder alinearlos sin inventar un frame largo. Un ``Mapping`` incompleto, con una
 clave de mas o con una serie mal formada es :class:`ContextInputError`: el error
 nombra la serie, que es lo unico que se puede arreglar desde fuera.
+
+La familia **macro** (#22) tambien recibe un ``Mapping`` de series
+(:data:`MACRO_SERIES` mas :data:`MACRO_MARKET_SERIES`), esta vez porque una
+publicacion macro **no** cae el dia de su referencia: la alineacion es
+*point-in-time* y se resuelve con el ``published_at`` de cada observacion, no con
+el calendario. Un ``Mapping`` incompleto, con una clave de mas o con una serie
+mal formada es :class:`MacroInputError`.
 """
 
 from __future__ import annotations
@@ -149,6 +157,8 @@ __all__ = [
     "CONTEXT_SERIES",
     "DEFAULT_CONTEXT_SOURCES",
     "DEFAULT_CONTEXT_WINDOWS",
+    "DEFAULT_MACRO_SOURCES",
+    "DEFAULT_MACRO_WINDOWS",
     "DEFAULT_TECHNICAL_SOURCES",
     "DEFAULT_TECHNICAL_WINDOWS",
     "FEATURES_DATASET",
@@ -157,6 +167,14 @@ __all__ = [
     "FEATURE_CATALOG",
     "FEATURE_CODE_VERSION",
     "FEATURE_VERSION_PREFIX",
+    "MACRO_CHG_WINDOW",
+    "MACRO_FEATURES_SOURCE",
+    "MACRO_FEATURE_CATALOG",
+    "MACRO_FEATURE_COLUMNS",
+    "MACRO_FEATURE_SET",
+    "MACRO_MARKET_SERIES",
+    "MACRO_MIN_SESSIONS",
+    "MACRO_SERIES",
     "MAD_SCALE",
     "NORMALISED_SUFFIX",
     "RANGE_WINDOW",
@@ -176,6 +194,7 @@ __all__ = [
     "InvalidFeatureMatrixError",
     "InvalidFeatureSpecError",
     "InvalidSeriesIdError",
+    "MacroInputError",
     "build_matrix",
     "daily_records",
     "feature_spec_sha256",
@@ -257,6 +276,19 @@ class ContextInputError(FeatureStoreError):
     clave, falta ``session`` o ``close``, una sesion se repite o un ``as_of`` no
     corresponde a su sesion: todo eso es un error de **entrada**, y el mensaje
     nombra la serie, porque es lo unico que se puede arreglar desde fuera.
+    """
+
+
+class MacroInputError(FeatureStoreError):
+    """El ``Mapping`` de series de la familia macro no cumple su contrato.
+
+    La familia ``macro_v1`` (#22) recibe ocho claves: las seis series de
+    ``raw.macro`` y las dos de ``raw.market_daily``. Falta una serie, sobra una
+    clave, falta ``published_at`` o ``value``, el ``as_of`` de una serie macro no
+    es una fecha (o el de una barra no es un instante con zona), un valor no es
+    finito o dos observaciones comparten instante y referencia: todo eso es un
+    error de **entrada**, y el mensaje nombra la serie, que es lo unico que se
+    puede arreglar desde fuera.
     """
 
 
@@ -676,6 +708,154 @@ DEFAULT_CONTEXT_SOURCES: Final[tuple[tuple[str, str], ...]] = (
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Catalogo de la familia macro (#22)
+# ─────────────────────────────────────────────────────────────────────────────
+#: Identificador del conjunto de features macro (`_docs/plan.md` §7.1 y §9).
+MACRO_FEATURE_SET: Final[str] = "macro_v1"
+
+#: ``source`` de las filas macro (mismo papel que el de las otras familias).
+MACRO_FEATURES_SOURCE: Final[str] = "cfdtrader.features.macro"
+
+#: Las **seis** series de ``raw.macro`` que entran en la familia, en orden.
+#: ``PAYEMS`` esta almacenada y **fuera** del enunciado de #22: su sitio es
+#: ``macro_v2`` (#76), no esta capa. Orden a proposito (el mismo en el que se
+#: declaran las fuentes), pero el orden no entra en ningun hash.
+MACRO_SERIES: Final[tuple[str, ...]] = ("DFF", "DGS10", "DGS2", "T10Y2Y", "CPIAUCSL", "PCEPI")
+
+#: Las **dos** series de ``raw.market_daily``: el ancla del calendario de sesiones
+#: (``^GSPC``) y el indice dolar (``DX-Y.NYB``), que es la unica barra de mercado
+#: cuyo **nivel** publica esta familia.
+MACRO_MARKET_SERIES: Final[tuple[str, ...]] = ("^GSPC", "DX-Y.NYB")
+
+#: Sesiones minimas de la ventana **expandida** de ``ust_10y_z`` y ``dxy_z``.
+MACRO_MIN_SESSIONS: Final[int] = 250
+
+#: Sesiones del cambio de las cuatro columnas ``_chg_5``: ``transportado(t) -
+#: transportado(t-5)``, con ``t-5`` la sesion **cinco posiciones** antes en el
+#: ancla (no cinco publicaciones ni cinco dias naturales).
+MACRO_CHG_WINDOW: Final[int] = 5
+
+#: Catalogo completo de la familia macro (13 entradas, #22). Las formulas viven en
+#: ``cfdtrader.features.macro``; aqui esta la **declaracion** del contrato (formula
+#: legible, ventana, fuente de entrada y el cierre del que depende cada columna).
+MACRO_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
+    CatalogEntry(
+        "fed_funds",
+        "nivel de la DFF vigente a `as_of(t)`: la observacion publicada mas reciente "
+        "que cumple `published_at <= as_of(t)`",
+        None,
+        "raw.macro",
+        "ultima publicacion anterior al cierre de la sesion t",
+    ),
+    CatalogEntry(
+        "fed_funds_chg_5",
+        f"fed_funds(t) - fed_funds(t-{MACRO_CHG_WINDOW}), en puntos porcentuales",
+        MACRO_CHG_WINDOW,
+        "raw.macro",
+        "cierre de la sesion t y de la sesion t-5",
+    ),
+    CatalogEntry(
+        "ust_10y",
+        "nivel de la DGS10 vigente a `as_of(t)`: la observacion publicada mas reciente "
+        "que cumple `published_at <= as_of(t)`",
+        None,
+        "raw.macro",
+        "ultima publicacion anterior al cierre de la sesion t",
+    ),
+    CatalogEntry(
+        "ust_10y_chg_5",
+        f"ust_10y(t) - ust_10y(t-{MACRO_CHG_WINDOW}), en puntos porcentuales",
+        MACRO_CHG_WINDOW,
+        "raw.macro",
+        "cierre de la sesion t y de la sesion t-5",
+    ),
+    CatalogEntry(
+        "ust_2y",
+        "nivel de la DGS2 vigente a `as_of(t)`: la observacion publicada mas reciente "
+        "que cumple `published_at <= as_of(t)`",
+        None,
+        "raw.macro",
+        "ultima publicacion anterior al cierre de la sesion t",
+    ),
+    CatalogEntry(
+        "ust_2y_chg_5",
+        f"ust_2y(t) - ust_2y(t-{MACRO_CHG_WINDOW}), en puntos porcentuales",
+        MACRO_CHG_WINDOW,
+        "raw.macro",
+        "cierre de la sesion t y de la sesion t-5",
+    ),
+    CatalogEntry(
+        "pendiente_2s10s",
+        "nivel de la T10Y2Y vigente a `as_of(t)`: se toma de la serie publicada, "
+        "**sin** derivarla como ust_10y - ust_2y",
+        None,
+        "raw.macro",
+        "ultima publicacion anterior al cierre de la sesion t",
+    ),
+    CatalogEntry(
+        "pendiente_2s10s_chg_5",
+        f"pendiente_2s10s(t) - pendiente_2s10s(t-{MACRO_CHG_WINDOW}), en puntos porcentuales",
+        MACRO_CHG_WINDOW,
+        "raw.macro",
+        "cierre de la sesion t y de la sesion t-5",
+    ),
+    CatalogEntry(
+        "cpi_yoy",
+        "100 * (v_m / v_{m-12} - 1), con m la referencia de la ultima publicacion que "
+        "cumple R y v_{m-12} la de su misma fecha un ano antes, tambien publicada",
+        None,
+        "raw.macro",
+        "ultima publicacion anterior al cierre de la sesion t y su referencia de hace un ano",
+    ),
+    CatalogEntry(
+        "pce_yoy",
+        "100 * (v_m / v_{m-12} - 1), con m la referencia de la ultima publicacion que "
+        "cumple R y v_{m-12} la de su misma fecha un ano antes, tambien publicada",
+        None,
+        "raw.macro",
+        "ultima publicacion anterior al cierre de la sesion t y su referencia de hace un ano",
+    ),
+    CatalogEntry(
+        "dxy",
+        "nivel, no variacion: cierre de la barra del DXY con mayor `as_of` <= `as_of(t)` "
+        "(la igualdad cuenta)",
+        None,
+        "raw.market_daily",
+        "cierre de la barra del DXY de la sesion t",
+    ),
+    CatalogEntry(
+        "ust_10y_z",
+        f"normalise_expanding(ust_10y, min_sessions={MACRO_MIN_SESSIONS})",
+        MACRO_MIN_SESSIONS,
+        "raw.macro",
+        "cierre de la sesion t y 250 sesiones de historia previa",
+    ),
+    CatalogEntry(
+        "dxy_z",
+        f"normalise_expanding(dxy, min_sessions={MACRO_MIN_SESSIONS})",
+        MACRO_MIN_SESSIONS,
+        "raw.market_daily",
+        "cierre de la sesion t y 250 sesiones de historia previa",
+    ),
+)
+
+#: Columnas de feature que persiste la matriz macro: **todas** las del catalogo.
+MACRO_FEATURE_COLUMNS: Final[tuple[str, ...]] = tuple(entry.name for entry in MACRO_FEATURE_CATALOG)
+
+#: Ventanas por defecto de la spec macro: las del catalogo, sin excepciones.
+DEFAULT_MACRO_WINDOWS: Final[dict[str, int | None]] = {
+    entry.name: entry.window for entry in MACRO_FEATURE_CATALOG
+}
+
+#: Fuentes de entrada por defecto de la familia macro: las seis series de
+#: ``raw.macro`` y las dos barras de ``raw.market_daily``, en este orden.
+DEFAULT_MACRO_SOURCES: Final[tuple[tuple[str, str], ...]] = (
+    *(("raw.macro", series_id) for series_id in MACRO_SERIES),
+    *(("raw.market_daily", series_id) for series_id in MACRO_MARKET_SERIES),
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Registro de familias
 # ─────────────────────────────────────────────────────────────────────────────
 #: Registro de familias: el catalogo de cada ``feature_set`` declarado.
@@ -683,6 +863,7 @@ CATALOG_BY_FEATURE_SET: Final[dict[str, tuple[CatalogEntry, ...]]] = {
     VOLATILITY_FEATURE_SET: FEATURE_CATALOG,
     TECHNICAL_FEATURE_SET: TECHNICAL_FEATURE_CATALOG,
     CONTEXT_FEATURE_SET: CONTEXT_FEATURE_CATALOG,
+    MACRO_FEATURE_SET: MACRO_FEATURE_CATALOG,
 }
 
 #: ``source`` con el que se persiste cada familia (el discriminador de la
@@ -691,16 +872,24 @@ SOURCE_BY_FEATURE_SET: Final[dict[str, str]] = {
     VOLATILITY_FEATURE_SET: FEATURES_SOURCE,
     TECHNICAL_FEATURE_SET: TECHNICAL_FEATURES_SOURCE,
     CONTEXT_FEATURE_SET: CONTEXT_FEATURES_SOURCE,
+    MACRO_FEATURE_SET: MACRO_FEATURES_SOURCE,
 }
 
-#: Todas las columnas de feature conocidas, de las tres familias: es la lista con
-#: la que el digest de una matriz comprueba que no haya ``NaN`` ni ``inf``. Se
-#: deduplica porque ``atr_norm`` existe en dos catalogos (el solape lo declara y
-#: lo resuelve #72, no esta capa). Que las 11 columnas de contexto entren aqui no
-#: es cosmetico: sin ellas, ``matrix_sha256`` **no** detectaria un ``NaN`` ni un
-#: ``inf`` en la matriz de contexto (A1 de #21).
+#: Todas las columnas de feature conocidas, de las **cuatro** familias: es la lista
+#: con la que el digest de una matriz comprueba que no haya ``NaN`` ni ``inf``. Se
+#: deduplica porque ``atr_norm`` existe en dos catalogos (el solape lo declara y lo
+#: resuelve #72, no esta capa). Que las 13 columnas macro entren aqui no es
+#: cosmetico: sin ellas, ``matrix_sha256`` **no** detectaria un ``NaN`` ni un
+#: ``inf`` en la matriz macro (A1 de #22).
 ALL_FEATURE_COLUMNS: Final[tuple[str, ...]] = tuple(
-    dict.fromkeys((*FEATURE_COLUMNS, *TECHNICAL_FEATURE_COLUMNS, *CONTEXT_FEATURE_COLUMNS))
+    dict.fromkeys(
+        (
+            *FEATURE_COLUMNS,
+            *TECHNICAL_FEATURE_COLUMNS,
+            *CONTEXT_FEATURE_COLUMNS,
+            *MACRO_FEATURE_COLUMNS,
+        )
+    )
 )
 
 
@@ -1047,8 +1236,8 @@ def matrix_sha256(matrix: pl.DataFrame) -> str:
     if ordering:
         frame = frame.sort(ordering)
 
-    # El catalogo completo de las dos familias, no solo las columnas presentes: asi
-    # una matriz parcial (un subconjunto de features) tambien se puede hashear.
+    # El catalogo completo de las cuatro familias, no solo las columnas presentes:
+    # asi una matriz parcial (un subconjunto de features) tambien se puede hashear.
     frame = _require_finite(frame, ALL_FEATURE_COLUMNS)
 
     rows: list[list[object]] = []

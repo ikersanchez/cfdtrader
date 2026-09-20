@@ -28,6 +28,14 @@ Módulos:
   declara el alineamiento entre ellos (``CONTEXT_MARKET_LAG``) en vez de
   esconderlo. No publica ningún retorno del S&P 500: los ``ret_1``/``ret_5``/
   ``ret_21`` siguen siendo de :mod:`cfdtrader.features.technical`.
+- :mod:`cfdtrader.features.macro` — familia **macro** cerrada (tarea #22): nivel y
+  cambio a cinco sesiones de la Fed funds, el UST 10y, el UST 2y y la pendiente
+  2s10s, la inflación interanual del CPI y del PCE, el nivel del índice dólar y dos
+  z-scores de ventana expandida (importados de :mod:`cfdtrader.features.store`).
+  Es la familia que alinea **point-in-time**: cada fila usa solo lo que ya estaba
+  publicado al cierre de su sesión, con el ``published_at`` real de cada
+  observación y sin interpolar ni censurar un valor viejo. Tampoco escribe en el
+  almacén por su cuenta (lo hace :func:`cfdtrader.features.store.save_daily`).
 - :mod:`cfdtrader.features.store` — **infraestructura de persistencia** (tarea #19):
   identidad reproducible (``features_version`` por sesión y ``feature_spec_sha256``
   por contrato), esquema ancho en ``derived.features_daily``, catálogo documentado y
