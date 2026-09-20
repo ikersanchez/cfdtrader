@@ -1,0 +1,70 @@
+{
+  "_comment": [
+    "Golden dataset congelado del contrato de #19 (A4). Los INPUTS estan en",
+    "golden_inputs.csv y su digest forma parte de matrix_sha256, asi que el par",
+    "esta congelado entero. El test falla si matrix_sha256 cambia sin que",
+    "FEATURE_CODE_VERSION haya subido (y tambien si sube sin actualizar este fichero).",
+    "Nunca se regenera un golden dataset 'para que pase': si el digest cambia, o el",
+    "calculo se ha movido sin querer (se arregla el codigo) o se ha cambiado a proposito",
+    "(entonces sube FEATURE_CODE_VERSION y se actualizan los dos pares con una nota)."
+  ],
+  "generator": "numpy.random.default_rng(20260920); np.busday_offset desde 2025-01-02",
+  "code_version": 1,
+  "feature_set": "volatility_v1",
+  "parameters": {},
+  "windows": {
+    "atr_norm": 14,
+    "har_forecast": null,
+    "har_lag1": 1,
+    "har_lag17": 17,
+    "har_lag4": 4,
+    "parkinson_rv": 1,
+    "ret_log": 1,
+    "ret_sq": 1,
+    "true_range": 1,
+    "vix_level": 1,
+    "vix_percentile": 250,
+    "vix_zscore": 250
+  },
+  "sources": [
+    ["raw.market_daily", "^GSPC"],
+    ["raw.market_daily", "^VIX"]
+  ],
+  "sessions": 300,
+  "feature_columns": [
+    "session",
+    "true_range",
+    "atr_norm",
+    "parkinson_rv",
+    "ret_log",
+    "ret_sq",
+    "har_lag1",
+    "har_lag4",
+    "har_lag17",
+    "har_forecast",
+    "vix_level",
+    "vix_zscore",
+    "vix_percentile"
+  ],
+  "digest_format": [
+    "Los dos digests van con el prefijo 'sha256:' a proposito: el modulo publica",
+    "features_version con ese prefijo y un hex desnudo de 64 caracteres dispara el",
+    "hook detect-secrets (falso positivo de alta entropia). El test lo quita al comparar."
+  ],
+  "feature_spec_sha256": "sha256:3c71eb69635589dc7ece74b662170b27104473c3b81f3f21434ac178d7dc539b",
+  "matrix_sha256": "sha256:5abdd54362feddfb816ffa2dc566d3039c0a94b597e1cef75e1b2e064d56b947",
+  "non_null": {
+    "true_range": 0,
+    "atr_norm": 14,
+    "parkinson_rv": 0,
+    "ret_log": 0,
+    "ret_sq": 0,
+    "har_lag1": 22,
+    "har_lag4": 22,
+    "har_lag17": 22,
+    "har_forecast": 44,
+    "vix_level": 1,
+    "vix_zscore": 251,
+    "vix_percentile": 251
+  }
+}
