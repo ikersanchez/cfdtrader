@@ -4,8 +4,11 @@ One or two sentences on what should be true when this is done.
 
 ## Acceptance criteria
 
-- [ ] A statement you can check by looking at the result
-- [ ] One line per case, including the awkward ones
+- [ ] 12-15 criteria for a normal task; up to 25 only if the task is in
+      `CRITICAL_TASKS` / `GATE_TASKS`. One line per criterion, including the
+      awkward ones.
+- [ ] A statement you can check by looking at the result: a command
+      (`uv run pytest ...`) or a file inspection, never prose.
 
 ## Out of scope
 
@@ -16,3 +19,8 @@ One or two sentences on what should be true when this is done.
 - Files this should stay inside
 - Libraries to use
 - Guidelines to follow
+- Coverage floor: 90 % statements / 85 % branches of the new module, or a
+  declared justification (95/90 only for CRITICAL_TASKS / GATE_TASKS)
+
+Keep the body under ~12 KB. The engineer and the QA each read it twice, so
+every extra kilobyte is paid twice per round.
