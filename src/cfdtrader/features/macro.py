@@ -157,9 +157,6 @@ ANCHOR_INPUT_COLUMNS: Final[tuple[str, ...]] = (SESSION_COLUMN, AS_OF_COLUMN)
 #: Columnas que se leen de la barra del DXY.
 DXY_INPUT_COLUMNS: Final[tuple[str, ...]] = (SESSION_COLUMN, AS_OF_COLUMN, CLOSE_COLUMN)
 
-#: Meses de retardo de la referencia de ``cpi_yoy`` y ``pce_yoy``.
-YOY_MONTHS: Final[int] = 12
-
 #: Las cuatro parejas ``(nivel, serie de la que sale, cambio)``. El orden es el del
 #: catalogo y el cambio se calcula **posicionalmente** sobre el nivel ya
 #: transportado, nunca sobre la serie original.
