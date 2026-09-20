@@ -837,8 +837,10 @@ def _evaluate_session(
         overnight_reason=None,
         financing_cut=financing_cut,
     )
-    pnl_declared_pct = gross_pct - float(cost.c_declared_pct)
-    pnl_net_pct = None if cost.c_total_pct is None else gross_pct - float(cost.c_total_pct)
+    # #80: c_declared_pct y c_total_pct están en % del nocional; gross_pct es fracción decimal.
+    # Se divide entre 100 para restar cantidades homogéneas (no restar % a fracción).
+    pnl_declared_pct = gross_pct - float(cost.c_declared_pct) / 100.0
+    pnl_net_pct = None if cost.c_total_pct is None else gross_pct - float(cost.c_total_pct) / 100.0
     return _outcome(
         index=index,
         fold_index=fold_index,

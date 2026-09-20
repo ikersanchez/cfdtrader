@@ -839,7 +839,9 @@ def test_a16_the_cost_is_identical_in_both_legs() -> None:
         assert cost.spread_pct == Decimal("0.0042")
         assert outcome.exit_reason == "session_close"
         assert outcome.gross_pct == pytest.approx(0.0)
-        assert outcome.pnl_declared_pct == pytest.approx(-float(cost.c_declared_pct), abs=1e-12)
+        assert outcome.pnl_declared_pct == pytest.approx(
+            -float(cost.c_declared_pct) / 100.0, abs=1e-12
+        )
         expected = cost_breakdown(
             model=DECLARED,
             slippage=ASSUMED,
@@ -899,7 +901,7 @@ def test_a18_the_three_slippage_states_are_not_merged() -> None:
     assert cost.c_total_pct is not None
     assert outcome.pnl_net_pct is not None
     assert outcome.pnl_net_pct == pytest.approx(
-        cast("float", outcome.gross_pct) - float(cost.c_total_pct)
+        cast("float", outcome.gross_pct) - float(cost.c_total_pct) / 100.0
     )
     assert outcome.pnl_net_reason is None
     assert block(result.report, "slippage")["state"] == MeasureState.MEASURED.value
@@ -927,6 +929,42 @@ def test_a18_the_three_slippage_states_are_not_merged() -> None:
     assert unmeasured_outcome.pnl_net_pct is None
     assert unmeasured_outcome.pnl_net_reason
     assert block(unmeasured_result.report, "slippage")["state"] == MeasureState.UNMEASURED.value
+
+
+def test_issue_80_pnl_declared_and_net_pct_unit_alignment() -> None:
+    """#80: pnl_declared_pct y pnl_net_pct alinean unidades dividiendo coste por 100."""
+    days = business_sessions(12)
+    plan = make_plan(days)
+    inputs = flat_inputs(days)
+    measured = SlippageParameter.measured(
+        pct_of_notional=Decimal("0.002"),
+        source="medicion para #80",
+        reason="verificar alineacion de unidades",
+    )
+    result = run(inputs, plan, [long_decider(), long_decider()], slippage=measured)
+    traded = [outcome for outcome in outcomes(result) if outcome.status == "traded"]
+    assert traded
+    for outcome in traded:
+        cost = outcome.cost
+        assert cost is not None
+        assert cost.c_total_pct is not None
+        assert cost.c_declared_pct == Decimal("0.0042")
+        assert cost.c_total_pct == Decimal("0.0062")
+        # gross_pct es una fraccion decimal (ej. ~0.005 para +0.5%)
+        # El coste restado debe ser c_declared_pct / 100 = 0.000042, NO 0.0042
+        assert outcome.pnl_declared_pct == pytest.approx(
+            cast("float", outcome.gross_pct) - float(cost.c_declared_pct) / 100.0,
+            abs=1e-12,
+        )
+        assert outcome.pnl_net_pct == pytest.approx(
+            cast("float", outcome.gross_pct) - float(cost.c_total_pct) / 100.0,
+            abs=1e-12,
+        )
+        # Verifica que el coste descontado sea la fraccion real (100x menor que c_declared_pct)
+        gross_val = cast("float", outcome.gross_pct)
+        declared_pnl = cast("float", outcome.pnl_declared_pct)
+        declared_cost_deducted = gross_val - declared_pnl
+        assert declared_cost_deducted == pytest.approx(0.000042, abs=1e-8)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
