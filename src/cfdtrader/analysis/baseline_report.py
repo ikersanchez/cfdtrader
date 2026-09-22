@@ -1,4 +1,4 @@
-"""Modelo baseline con *purged CV*: orquestacion, registro, informe y CLI (#24).
+"""Modelo baseline con *purged CV* y calibracion: orquestacion, registro, informe y CLI (#24, #25).
 
 Encadena las piezas ya construidas, sin reimplementar ninguna:
 
@@ -10,11 +10,18 @@ Encadena las piezas ya construidas, sin reimplementar ninguna:
     la matriz de las cinco familias (#19-#23) y el corrimiento de diseno.
 ``models.baseline`` (#24)
     la logistica con elastic net, fold a fold.
+``models.calibration`` (#25)
+    el reparto del *train* con purga, la regla del metodo por fold y el calibrador
+    serializable sin `pickle`.
 ``backtest.engine`` (#13), ``backtest.costs`` (#8/#11), ``backtest.metrics`` (#15),
 ``analysis.experiment_log`` (#16)
     el motor, el coste declarado, las metricas elementales y el registro.
 
-Lo que **no** hace: no calibra (#25), no barre hiperparametros ni compara variantes (#26), no
+Lo que **si** hace con las probabilidades: las **calibra** dentro del *train* de cada fold,
+con la regla Platt/Isotonica (#25), y publica la comparacion **medida** cruda-frente-a-calibrada
+en las mismas 500 sesiones de *test*.
+
+Lo que **no** hace: no barre hiperparametros ni compara variantes (#26), no
 decide el umbral economico ni el *sizing* (#27), no corre el backtest completo de Fase 2 (#28)
 y no escribe ``derived.features_daily`` (#73).
 
