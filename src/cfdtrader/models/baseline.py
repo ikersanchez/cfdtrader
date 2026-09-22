@@ -14,6 +14,13 @@ Disponibilidad temporal (A2): la fila de diseno de `t` es la fila **completa** d
 excepciones y **sin** filtrar columnas por ``required_as_of``: ``atr_norm`` declara «cierre de
 la sesion `t`» en ``volatility_v1`` y «cierre de la sesion `t-1`» en ``technical_v1`` (#72), asi
 que filtrar por ``required_as_of`` no tendria respuesta unica.
+
+Calibracion (A6, A7, #25): cada fold parte su *train* en `fit` (80 %) y `calibration` (20 %,
+cola purgada con §11.1) y ajusta con esa cola un calibrador
+(:class:`cfdtrader.models.calibration.Calibration`, Platt o isotonica), que viaja en
+:attr:`FoldFit.calibration`. La probabilidad **calibrada** es la que decide
+(:func:`calibrated_probabilities`); la cruda sigue publicandose. El *test* de un fold no entra
+ni en el estimador ni en el calibrador.
 """
 
 from __future__ import annotations
@@ -28,6 +35,14 @@ import numpy as np
 import polars as pl
 from numpy.typing import NDArray
 from sklearn.linear_model import LogisticRegression
+
+from cfdtrader.models.calibration import (
+    Calibration,
+    TrainSplit,
+    fit_calibration,
+    sigmoid,
+    split_train_for_calibration,
+)
 
 __all__ = [
     "BASELINE_FEATURES",
@@ -44,10 +59,12 @@ __all__ = [
     "InvalidDesignFrameError",
     "SplitAssignment",
     "UnknownFeatureError",
+    "calibrated_probabilities",
     "design_frame",
     "fit_baseline",
     "long_signal",
     "probabilities",
+    "scores",
     "sigmoid",
 ]
 
@@ -132,11 +149,12 @@ MODEL_DOES_NOT_DO: Final[tuple[dict[str, str], ...]] = (
         ),
     },
     {
-        "id": "no_calibra",
-        "issue": "#25",
+        "id": "calibra_en_el_train",
+        "issue": "#26",
         "statement": (
-            "no calibra las probabilidades (Platt/isotonica): publica la curva **sin** calibrar "
-            "y la calibracion es #25"
+            "**si** calibra las probabilidades: ajusta el calibrador (Platt/isotonica) con la "
+            "cola purgada del train de cada fold y publica las dos probabilidades; comparar "
+            "modelos y barrer hiperparametros (LightGBM, DSR/PBO) es #26"
         ),
     },
     {
@@ -294,7 +312,8 @@ class FoldFit:
 
     ``mean`` y ``scale`` son el escalado de **ese** train: ajustar el escalado con el test (o
     con la muestra entera) seria *look-ahead*. ``n_iter``/``converged`` publican la
-    convergencia del solver en vez de afirmarla.
+    convergencia del solver en vez de afirmarla. ``calibration`` es el calibrador ajustado con
+    la **cola** del train (A6, #25): un estado publicado, nunca un ajuste escondido.
     """
 
     index: int
@@ -311,9 +330,10 @@ class FoldFit:
     n_iter: int
     converged: bool
     test_positions: tuple[int, ...]
+    calibration: Calibration
 
     def to_payload(self) -> dict[str, object]:
-        """El fold como JSON puro: coeficientes, intercepto y escalado, sin `pickle` (A12)."""
+        """El fold como JSON puro: coeficientes, intercepto, escalado y calibrador (A12)."""
         return {
             "index": self.index,
             "n_train": self.n_train,
@@ -329,6 +349,7 @@ class FoldFit:
             "n_iter": self.n_iter,
             "converged": self.converged,
             "test_positions": list(self.test_positions),
+            "calibration": self.calibration.to_payload(),
         }
 
 
@@ -394,14 +415,8 @@ def _outcomes(matrix: pl.DataFrame, *, column: str = "y") -> NDArray[np.float64]
     return cast("NDArray[np.float64]", matrix.get_column(column).cast(pl.Float64).to_numpy())
 
 
-def sigmoid(score: float) -> float:
-    """``1 / (1 + exp(-score))`` estable en los dos extremos (no desborda)."""
-    if score >= 0.0:
-        return 1.0 / (1.0 + math.exp(-score))
-    exponential = math.exp(score)
-    return exponential / (1.0 + exponential)
-
-
+#: ``sigmoid`` se **importa** de ``cfdtrader.models.calibration``: es el enlace que comparten el
+#: modelo crudo y el calibrador de Platt, y una sola definicion evita que los dos se separen.
 def _require_positions(positions: Sequence[int], *, n_sessions: int, what: str) -> tuple[int, ...]:
     """Las posiciones tienen que existir en el frame y no venir vacias."""
     values = tuple(positions)
@@ -422,12 +437,18 @@ def fit_baseline(
     splits: Sequence[SplitAssignment],
     hyperparameters: Mapping[str, object] | None = None,
     seed: int = SEED,
+    label_horizon: Sequence[int] | None = None,
 ) -> BaselineModel:
     """Ajusta la logistica con elastic net fold a fold, con el escalado del train (A6, A7).
 
     Cada fold es independiente: el escalado se ajusta **solo** con su train y el estimador
     tambien. No hay busqueda de hiperparametros ni barrido (A7): ``hyperparameters`` es la
     constante declarada y el *seed* viaja con ella.
+
+    Ademas, y con la **cola** de ese train, cada fold ajusta su calibrador (A6, #25).
+    ``label_horizon`` es el horizonte por posicion del frame de diseno, el mismo vector que
+    publica el plan de #12; sin el se declaran ceros, que es el caso del plan de Fase 1
+    (``h = 0``) y deja la purga de la calibracion como **no-op publicado**.
     """
     _require_instance(design, DesignFrame, field="design")
     assignments = tuple(splits)
@@ -440,6 +461,11 @@ def fit_baseline(
             f"la matriz tiene {matrix.shape[0]} filas y la etiqueta {label.shape[0]}: el frame "
             "de diseno esta desalineado"
         )
+    horizon = (
+        (0,) * matrix.shape[0]
+        if label_horizon is None
+        else tuple(int(value) for value in label_horizon)
+    )
     parameters = dict(HYPERPARAMETERS if hyperparameters is None else hyperparameters)
     folds: list[FoldFit] = []
     for assignment in assignments:
@@ -463,6 +489,7 @@ def fit_baseline(
                 test=test,
                 parameters=parameters,
                 seed=seed,
+                label_horizon=horizon,
             )
         )
     return BaselineModel(
@@ -483,8 +510,13 @@ def _fit_fold(
     test: tuple[int, ...],
     parameters: Mapping[str, object],
     seed: int,
+    label_horizon: Sequence[int],
 ) -> FoldFit:
-    """Ajusta **un** fold: escalado del train, estimador del train, convergencia publicada."""
+    """Ajusta **un** fold: escalado del train, estimador, convergencia y calibrador (A6).
+
+    El calibrador se ajusta con el score del fold en la **cola** purgada del train (A3): el
+    *test* no entra ni en el estimador ni en el calibrador.
+    """
     train_matrix = matrix[list(train), :]
     mean = train_matrix.mean(axis=0)
     scale = train_matrix.std(axis=0)
@@ -497,6 +529,16 @@ def _fit_fold(
     )
     limit = int(cast("int", parameters["max_iter"]))
     positives = int(label[list(train)].sum())
+    split = split_train_for_calibration(train, label_horizon=label_horizon)
+    calibration = _fit_calibration_for(
+        split,
+        matrix=matrix,
+        label=label,
+        mean=mean,
+        scale=scale,
+        coefficients=coefficients,
+        intercept=intercept,
+    )
     return FoldFit(
         index=assignment.index,
         n_train=len(train),
@@ -512,6 +554,38 @@ def _fit_fold(
         n_iter=iterations,
         converged=iterations < limit,
         test_positions=test,
+        calibration=calibration,
+    )
+
+
+def _fit_calibration_for(
+    split: TrainSplit,
+    *,
+    matrix: NDArray[np.float64],
+    label: NDArray[np.float64],
+    mean: NDArray[np.float64],
+    scale: NDArray[np.float64],
+    coefficients: Sequence[float],
+    intercept: float,
+) -> Calibration:
+    """Ajusta el calibrador del fold con el score de la cola **de su propio train** (A3).
+
+    La lista de posiciones del reparto va en orden de sesion, asi que las puntuaciones y las
+    etiquetas de la calibracion quedan alineadas una a una con `calibration_positions`.
+    """
+    positions = list(split.calibration)
+    fold_scores = _standardised_scores(
+        matrix,
+        positions,
+        mean=mean,
+        scale=scale,
+        coefficients=np.asarray(coefficients, dtype=np.float64),
+        intercept=intercept,
+    )
+    return fit_calibration(
+        split,
+        scores=[float(value) for value in fold_scores],
+        outcomes=[int(value) for value in label[positions]],
     )
 
 
@@ -561,11 +635,65 @@ def _solve(
     return coefficients, intercept, iterations
 
 
+def _standardised_scores(
+    matrix: NDArray[np.float64],
+    positions: Sequence[int],
+    *,
+    mean: NDArray[np.float64],
+    scale: NDArray[np.float64],
+    coefficients: NDArray[np.float64],
+    intercept: float,
+) -> NDArray[np.float64]:
+    """El score (*logit*) de esas posiciones con el escalado y los coeficientes de un fold.
+
+    Una sola implementacion para la probabilidad cruda (A6), para el calibrador (A3/A8) y para
+    :func:`scores`: el score se calcula `(x - mean) / scale @ coef + intercept` en los tres
+    sitios, en ese orden y con las mismas operaciones, para que la reconstruccion desde el JSON
+    sea **exacta** (tolerancia 0) y no una coincidencia.
+    """
+    if not positions:
+        return np.zeros(0, dtype=np.float64)
+    selected = matrix[list(positions), :]
+    return ((selected - mean) / scale) @ coefficients + intercept
+
+
+def _fold_scores(
+    fold: FoldFit, matrix: NDArray[np.float64], positions: Sequence[int]
+) -> NDArray[np.float64]:
+    """El score del fold en esas posiciones, con su escalado y sus coeficientes (A6)."""
+    return _standardised_scores(
+        matrix,
+        positions,
+        mean=np.asarray(fold.mean, dtype=np.float64),
+        scale=np.asarray(fold.scale, dtype=np.float64),
+        coefficients=np.asarray(fold.coefficients, dtype=np.float64),
+        intercept=fold.intercept,
+    )
+
+
+def scores(
+    fold: FoldFit,
+    frame: pl.DataFrame,
+    *,
+    positions: Sequence[int] | None = None,
+) -> NDArray[np.float64]:
+    """El score (*logit*) del fold en las posiciones indicadas (todas si no se indica nada).
+
+    Es la cantidad que consume el calibrador y la que hace falta para reconstruir la
+    probabilidad publicada desde los parametros de ``model.json`` (A8): `sigmoid(score)` es la
+    probabilidad **cruda** de esa sesion con el modelo de ese fold.
+    """
+    matrix = _matrix(frame)
+    index = tuple(range(matrix.shape[0])) if positions is None else tuple(positions)
+    _require_positions(index, n_sessions=matrix.shape[0], what="las posiciones de `scores`")
+    return _fold_scores(fold, matrix, index)
+
+
 def probabilities(
     model: BaselineModel,
     frame: pl.DataFrame,
 ) -> tuple[float | None, ...]:
-    """Una probabilidad por fila: la del fold cuyo *test* la contiene, o ``None`` (A6, A9).
+    """Una probabilidad **cruda** por fila: la del fold cuyo *test* la contiene, o ``None``.
 
     Fuera de todo *test* no hay prediccion **honesta**: cada fold predice con el modelo que
     **no** vio esas sesiones, y una sesion que no cae en ningun test no se predice con un
@@ -575,12 +703,31 @@ def probabilities(
     out: list[float | None] = [None] * matrix.shape[0]
     for fold in model.folds:
         positions = list(fold.test_positions)
-        mean = np.asarray(fold.mean, dtype=np.float64)
-        scale = np.asarray(fold.scale, dtype=np.float64)
-        coefficients = np.asarray(fold.coefficients, dtype=np.float64)
-        scores = ((matrix[positions, :] - mean) / scale) @ coefficients + fold.intercept
-        for position, score in zip(positions, cast("Sequence[float]", scores), strict=True):
+        fold_scores = _fold_scores(fold, matrix, positions)
+        for position, score in zip(positions, cast("Sequence[float]", fold_scores), strict=True):
             out[position] = sigmoid(float(score))
+    return tuple(out)
+
+
+def calibrated_probabilities(
+    model: BaselineModel,
+    frame: pl.DataFrame,
+) -> tuple[float | None, ...]:
+    """Una probabilidad **calibrada** por fila, o ``None`` fuera de todo *test* (A5, A7).
+
+    Es la que decide: el calibrador de cada fold es el que se ajusto con la cola de **su**
+    train (A6). Un fold sin calibrador publicado (``method: "none"``) pasa su probabilidad
+    cruda **tal cual**, y una sesion que no cae en ningun *test* sigue siendo ``None``: los
+    estados no medibles se publican, no se degradan a un numero.
+    """
+    matrix = _matrix(frame)
+    out: list[float | None] = [None] * matrix.shape[0]
+    for fold in model.folds:
+        positions = list(fold.test_positions)
+        fold_scores = _fold_scores(fold, matrix, positions)
+        calibrated = fold.calibration.calibrate([float(value) for value in fold_scores])
+        for position, score, value in zip(positions, fold_scores, calibrated, strict=True):
+            out[position] = sigmoid(float(score)) if value is None else value
     return tuple(out)
 
 

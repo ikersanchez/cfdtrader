@@ -77,6 +77,7 @@ from cfdtrader.backtest.engine import (
     run_walk_forward,
 )
 from cfdtrader.backtest.metrics import (
+    LOG_LOSS_EPSILON,
     brier_score,
     calibration_curve,
     log_loss,
@@ -97,9 +98,17 @@ from cfdtrader.models.baseline import (
     HYPERPARAMETERS,
     SEED,
     BaselineModel,
+    FoldFit,
     SplitAssignment,
+    calibrated_probabilities,
     fit_baseline,
+    long_signal,
     probabilities,
+)
+from cfdtrader.models.calibration import (
+    CALIBRATION_HYPERPARAMETERS,
+    METHOD_NONE,
+    method_counts,
 )
 
 __all__ = [
@@ -136,15 +145,23 @@ MODEL_FILE: Final[str] = "model.json"
 #: Bins de la curva de fiabilidad (A9): 5, declarados.
 CALIBRATION_BINS: Final[int] = 5
 
+#: Lo que viaja a la configuracion registrada de #16: los hiperparametros **fijos** del
+#: estimador y las **tres** constantes de calibracion (A9). Cambiar cualquiera de ellas cambia
+#: el `run_sha256` del experimento, y por eso se registran juntas.
+REGISTERED_HYPERPARAMETERS: Final[dict[str, object]] = {
+    **HYPERPARAMETERS,
+    **CALIBRATION_HYPERPARAMETERS,
+}
+
 #: Motivos del decider (A11): distinguibles en la tabla de operaciones.
 LONG_REASON: Final[str] = (
-    "probabilidad del modelo >= umbral declarado 0,5 (A11): se declara largo en la direccion "
-    "larga unica"
+    "probabilidad calibrada del modelo >= umbral declarado 0,5 (A11): se declara largo en la "
+    "direccion larga unica"
 )
 
 NO_TRADE_REASON: Final[str] = (
-    "probabilidad del modelo < umbral declarado 0,5 (A11): no se opera; el umbral economico y el "
-    "*sizing* son #27 y #60, no este"
+    "probabilidad calibrada del modelo < umbral declarado 0,5 (A11): no se opera; el umbral "
+    "economico y el *sizing* son #27 y #60, no este"
 )
 
 #: Formato estable del ``report_sha256`` (A13).
@@ -175,11 +192,12 @@ NET_METRICS_REASON: Final[str] = (
 #: Que **no** hace este modulo, legible por maquina. Cada frontera con su issue.
 REPORT_DOES_NOT_DO: Final[tuple[dict[str, str], ...]] = (
     {
-        "id": "no_calibra",
-        "issue": "#25",
+        "id": "calibra_en_el_train",
+        "issue": "#26",
         "statement": (
-            "no calibra las probabilidades: publica la curva sin calibrar (`calibrated: false`, "
-            '`method: "none"`) y la calibracion es #25'
+            "**si** calibra las probabilidades: el calibrador (Platt/isotonica) se ajusta con la "
+            "cola purgada del train de cada fold y la probabilidad calibrada es la que decide; "
+            "comparar modelos, barrer hiperparametros y el DSR/PBO son #26"
         ),
     },
     {
@@ -222,6 +240,14 @@ REPORT_DOES_NOT_DO: Final[tuple[dict[str, str], ...]] = (
             "corrida; la persistencia es #73"
         ),
     },
+    {
+        "id": "no_toca_el_holdout",
+        "issue": "#68",
+        "statement": (
+            "el calibrador se ajusta **dentro** del train de cada fold: el *holdout* final de "
+            "§11.4 no se toca y su definicion es #68"
+        ),
+    },
 )
 
 #: Seguimientos declarados por el informe (A10).
@@ -239,11 +265,11 @@ FOLLOW_UPS: Final[tuple[dict[str, str], ...]] = (
         "why": "el supuesto de #64 se declara como porcentaje de `R`, que sigue sin decidirse",
     },
     {
-        "issue": "#25",
-        "topic": "calibrar las probabilidades",
+        "issue": "#26",
+        "topic": "comparar variantes y el DSR/PBO",
         "why": (
-            "la curva publicada es la **sin** calibrar; el Brier y el log-loss son de la "
-            "probabilidad cruda"
+            "aqui se calibra **una** variante con **una** semilla, fold a fold; comparar modelos "
+            "(LightGBM) y corregir por intentos es #26"
         ),
     },
     {
@@ -252,6 +278,14 @@ FOLLOW_UPS: Final[tuple[dict[str, str], ...]] = (
         "why": (
             "aqui solo se compara contra los seis baselines de #14, en el espacio de "
             "probabilidad y de coste declarado"
+        ),
+    },
+    {
+        "issue": "#68",
+        "topic": "holdout final intocable",
+        "why": (
+            "el calibrador se ajusta con la cola del train de cada fold; el *holdout* de §11.4 "
+            "sigue sin tocarse y su definicion es #68"
         ),
     },
 )
@@ -330,7 +364,11 @@ def _view_probability(view: SessionView, *, fold_index: int) -> float:
 
 
 def _decider(fold_index: int) -> DecisionFn:
-    """Una decision por sesion: ``LONG`` si ``p >= 0,5`` y ``NOTHING`` si no (A11)."""
+    """Una decision por sesion: ``LONG`` si ``p_cal >= 0,5`` y ``NOTHING`` si no (A7/A11).
+
+    La probabilidad que decide es la **calibrada** (viaja en la carga opaca de la vista); la
+    cruda se sigue publicando, pero no decide. El umbral no se mueve (A11).
+    """
 
     def decide(view: SessionView) -> Decision:
         probability = _view_probability(view, fold_index=fold_index)
@@ -353,7 +391,7 @@ def _decider(fold_index: int) -> DecisionFn:
 def _scored_inputs(
     inputs: Sequence[SessionInput], predicted: Sequence[float | None]
 ) -> tuple[SessionInput, ...]:
-    """Los ``SessionInput`` con la probabilidad de su fold en la carga opaca ``context``."""
+    """Los ``SessionInput`` con la probabilidad **calibrada** de su fold en la carga opaca."""
     if len(inputs) != len(predicted):
         raise MisalignedUniverseError(
             f"hay {len(inputs)} sesiones y {len(predicted)} probabilidades: el frame de diseno y "
@@ -427,6 +465,7 @@ class BaselineReport:
     config: ExperimentConfig
     result: ExperimentResult
     probabilities: tuple[float | None, ...]
+    calibrated: tuple[float | None, ...]
 
     @property
     def report_stem(self) -> str:
@@ -453,37 +492,170 @@ def _json_text(published: Mapping[str, object]) -> str:
     return json.dumps(published, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
 
 
+#: La regla del metodo, en el vocabulario de la issue (A4).
+CALIBRATION_RULE: Final[str] = (
+    "Platt si `n_calibration < 500` e isotonica si no, evaluado **por fold** con el recuento "
+    "medido (`PLATT_MAX_CALIBRATION_SESSIONS`); `none` es un estado publicado con su `reason`, "
+    "nunca una calibracion mala: ese fold pasa su probabilidad cruda"
+)
+
+#: Motivo publicado cuando ningun fold llega a calibrar.
+CALIBRATION_NONE_REASON: Final[str] = (
+    "ningun fold publico calibrador: los repartos son demasiado cortos, de una sola clase o "
+    "invierten el orden, y cada uno escribe su `reason`. La decision se toma con la cruda"
+)
+
+
+def _probability_side(
+    *,
+    label: str,
+    probabilities: Sequence[float],
+    outcomes: Sequence[int],
+) -> dict[str, object]:
+    """Un lado de la comparacion (A6): Brier, log-loss, operadas y su curva de 5 bins.
+
+    Las dos orillas se calculan con las **mismas** funciones de #15 y sobre las **mismas**
+    sesiones de *test*: lo unico que cambia es la probabilidad (cruda o calibrada).
+
+    El recorte del log-loss se **publica** (``log_loss_epsilon``): la isotonica satura y la
+    probabilidad calibrada llega a ``0,0`` y a ``1,0`` exactos, asi que la cifra esta recortada
+    y no se tiene que leer como si no lo estuviera. ``n_at_zero``/``n_at_one`` publican cuantas
+    sesiones caen en cada extremo: un artefacto de la interpolacion, no una creencia.
+    """
+    return {
+        "label": label,
+        "n_test": len(probabilities),
+        "n_positives": int(sum(outcomes)),
+        "mean_probability": sum(probabilities) / len(probabilities),
+        "brier_score": brier_score(probabilities, outcomes),
+        "log_loss": log_loss(probabilities, outcomes),
+        "log_loss_epsilon": LOG_LOSS_EPSILON,
+        "log_loss_note": (
+            "`log_loss` recorta cada probabilidad en `[epsilon, 1 - epsilon]`, como #15: sin el "
+            "recorte una probabilidad saturada daria `log(0)` y la cifra no existiria"
+        ),
+        "n_at_zero": sum(1 for value in probabilities if value == 0.0),
+        "n_at_one": sum(1 for value in probabilities if value == 1.0),
+        "n_traded": sum(1 for value in probabilities if long_signal(value)),
+        "bins": CALIBRATION_BINS,
+        "curve": [
+            dataclasses.asdict(item)
+            for item in calibration_curve(probabilities, outcomes, n_bins=CALIBRATION_BINS)
+        ],
+    }
+
+
+def _calibration_method(methods: Sequence[str]) -> str:
+    """El metodo publicado del informe: `none`, uno solo o `mixed` cuando conviven (A4)."""
+    distinct = sorted({value for value in methods if value != METHOD_NONE})
+    if not distinct:
+        return METHOD_NONE
+    if len(distinct) == 1:
+        return distinct[0]
+    return "mixed"
+
+
+def _calibration_per_fold(folds: Sequence[FoldFit]) -> list[dict[str, object]]:
+    """El calibrador de cada fold, en orden, sin promediar metodos distintos (A4)."""
+    return [
+        {
+            "index": fold.index,
+            "method": fold.calibration.method,
+            "reason": fold.calibration.reason,
+            "n_calibration": fold.calibration.n_calibration,
+            "n_positives": fold.calibration.n_positives,
+            "purge_sessions": fold.calibration.purge_sessions,
+            "exclusions_are_no_op": fold.calibration.exclusions_are_no_op,
+        }
+        for fold in folds
+    ]
+
+
 def _probability_block(
     *,
-    probabilities_by_session: Sequence[float],
+    raw: Sequence[float],
+    calibrated: Sequence[float],
     outcomes: Sequence[int],
     references: Sequence[float],
+    folds: Sequence[FoldFit],
 ) -> dict[str, object]:
-    """Las metricas de probabilidad del modelo y sus dos referencias (A9).
+    """La comparacion **medida** cruda-frente-a-calibrada sobre las mismas sesiones (A6).
 
-    Las tres se calculan sobre **las mismas** sesiones de *test*: el modelo, la tasa base del
-    *train* de cada fold y el «siempre largo» en el espacio de probabilidad (``p = 1``).
+    Las dos veredas salen de la misma aritmetica de #15 y de las mismas 500 sesiones de *test*:
+    `before` es la probabilidad cruda y `after` la calibrada, la que decide. `delta` va **con
+    signo** (`before - after`, positivo = mejora) y un `delta` que no mejora se publica tal
+    cual: no hay umbral inventado ni se cambia el 0,5 para que mejore.
     """
-    brier = brier_score(probabilities_by_session, outcomes)
-    loss = log_loss(probabilities_by_session, outcomes)
-    bins = calibration_curve(probabilities_by_session, outcomes, n_bins=CALIBRATION_BINS)
+    before = _probability_side(label="raw", probabilities=raw, outcomes=outcomes)
+    after = _probability_side(label="calibrated", probabilities=calibrated, outcomes=outcomes)
+    brier_before = float(cast("float", before["brier_score"]))
+    brier_after = float(cast("float", after["brier_score"]))
+    loss_before = float(cast("float", before["log_loss"]))
+    loss_after = float(cast("float", after["log_loss"]))
+    traded_before = int(cast("int", before["n_traded"]))
+    traded_after = int(cast("int", after["n_traded"]))
+    calibrations = [fold.calibration for fold in folds]
+    methods = [item.method for item in calibrations]
+    counts = method_counts(methods)
+    n_calibrated = sum(1 for item in calibrations if item.calibrated)
     base_rate_brier = brier_score(references, outcomes)
     base_rate_loss = log_loss(references, outcomes)
     always_brier = brier_score([1.0] * len(outcomes), outcomes)
     always_loss = log_loss([1.0] * len(outcomes), outcomes)
     return {
-        "n_test": len(probabilities_by_session),
+        "n_test": len(calibrated),
         "n_positives": int(sum(outcomes)),
-        "brier_score": brier,
-        "log_loss": loss,
+        "brier_score": brier_after,
+        "log_loss": loss_after,
+        "headline": (
+            "`brier_score`/`log_loss` de la raiz son los de `after`: la probabilidad calibrada "
+            "es la publicada y la que decide, y los `before` se publican a su lado para que la "
+            "comparacion sea **medida** (A6)"
+        ),
+        "before": before,
+        "after": after,
+        "delta": {
+            "rule": "`before - after`: **positivo** significa que la calibrada mejora",
+            "brier_score": brier_before - brier_after,
+            "log_loss": loss_before - loss_after,
+            "n_traded": traded_before - traded_after,
+            "improves": brier_before - brier_after > 0.0 and loss_before - loss_after > 0.0,
+            "note": (
+                "ninguna mejora se afirma sin esta resta: un `improves: false` se publica tal "
+                "cual, como el resultado negativo de #24"
+            ),
+        },
+        "saturation": {
+            "n_at_zero": after["n_at_zero"],
+            "n_at_one": after["n_at_one"],
+            "n_at_boundary": cast("int", after["n_at_zero"]) + cast("int", after["n_at_one"]),
+            "rule": (
+                "sesiones de *test* con probabilidad calibrada **exactamente** 0,0 o 1,0: la "
+                "isotonica es constante a trozos y satura en los extremos"
+            ),
+            "note": (
+                "un 0,0 o un 1,0 exactos son un **artefacto de saturacion**, no una creencia: se "
+                "publican para que nadie los lea como una probabilidad calibrada. El EV y el "
+                "*sizing* de #27 no pueden consumir una probabilidad saturada como si fuera una "
+                "creencia, y por eso el recuento viaja al informe en vez de esconderse tras el "
+                "recorte del log-loss"
+            ),
+            "follow_up": ["#27"],
+        },
         "calibration": {
             "bins": CALIBRATION_BINS,
-            "calibrated": False,
-            "method": "none",
-            "curve": [dataclasses.asdict(item) for item in bins],
+            "calibrated": n_calibrated > 0,
+            "fully_calibrated": n_calibrated == len(folds),
+            "method": _calibration_method(methods),
+            "methods": counts,
+            "n_folds": len(folds),
+            "n_folds_calibrated": n_calibrated,
+            "rule": CALIBRATION_RULE,
+            "per_fold": _calibration_per_fold(folds),
+            "curve": [dict(item) for item in cast("list[dict[str, object]]", after["curve"])],
             "note": (
-                'la curva se publica **sin** calibrar (`calibrated: false`, `method: "none"`): '
-                "calibrar (Platt/Isotonica) es #25 y aqui no se toca"
+                "`curve` es la **calibrada** (`after`) y el histograma `methods` cuenta folds; "
+                "no se promedian metodos distintos dentro de un fold"
             ),
         },
         "references": {
@@ -501,21 +673,22 @@ def _probability_block(
             },
         },
         "versus_references": {
-            "beats_base_rate_brier": brier < base_rate_brier,
-            "beats_base_rate_log_loss": loss < base_rate_loss,
-            "beats_always_long_brier": brier < always_brier,
-            "beats_always_long_log_loss": loss < always_loss,
+            "beats_base_rate_brier": brier_after < base_rate_brier,
+            "beats_base_rate_log_loss": loss_after < base_rate_loss,
+            "beats_always_long_brier": brier_after < always_brier,
+            "beats_always_long_log_loss": loss_after < always_loss,
             "note": (
-                "**medido**, no afirmado: son las cuatro comparaciones anteriores calculadas sobre "
-                "las mismas 500 sesiones. Un `false` se publica tal cual —el modelo baseline no "
-                "tiene por que batir su referencia— y no se maquilla ni se cambia el umbral para "
-                "que bata (A11)"
+                "**medido**, no afirmado: son las cuatro comparaciones de la probabilidad "
+                "**calibrada** contra las dos referencias, sobre las mismas 500 sesiones. Un "
+                "`false` se publica tal cual —el modelo baseline no tiene por que batir su "
+                "referencia— y no se maquilla ni se cambia el umbral para que bata (A11)"
             ),
         },
         "note": (
-            "las tres cifras se calculan sobre las mismas sesiones de *test*: el modelo, la tasa "
-            "base del train del fold y `always_long` (A9). Son metricas de **probabilidad**, no de "
-            "rentabilidad: la comparacion en el espacio de coste declarado esta en `comparison`"
+            "las dos veredas se calculan sobre las mismas sesiones de *test*: el modelo crudo, "
+            "el calibrado, la tasa base del train del fold y `always_long`. Son metricas de "
+            "**probabilidad**, no de rentabilidad: la comparacion en el espacio de coste "
+            "declarado esta en `comparison`"
         ),
     }
 
@@ -573,21 +746,27 @@ def _declared_cost_block(outcomes: Sequence[SessionOutcome]) -> dict[str, object
 
 
 def _probability_series(
-    frame: FeatureFrame, run: BacktestRun, model: BaselineModel
-) -> tuple[list[float], list[int], list[float]]:
-    """Probabilidad, etiqueta y tasa base del *train* de cada fold, en orden de sesion (A9).
+    frame: FeatureFrame,
+    run: BacktestRun,
+    model: BaselineModel,
+    raw: Sequence[float | None],
+) -> tuple[list[float], list[float], list[int], list[float]]:
+    """Cruda, calibrada, etiqueta y tasa base por sesion de *test*, en orden de sesion (A6).
 
-    Se recorre el **plan** (fold a fold, en orden de sesion) y no un diccionario de Python: el
-    orden de las sesiones es parte del resultado cuando la metrica depende de la secuencia (el
-    drawdown de A10).
+    La calibrada es la que viaja en la decision (A7), asi que se recorre el **plan** (fold a
+    fold, en orden de sesion) y no un diccionario: el orden es parte del resultado cuando la
+    metrica depende de la secuencia (el drawdown de A10). La cruda sale del mismo contrato de
+    `probabilities`, casada por sesion, para que las dos veredas hablen de **las mismas** 500.
     """
     labelled = frame.design.frame.select("session", "y")
     labels = {
         cast("date", row["session"]): int(cast("int", row["y"]))
         for row in labelled.iter_rows(named=True)
     }
+    raw_by_session: dict[date, float | None] = dict(zip(frame.design.sessions, raw, strict=True))
     base_rate = {item.index: item.train_base_rate for item in model.folds}
-    probabilities: list[float] = []
+    raw_series: list[float] = []
+    calibrated_series: list[float] = []
     outcomes: list[int] = []
     references: list[float] = []
     for fold in run.folds:
@@ -595,10 +774,18 @@ def _probability_series(
             decision = session.decision
             if decision is None or decision.probability is None:
                 continue
-            probabilities.append(decision.probability)
+            raw_probability = raw_by_session[session.session]
+            if raw_probability is None:
+                raise BaselineReportError(
+                    f"la sesion {session.session.isoformat()} es del *test* del fold "
+                    f"{fold.index} y no tiene probabilidad cruda: la cruda y la calibrada se "
+                    "publican sobre **las mismas** sesiones (A6)"
+                )
+            raw_series.append(raw_probability)
+            calibrated_series.append(decision.probability)
             outcomes.append(labels[session.session])
             references.append(base_rate[fold.index])
-    return probabilities, outcomes, references
+    return raw_series, calibrated_series, outcomes, references
 
 
 def _fold_tables(model: BaselineModel) -> list[dict[str, object]]:
@@ -853,21 +1040,23 @@ def _payload(
     model: BaselineModel,
     model_run: BacktestRun,
     baselines: Sequence[BaselineOutcome],
-    probability_series: tuple[list[float], list[int], list[float]],
+    probability_series: tuple[list[float], list[float], list[int], list[float]],
     model_digest: str,
     registry: Mapping[str, object],
     declared_cost: Mapping[str, object],
 ) -> dict[str, object]:
     """El payload canonico del informe: tipos JSON puros y determinista (A8, A13)."""
-    probabilities_by_session, outcomes, references = probability_series
+    raw_series, calibrated_series, outcomes, references = probability_series
     probability_block = _probability_block(
-        probabilities_by_session=probabilities_by_session,
+        raw=raw_series,
+        calibrated=calibrated_series,
         outcomes=outcomes,
         references=references,
+        folds=model.folds,
     )
     raw: dict[str, object] = {
         "analysis": "cfdtrader.analysis.baseline_report",
-        "task": "#24",
+        "task": "#25",
         "variant_id": VARIANT_ID,
         "generated_at": as_of.isoformat(),
         "hash_format": REPORT_HASH_FORMAT,
@@ -904,17 +1093,29 @@ def _payload(
             "`tol` son cotas declaradas: la convergencia se publica por fold"
         ),
         "seed": model.seed,
+        "calibration": {
+            "constants": dict(CALIBRATION_HYPERPARAMETERS),
+            "rule": CALIBRATION_RULE,
+            "where": (
+                "la cola purgada del *train* de cada fold (`cfdtrader.models.calibration`, #25); "
+                "el *test* no entra ni en el estimador ni en el calibrador"
+            ),
+            "decides": (
+                "la decision usa la probabilidad **calibrada** (`p_cal >= 0,5`); la cruda se "
+                "publica en `probability_metrics.before` (A7)"
+            ),
+            "none_reason": CALIBRATION_NONE_REASON,
+        },
         "folds": _fold_tables(model),
         "probability_metrics": probability_block,
         "decision": {
             "threshold": DECISION_THRESHOLD,
-            "rule": "`Direction.LONG` si `p >= 0,5`; `Direction.NOTHING` si no (A11)",
+            "rule": "`Direction.LONG` si `p_cal >= 0,5`; `Direction.NOTHING` si no (A7/A11)",
             "n_traded": model_run.traded,
+            "n_traded_raw": cast("dict[str, object]", probability_block["before"])["n_traded"],
             "n_no_trade": model_run.no_trade,
             "n_skipped": model_run.skipped,
-            "trade_rate": model_run.traded / len(probabilities_by_session)
-            if probabilities_by_session
-            else None,
+            "trade_rate": model_run.traded / len(calibrated_series) if calibrated_series else None,
             "decider_reads": (
                 "solo la `SessionView`: la probabilidad viaja en su carga opaca, y la vista no "
                 "expone `high`/`low`/`close` de la sesion en curso (A11)"
@@ -954,8 +1155,10 @@ def _payload(
 LIMITATIONS: Final[tuple[str, ...]] = (
     "una sola variante y una sola semilla: no hay barrido de hiperparametros ni comparacion "
     "entre modelos (#26), asi que el DSR/PBO de #16 no se calcula aqui",
-    "las probabilidades **no** estan calibradas: Brier y log-loss se publican sobre la "
-    "probabilidad cruda (#25)",
+    "las probabilidades **si** estan calibradas (Platt/isotonica, ajustado con la cola purgada "
+    "del train de cada fold): el calibrador no ve el *test*, pero sus puntuaciones son las del "
+    "estimador de #24, que si vio el train entero — es el precio de no mover el modelo crudo "
+    "(#26 puede refitearlo con el bloque de ajuste)",
     "la serie economica es de coste **declarado** (`pnl_declared_pct`): no incluye el supuesto "
     "de *slippage* de #64 porque no se puede cobrar sin `R` (#60)",
     "el camino intradia es inerte (ningun decididor declara barreras): toda operacion sale por el "
@@ -992,6 +1195,12 @@ def render_markdown(report: BaselineReport) -> str:
     plan = cast("dict[str, object]", payload["plan"])
     probability = cast("dict[str, object]", payload["probability_metrics"])
     calibration = cast("dict[str, object]", probability["calibration"])
+    before = cast("dict[str, object]", probability["before"])
+    after = cast("dict[str, object]", probability["after"])
+    delta = cast("dict[str, object]", probability["delta"])
+    methods = cast("dict[str, int]", calibration["methods"])
+    per_fold = cast("list[dict[str, object]]", calibration["per_fold"])
+    saturation = cast("dict[str, object]", probability["saturation"])
     references = cast("dict[str, object]", probability["references"])
     base_rate = cast("dict[str, object]", references["base_rate"])
     always_long = cast("dict[str, object]", references["always_long"])
@@ -1007,7 +1216,8 @@ def render_markdown(report: BaselineReport) -> str:
     lines: list[str] = [
         f"# Modelo baseline con *purged CV* — `{universe['series_id']}`",
         "",
-        f"Variante `{payload['variant_id']}` (tarea {payload['task']}). Generado el "
+        f"Variante `{payload['variant_id']}` (logistica elastic net + calibracion "
+        f"Platt/isotonica dentro del *train*). Generado el "
         f"`{payload['generated_at']}` (**declarado**, no leido del reloj). "
         f"`report_sha256 = {report.report_sha256}`.",
         "",
@@ -1069,28 +1279,52 @@ def render_markdown(report: BaselineReport) -> str:
         "",
         "## Folds ajustados",
         "",
-        "| fold | train | test | positivos train | tasa base | iter | convergido | intercepto |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| fold | train | test | positivos train | tasa base | iter | convergido | intercepto "
+        "| calibracion | n_cal |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
-    for fold in folds:
+    for fold, entry in zip(folds, per_fold, strict=True):
         lines.append(
             f"| {fold['index']} | {fold['n_train']} ({fold['train_first_session']} → "
             f"{fold['train_last_session']}) | {fold['n_test']} | {fold['train_positives']} | "
             f"{_number(fold['train_base_rate'])} | {fold['n_iter']} | {fold['converged']} | "
-            f"{_number(fold['intercept'])} |"
+            f"{_number(fold['intercept'])} | {entry['method']} | {entry['n_calibration']} |"
         )
     lines.extend(
         [
             "",
             "- El escalado (`mean`, `scale`) y los coeficientes de **cada** fold viajan al "
             "informe y a `model.json`: se ajustan **solo** con el train de ese fold (A7).",
+            "- El calibrador de cada fold se ajusta con la **cola** purgada de ese mismo train "
+            "(`calibration_positions`); el *test* no entra ni en el estimador ni en el "
+            "calibrador (A2/A3).",
             "",
-            "## Metricas de probabilidad (sin calibrar)",
+            "## Metricas de probabilidad (cruda frente a calibrada)",
             "",
             f"- Sesiones de test: **{probability['n_test']}** "
-            f"({probability['n_positives']} positivos).",
-            f"- Modelo: `brier_score = {_number(probability['brier_score'])}`, "
-            f"`log_loss = {_number(probability['log_loss'])}`.",
+            f"({probability['n_positives']} positivos), las mismas en las dos veredas.",
+            f"- Cruda (`before`): `brier_score = {_number(before['brier_score'])}`, "
+            f"`log_loss = {_number(before['log_loss'])}`, `n_traded = {before['n_traded']}`, "
+            f"`mean_probability = {_number(before['mean_probability'])}`.",
+            f"- Calibrada (`after`, la que decide): "
+            f"`brier_score = {_number(after['brier_score'])}`, "
+            f"`log_loss = {_number(after['log_loss'])}`, `n_traded = {after['n_traded']}`, "
+            f"`mean_probability = {_number(after['mean_probability'])}`.",
+            f"- `delta` ({delta['rule']}): Brier `{_number(delta['brier_score'])}`, log-loss "
+            f"`{_number(delta['log_loss'])}`, operadas `{delta['n_traded']}`; "
+            f"`improves = {delta['improves']}`. {delta['note']}",
+            f"- Recorte declarado del log-loss: "
+            f"`log_loss_epsilon = {_number(after['log_loss_epsilon'])}`. "
+            f"{after['log_loss_note']}",
+            f"- Saturacion (artefacto, no creencia): `n_at_zero = {saturation['n_at_zero']}`, "
+            f"`n_at_one = {saturation['n_at_one']}` de {probability['n_test']} sesiones. "
+            f"{saturation['note']} Seguimiento: "
+            f"{', '.join(cast('list[str]', saturation['follow_up']))}.",
+            f"- Calibradores por fold: {calibration['method']} "
+            f"(`platt = {methods['platt']}`, `isotonic = {methods['isotonic']}`, "
+            f"`none = {methods['none']}`; `n_folds_calibrated = "
+            f"{calibration['n_folds_calibrated']}` de {calibration['n_folds']}). "
+            f"{calibration['rule']}",
             f"- Referencia `base_rate` (tasa base del train de cada fold): "
             f"`brier_score = {_number(base_rate['brier_score'])}`, "
             f"`log_loss = {_number(base_rate['log_loss'])}`, "
@@ -1098,8 +1332,9 @@ def render_markdown(report: BaselineReport) -> str:
             f"- Referencia `always_long` (`p = 1,0`): "
             f"`brier_score = {_number(always_long['brier_score'])}`, "
             f"`log_loss = {_number(always_long['log_loss'])}`.",
-            f"- El modelo **bate** al `base_rate`: en Brier `{versus['beats_base_rate_brier']}`, "
-            f"en log-loss `{versus['beats_base_rate_log_loss']}`; y a `always_long`: en Brier "
+            f"- La probabilidad **calibrada** **bate** al `base_rate`: en Brier "
+            f"`{versus['beats_base_rate_brier']}`, en log-loss "
+            f"`{versus['beats_base_rate_log_loss']}`; y a `always_long`: en Brier "
             f"`{versus['beats_always_long_brier']}`, en log-loss "
             f"`{versus['beats_always_long_log_loss']}`. {versus['note']}",
             f"- Curva de fiabilidad con **{calibration['bins']}** bins: "
@@ -1192,11 +1427,15 @@ def render_markdown(report: BaselineReport) -> str:
 # Ejecucion (A13)
 # ─────────────────────────────────────────────────────────────────────────────
 def _configuration(store: Store, *, frame: FeatureFrame, plan: SplitPlan) -> ExperimentConfig:
-    """La configuracion registrada de la variante: features, hiperparametros, semilla y fuente."""
+    """La configuracion registrada de la variante: features, hiperparametros, semilla y fuente.
+
+    Los hiperparametros registrados incluyen las **tres** constantes de calibracion (A9):
+    cambiarlas cambia el `run_sha256` del experimento, como cualquier otra decision declarada.
+    """
     return ExperimentConfig(
         variant_id=VARIANT_ID,
         features=BASELINE_FEATURES,
-        hyperparameters=dict(HYPERPARAMETERS),
+        hyperparameters=dict(REGISTERED_HYPERPARAMETERS),
         seed=SEED,
         series_id=backtest_report.SERIES_ID,
         window={
@@ -1216,6 +1455,17 @@ def _configuration(store: Store, *, frame: FeatureFrame, plan: SplitPlan) -> Exp
 def _analyse_feature_frame(store: Store) -> FeatureFrame:
     """Un solo acceso al almacen para la matriz de features."""
     return build_feature_frame(store, series_id=backtest_report.SERIES_ID)
+
+
+def _label_horizon(plan: SplitPlan) -> tuple[int, ...]:
+    """El horizonte por posicion que publica el plan de #12: lo que purga la calibracion (A2)."""
+    value = plan.inputs.get("label_horizon")
+    if not isinstance(value, (tuple, list)):
+        raise BaselineReportError(
+            "el plan de #12 no publica `label_horizon` por posicion: sin el no se puede purgar "
+            "la cola del train que calibra (A2)"
+        )
+    return tuple(int(cast("int", item)) for item in cast("Sequence[object]", value))
 
 
 def analyse(
@@ -1238,9 +1488,15 @@ def analyse(
     frame = _analyse_feature_frame(store)
     _require_alignment(universe, frame)
     plan = backtest_report.build_split_plan(universe.inputs, params=backtest_report.PHASE1_PLAN)
-    model = fit_baseline(frame.design, splits=split_assignments(plan))
+    model = fit_baseline(
+        frame.design,
+        splits=split_assignments(plan),
+        hyperparameters=REGISTERED_HYPERPARAMETERS,
+        label_horizon=_label_horizon(plan),
+    )
     predicted = probabilities(model, frame.design.frame)
-    inputs = _scored_inputs(universe.inputs, predicted)
+    calibrated = calibrated_probabilities(model, frame.design.frame)
+    inputs = _scored_inputs(universe.inputs, calibrated)
 
     model_cost = declared_cost_model()
     slippage: SlippageParameter = backtest_report.declared_slippage_assumption()
@@ -1265,7 +1521,7 @@ def analyse(
             "mueve para forzar operaciones"
         )
 
-    probability_series = _probability_series(frame, run, model)
+    probability_series = _probability_series(frame, run, model, predicted)
     config = _configuration(store, frame=frame, plan=plan)
     result = ExperimentResult(
         sharpe_per_session=sharpe_ratio(
@@ -1324,6 +1580,7 @@ def analyse(
         config=config,
         result=result,
         probabilities=predicted,
+        calibrated=calibrated,
     )
     if write:
         json_path, markdown_path = report.write(reports_dir)

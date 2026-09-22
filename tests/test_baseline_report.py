@@ -19,11 +19,12 @@ import json
 import math
 import re
 import statistics
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Final, cast
 
+import numpy as np
 import pytest
 
 from cfdtrader.analysis import baseline_report, feature_frame
@@ -49,7 +50,7 @@ from cfdtrader.analysis.experiment_log import (
 )
 from cfdtrader.backtest.baselines import BASELINE_IDS
 from cfdtrader.backtest.engine import STATUS_TRADED, canonical_text
-from cfdtrader.backtest.metrics import MetricsInputError, calculate_metrics
+from cfdtrader.backtest.metrics import LOG_LOSS_EPSILON, MetricsInputError, calculate_metrics
 from cfdtrader.backtest.splits import walk_forward_splits
 from cfdtrader.data.store import Store, WriteOutcome
 from cfdtrader.models.baseline import BASELINE_FEATURES, DECISION_THRESHOLD, SEED
@@ -118,7 +119,11 @@ def _rows(report: BaselineReport) -> list[dict[str, object]]:
 
 
 def _test_sessions(report: BaselineReport) -> list[tuple[float, int, float]]:
-    """``(probabilidad, y, tasa base del train)`` por sesion de *test*, en orden (A9)."""
+    """``(probabilidad, y, tasa base del train)`` por sesion de *test*, en orden (A9).
+
+    La probabilidad que viaja en la decision es la **calibrada** (#25, A7): dejo de ser la cruda.
+    La cruda se reconstruye aparte, con ``_raw_test_sessions``.
+    """
     labels = {
         cast("date", row["session"]): int(cast("int", row["y"]))
         for row in report.features.design.frame.select("session", "y").iter_rows(named=True)
@@ -130,6 +135,73 @@ def _test_sessions(report: BaselineReport) -> list[tuple[float, int, float]]:
             decision = session.decision
             assert decision is not None and decision.probability is not None
             out.append((decision.probability, labels[session.session], base_rate[fold.index]))
+    return out
+
+
+def _plain_sigmoid(score: float) -> float:
+    """El enlace del modulo, escrito otra vez (misma formula ⇒ misma mantisa, sin importarlo)."""
+    if score >= 0.0:
+        return 1.0 / (1.0 + math.exp(-score))
+    exponential = math.exp(score)
+    return exponential / (1.0 + exponential)
+
+
+def _clip(probability: float) -> float:
+    """El recorte del log-loss que declara el informe: ``[epsilon, 1 - epsilon]`` (A9)."""
+    return max(LOG_LOSS_EPSILON, min(1.0 - LOG_LOSS_EPSILON, probability))
+
+
+def _log_loss(probabilities: Sequence[float], outcomes: Sequence[int]) -> float:
+    """Log-loss con aritmetica propia, recortando **dentro** de cada logaritmo como #15 (A9).
+
+    La isotonica satura y publica un 1,0 exacto, asi que la cifra del informe esta recortada: el
+    recorte se declara en el bloque (``log_loss_epsilon``) y aqui se aplica igual.
+    """
+    return -sum(
+        outcome * math.log(_clip(probability)) + (1 - outcome) * math.log(_clip(1.0 - probability))
+        for probability, outcome in zip(probabilities, outcomes, strict=True)
+    ) / len(outcomes)
+
+
+def _brier(probabilities: Sequence[float], outcomes: Sequence[int]) -> float:
+    """Brier con aritmetica propia, sin las funciones del modulo (A9)."""
+    return sum(
+        (probability - outcome) ** 2
+        for probability, outcome in zip(probabilities, outcomes, strict=True)
+    ) / len(outcomes)
+
+
+def _model_document(report: BaselineReport) -> dict[str, object]:
+    """``model.json`` del registro, tal cual: la fuente de la reconstruccion de la cruda (A9)."""
+    return cast(
+        "dict[str, object]",
+        json.loads((report.record.directory / MODEL_FILE).read_text(encoding="utf-8")),
+    )
+
+
+def _raw_test_sessions(report: BaselineReport) -> list[float]:
+    """La probabilidad **cruda** de cada sesion de *test*, reconstruida desde los folds (A9).
+
+    La aritmetica es **propia** sobre los parametros publicados en `model.json`
+    (``(x - mean) / scale @ coef + intercept`` y el enlace escrito otra vez): ninguna funcion de
+    `cfdtrader` participa. Se usa `numpy` para multiplicar igual que el modulo, para que las
+    cifras se reproduzcan y no queden cerca por casualidad.
+    """
+    selected = report.features.design.frame.select(list(BASELINE_FEATURES))
+    matrix = np.asarray(selected.to_numpy(), dtype=np.float64)
+    model = cast("dict[str, object]", _model_document(report)["model"])
+    folds = cast("list[object]", model["folds"])
+    out: list[float] = []
+    for item in folds:
+        fold = cast("dict[str, object]", item)
+        positions = cast("list[int]", fold["test_positions"])
+        mean = np.asarray(cast("list[float]", fold["mean"]), dtype=np.float64)
+        scale = np.asarray(cast("list[float]", fold["scale"]), dtype=np.float64)
+        coefficients = np.asarray(cast("list[float]", fold["coefficients"]), dtype=np.float64)
+        scores = ((matrix[positions, :] - mean) / scale) @ coefficients + float(
+            cast("float", fold["intercept"])
+        )
+        out.extend(_plain_sigmoid(float(value)) for value in scores)
     return out
 
 
@@ -284,32 +356,79 @@ def test_a8_the_report_hash_survives_a_second_pass_and_other_directories(
 def test_a9_probability_metrics_and_the_two_references_over_the_same_500_sessions(
     real_report: BaselineReport,
 ) -> None:
-    """A9: Brier y log-loss del modelo, 5 bins sin calibrar y las dos referencias del §10.
+    """A9: Brier y log-loss de las **dos** veredas y las dos referencias del §10.
 
     Las cifras se **recalculan** en el test con aritmetica propia (no con las funciones del
-    modulo) sobre las mismas 500 sesiones de *test*.
+    modulo) sobre las mismas 500 sesiones de *test*: la cruda se reconstruye desde los folds de
+    `model.json` y la calibrada sale de `Decision.probability`, que es la que decide (#25, A7).
+    El recorte del log-loss se aplica igual que en el informe y se comprueba que este declarado.
     """
     series = _test_sessions(real_report)
     assert len(series) == 500
-    assert len(series) == _block(real_report, "probability_metrics")["n_test"]
-    probabilities = [item[0] for item in series]
+    published = _block(real_report, "probability_metrics")
+    assert len(series) == published["n_test"]
+    calibrated = [item[0] for item in series]
     outcomes = [item[1] for item in series]
     references = [item[2] for item in series]
+    raw = _raw_test_sessions(real_report)
+    assert len(raw) == len(calibrated) == 500
 
-    brier = sum((p - y) ** 2 for p, y in zip(probabilities, outcomes, strict=True)) / len(outcomes)
-    log_loss = -sum(
-        y * math.log(p) + (1 - y) * math.log(1 - p)
-        for p, y in zip(probabilities, outcomes, strict=True)
-    ) / len(outcomes)
-    published = _block(real_report, "probability_metrics")
-    assert published["brier_score"] == pytest.approx(brier, rel=0, abs=1e-15)
-    assert published["log_loss"] == pytest.approx(log_loss, rel=0, abs=1e-15)
+    before = cast("dict[str, object]", published["before"])
+    after = cast("dict[str, object]", published["after"])
+    delta = cast("dict[str, object]", published["delta"])
+    for side, probabilities in ((before, raw), (after, calibrated)):
+        assert side["n_test"] == 500
+        assert side["brier_score"] == pytest.approx(
+            _brier(probabilities, outcomes), rel=0, abs=1e-15
+        )
+        assert side["log_loss"] == pytest.approx(
+            _log_loss(probabilities, outcomes), rel=0, abs=1e-15
+        )
+        curve = cast("list[dict[str, object]]", side["curve"])
+        assert len(curve) == 5
+        assert sum(cast("int", item["count"]) for item in curve) == 500
+    assert published["brier_score"] == after["brier_score"]
+    assert published["log_loss"] == after["log_loss"]
+    assert delta["brier_score"] == (
+        float(cast("float", before["brier_score"])) - float(cast("float", after["brier_score"]))
+    )
+    assert delta["log_loss"] == (
+        float(cast("float", before["log_loss"])) - float(cast("float", after["log_loss"]))
+    )
+    assert delta["n_traded"] == int(cast("int", before["n_traded"])) - int(
+        cast("int", after["n_traded"])
+    )
+
+    # El recorte se **declara** en el bloque: la isotonica satura y publica un 1,0 exacto.
+    assert after["log_loss_epsilon"] == LOG_LOSS_EPSILON
+    saturation = cast("dict[str, object]", published["saturation"])
+    assert saturation["n_at_one"] == sum(1 for value in calibrated if value == 1.0)
+    assert saturation["n_at_zero"] == sum(1 for value in calibrated if value == 0.0)
+    assert saturation["n_at_boundary"] == int(cast("int", saturation["n_at_zero"])) + int(
+        cast("int", saturation["n_at_one"])
+    )
 
     calibration = cast("dict[str, object]", published["calibration"])
     assert calibration["bins"] == CALIBRATION_BINS == 5
-    assert calibration["calibrated"] is False
-    assert calibration["method"] == "none"
+    assert calibration["calibrated"] is True
+    assert calibration["method"] == "mixed"
+    assert calibration["methods"] == {"platt": 7, "isotonic": 3, "none": 0}
+    per_fold = cast("list[dict[str, object]]", calibration["per_fold"])
+    assert len(per_fold) == 10
+    assert [item["n_calibration"] for item in per_fold] == [
+        437,
+        447,
+        457,
+        467,
+        477,
+        487,
+        497,
+        507,
+        517,
+        527,
+    ]
     curve = cast("list[dict[str, object]]", calibration["curve"])
+    assert curve == after["curve"]
     assert len(curve) == 5
     assert sum(cast("int", item["count"]) for item in curve) == 500
     for index, item in enumerate(curve):
@@ -319,9 +438,7 @@ def test_a9_probability_metrics_and_the_two_references_over_the_same_500_session
     checks = cast("dict[str, object]", published["references"])
     base_rate = cast("dict[str, object]", checks["base_rate"])
     always_long = cast("dict[str, object]", checks["always_long"])
-    assert base_rate["brier_score"] == pytest.approx(
-        sum((r - y) ** 2 for r, y in zip(references, outcomes, strict=True)) / len(outcomes)
-    )
+    assert base_rate["brier_score"] == pytest.approx(_brier(references, outcomes), rel=0, abs=1e-15)
     assert base_rate["mean_probability"] == pytest.approx(sum(references) / len(references))
     assert base_rate["mean_probability"] != pytest.approx(1399 / 2687)
     assert always_long["brier_score"] == pytest.approx(
