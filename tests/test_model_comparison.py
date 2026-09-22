@@ -14,6 +14,7 @@ El determinismo entre procesos (A13) se mide con la CLI en procesos nuevos y `PY
 from __future__ import annotations
 
 import ast
+import copy
 import dataclasses
 import hashlib
 import json
@@ -1115,3 +1116,145 @@ def test_a14_the_fit_is_the_same_as_the_one_the_report_uses() -> None:
     source = _source(model_comparison)
     assert "hyperparameters=LIGHTGBM_HYPERPARAMETERS" in source
     assert "FROZEN_TOLERANCE" in source
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Apoyo: la ruta de exito del CLI y las ramas que las corridas reales no tocan
+#
+# `pytest-cov` no instrumenta subprocesos (misma trampa que en #16): la ruta de exito de
+# `main` solo cuenta como cubierta si se llama **en proceso**. Todo lo de abajo escribe en
+# `tmp_path` o no escribe nada, asi que el `data/` y el `runs/` del repositorio no se tocan.
+# ─────────────────────────────────────────────────────────────────────────────
+@needs_store
+def test_a2_the_cli_in_process_writes_the_report_and_exits_zero(tmp_path: Path) -> None:
+    """La ruta de exito del CLI, llamada **en proceso**, escribe el informe y devuelve 0 (A2)."""
+    runs = tmp_path / "runs"
+    _copy_frozen_runs(runs)
+    reports = tmp_path / "reports"
+    code = main(
+        [
+            "--data-root",
+            str(REAL_DATA),
+            "--reports-dir",
+            str(reports),
+            "--runs-root",
+            str(runs),
+            "--as-of",
+            NOW.isoformat(),
+        ]
+    )
+    assert code == 0
+    stem = f"{REPORT_PREFIX}_{NOW.date().isoformat()}"
+    assert (reports / f"{stem}.json").is_file()
+    assert (reports / f"{stem}.md").is_file()
+    assert load_registry(runs).n_trials == 4
+
+
+def test_a2_an_as_of_that_is_not_iso_exits_two_with_a_reason(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Un `--as-of` que no es ISO-8601 tambien sale con 2 y el motivo en `stderr` (A2)."""
+    assert main(["--as-of", "no-es-iso-8601"]) == 2
+    assert "--as-of" in capsys.readouterr().err
+
+
+@needs_store
+def test_a7_a_reconstruction_that_does_not_square_is_a_typed_error(
+    real_report: ModelComparisonReport,
+) -> None:
+    """`_require_frozen_match` con una cifra que no cuadra lanza el error tipado (A7)."""
+    tampered = dataclasses.replace(real_report.evaluated[0], brier_score=0.9)
+    with pytest.raises(model_comparison.FrozenBaselineMismatchError):
+        model_comparison._require_frozen_match(tampered)  # pyright: ignore[reportPrivateUsage]
+
+
+def test_a8_an_empty_matrix_has_no_rows() -> None:
+    """Sin variantes evaluadas la matriz no tiene filas (A8)."""
+    assert model_comparison._series_matrix(()) == []  # pyright: ignore[reportPrivateUsage]
+
+
+@needs_store
+def test_a9_a_complete_matrix_without_selection_is_declared(
+    real_report: ModelComparisonReport,
+) -> None:
+    """Con matriz completa pero sin seleccion, el DSR se declara `not_evaluable` (A9)."""
+    empty_selection: dict[str, object] = {}
+    verdict = model_comparison._verdict_block(  # pyright: ignore[reportPrivateUsage]
+        evaluated=real_report.evaluated,
+        registry=real_report.registry,
+        selection=empty_selection,
+        candidates=real_report.candidates,
+    )
+    assert verdict["state"] == "evaluated"
+    dsr = cast("dict[str, object]", verdict["deflated_sharpe_ratio"])
+    assert dsr["state"] == "not_evaluable"
+
+
+@needs_store
+def test_a10_a_missing_model_document_is_declared(
+    real_report: ModelComparisonReport, tmp_path: Path
+) -> None:
+    """Una entrada cuyo `model.json` no esta se declara `not_evaluable`, no se rellena (A10)."""
+    runs = tmp_path / "runs"
+    _copy_frozen_runs(runs)
+    entry = next(
+        item for item in real_report.registry.entries if item.variant_id == BASELINE_VARIANT_ID
+    )
+    (runs / entry.run_sha256 / "model.json").unlink()
+    known: dict[str, model_comparison.Variant] = {}
+    candidates = model_comparison._candidates(  # pyright: ignore[reportPrivateUsage]
+        registry=Registry(entries=(entry,), registry_sha256="synthetic"),
+        runs_root=runs,
+        known=known,
+        universe=real_report.universe,
+        frame=real_report.features,
+        plan=real_report.split_plan,
+        cost_model=declared_cost_model(),
+        slippage=declared_slippage_assumption(),
+    )
+    assert len(candidates) == 1
+    missing = candidates[0]
+    assert isinstance(missing, model_comparison.NotEvaluable)
+    assert missing.error == "MissingModelDocumentError"
+
+
+def test_a12_the_number_helper_formats_every_json_type() -> None:
+    """`_number` formatea `None`, `bool`, `int`, `float` y texto sin inventar cifras (A12)."""
+    number = model_comparison._number  # pyright: ignore[reportPrivateUsage]
+    assert number(None) == "`null`"
+    assert number(True) == "true"
+    assert number(7) == "7"
+    assert number(0.125) == "0.125000"
+    assert number("texto") == "texto"
+
+
+@needs_store
+def test_a12_the_comparison_without_the_raw_baseline_invents_no_delta(
+    real_report: ModelComparisonReport,
+) -> None:
+    """Sin la cruda de #24 entre las evaluadas, la tabla no inventa un delta (A12)."""
+    block = model_comparison._comparison_block(  # pyright: ignore[reportPrivateUsage]
+        tuple(item for item in real_report.evaluated if item.calibrated),
+    )
+    assert block["reference"] is None
+    rows = cast("list[dict[str, object]]", block["rows"])
+    assert rows and all(row["delta_vs_baseline_raw"] is None for row in rows)
+
+
+@needs_store
+def test_a12_the_markdown_declares_a_report_without_selection(
+    real_report: ModelComparisonReport,
+) -> None:
+    """El `.md` publica el veto cuando la seleccion no se puede resolver (A10, A12)."""
+    payload = copy.deepcopy(real_report.payload)
+    payload["selection"] = selection_block(
+        (
+            real_report.evaluated[0],
+            model_comparison.NotEvaluable(
+                run_sha256="nope", variant_id="mystery_v1", reason="sin metrica", error="X"
+            ),
+        )
+    )
+    text = render_markdown(dataclasses.replace(real_report, payload=payload))
+    assert "Sin seleccion" in text
+    assert "**Vetos** (candidato sin metrica)" in text
