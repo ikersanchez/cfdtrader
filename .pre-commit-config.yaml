@@ -24,6 +24,19 @@ repos:
         language: system
         types_or: [python, pyi]
         require_serial: true
+      # ── puerta del golden de la matriz (#17, A15) ──────────────────────────
+      # Etapa `pre-push`: la puerta del *golden dataset* de la matriz de las cinco familias
+      # (tests/test_integrity.py). `always_run: true` + `pass_filenames: false` son
+      # imprescindibles: sin ellas el hook no recibe ficheros, no se ejecuta y quedaria en un
+      # no-op silencioso. El CI llega mas adelante (#85); de momento la barrera es local.
+      - id: integrity-golden
+        name: integrity golden (T17)
+        entry: 'uv run pytest tests/test_integrity.py -q -k "golden_matrix or version_gate"'
+        language: system
+        stages: [pre-push]
+        always_run: true
+        pass_filenames: false
+        require_serial: true
 
   # ── higiene general ────────────────────────────────────────────────────────
   - repo: https://github.com/pre-commit/pre-commit-hooks

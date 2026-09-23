@@ -1,0 +1,243 @@
+{
+  "_comment": [
+    "Golden dataset congelado de la matriz de las cinco familias (#17). Los INPUTS son los cinco",
+    "fixtures comprometidos de tests/fixtures/features: el ancla `^GSPC` es la union de",
+    "`golden_inputs.csv` (300 sesiones; manda donde las dos traen precio) y",
+    "`regime_golden_inputs.csv` (las 500+ anteriores que necesita el GARCH de `regime_v1`);",
+    "`vix_close` sale de `golden_inputs.csv`, las series de contexto y los 11 ETF sectoriales de",
+    "`context_golden_inputs.csv`, el indice dolar de `macro_golden_market.csv` y las seis series",
+    "macro de `macro_golden_series.csv`. No hay ninguna semilla y ningun reloj: el almacen es una",
+    "funcion determinista de esos ficheros.",
+    "El par (code_version, digests) esta congelado entero, asi que el test falla si el calculo se",
+    "mueve sin subir FEATURE_CODE_VERSION (y tambien si sube sin actualizar este fichero). Nunca",
+    "se regenera un golden 'para que pase'."
+  ],
+  "generator": "tests/fixtures/features/*.csv ensamblados con Store.append y cfdtrader.analysis.feature_frame.build_feature_matrix; para reproducirlo: json.dumps(tests.test_integrity.golden_payload(root), indent=2, ensure_ascii=False) sobre un root nuevo dentro del workspace",
+  "code_version": 1,
+  "feature_spec_sha256": {
+    "volatility_v1": "sha256:3c71eb69635589dc7ece74b662170b27104473c3b81f3f21434ac178d7dc539b",
+    "technical_v1": "sha256:6e4d86aee66be928d860184e65d03f7de03da59fae58a87467b5acdc95b3b78b",
+    "context_v1": "sha256:513ec8206aea00b5b99341d2c937b38ce41c473a1bfbc864a4fbd63947033614",
+    "macro_v1": "sha256:8eb2384202edbfe26bcc04c87e3a807938515d5319839905d9cbd39263f50f28",
+    "regime_v1": "sha256:272d8125b9ec118d95ee27619982e6007283b885cb6dfb968e4373b0053e9a0d"
+  },
+  "matrix_sha256": "sha256:43ae0d6a26069dd4aee54123d88d797593dcde5a065466c2ee34b4d688350c3b",
+  "feature_columns": [
+    "session",
+    "true_range",
+    "atr_norm",
+    "parkinson_rv",
+    "ret_log",
+    "ret_sq",
+    "har_lag1",
+    "har_lag4",
+    "har_lag17",
+    "har_forecast",
+    "vix_level",
+    "vix_zscore",
+    "vix_percentile",
+    "ret_1",
+    "ret_5",
+    "ret_21",
+    "dist_sma_20",
+    "rsi_14",
+    "range_pos_20",
+    "vol_break_20",
+    "atr_norm_z",
+    "dist_sma_20_z",
+    "corr_dax_60",
+    "corr_ftse_60",
+    "corr_stoxx_60",
+    "corr_nikkei_60",
+    "asia_overnight_1",
+    "europe_prev_1",
+    "beta_vix_60",
+    "dxy_ret_1",
+    "sector_dispersion_1",
+    "sector_count",
+    "sector_dispersion_1_z",
+    "fed_funds",
+    "fed_funds_chg_5",
+    "ust_10y",
+    "ust_10y_chg_5",
+    "ust_2y",
+    "ust_2y_chg_5",
+    "pendiente_2s10s",
+    "pendiente_2s10s_chg_5",
+    "cpi_yoy",
+    "pce_yoy",
+    "dxy",
+    "ust_10y_z",
+    "dxy_z",
+    "rv_percentile",
+    "garch_forecast",
+    "garch_forecast_z",
+    "efficiency_ratio_20",
+    "day_of_week",
+    "sessions_to_opex",
+    "is_es_roll_session"
+  ],
+  "sessions": 813,
+  "n_columns": 52,
+  "first_session": "2023-07-11",
+  "last_session": "2026-09-16",
+  "non_null": {
+    "true_range": 813,
+    "atr_norm": 799,
+    "parkinson_rv": 813,
+    "ret_log": 813,
+    "ret_sq": 813,
+    "har_lag1": 791,
+    "har_lag4": 791,
+    "har_lag17": 791,
+    "har_forecast": 769,
+    "vix_level": 300,
+    "vix_zscore": 50,
+    "vix_percentile": 50,
+    "ret_1": 812,
+    "ret_5": 808,
+    "ret_21": 792,
+    "dist_sma_20": 794,
+    "rsi_14": 799,
+    "range_pos_20": 794,
+    "vol_break_20": 793,
+    "atr_norm_z": 550,
+    "dist_sma_20_z": 545,
+    "corr_dax_60": 298,
+    "corr_ftse_60": 298,
+    "corr_stoxx_60": 228,
+    "corr_nikkei_60": 298,
+    "asia_overnight_1": 439,
+    "europe_prev_1": 368,
+    "beta_vix_60": 298,
+    "dxy_ret_1": 304,
+    "sector_dispersion_1": 438,
+    "sector_count": 813,
+    "sector_dispersion_1_z": 189,
+    "fed_funds": 692,
+    "fed_funds_chg_5": 687,
+    "ust_10y": 692,
+    "ust_10y_chg_5": 687,
+    "ust_2y": 692,
+    "ust_2y_chg_5": 687,
+    "pendiente_2s10s": 692,
+    "pendiente_2s10s_chg_5": 687,
+    "cpi_yoy": 411,
+    "pce_yoy": 399,
+    "dxy": 306,
+    "ust_10y_z": 443,
+    "dxy_z": 57,
+    "rv_percentile": 562,
+    "garch_forecast": 313,
+    "garch_forecast_z": 64,
+    "efficiency_ratio_20": 793,
+    "day_of_week": 813,
+    "sessions_to_opex": 796,
+    "is_es_roll_session": 813
+  },
+  "sources": [
+    [
+      "raw.market_daily",
+      "^GSPC"
+    ],
+    [
+      "raw.market_daily",
+      "^VIX"
+    ],
+    [
+      "raw.market_daily",
+      "^GDAXI"
+    ],
+    [
+      "raw.market_daily",
+      "^FTSE"
+    ],
+    [
+      "raw.market_daily",
+      "^STOXX50E"
+    ],
+    [
+      "raw.market_daily",
+      "^N225"
+    ],
+    [
+      "raw.market_daily",
+      "^HSI"
+    ],
+    [
+      "raw.market_daily",
+      "DX-Y.NYB"
+    ],
+    [
+      "raw.sectors",
+      "XLB"
+    ],
+    [
+      "raw.sectors",
+      "XLC"
+    ],
+    [
+      "raw.sectors",
+      "XLE"
+    ],
+    [
+      "raw.sectors",
+      "XLF"
+    ],
+    [
+      "raw.sectors",
+      "XLI"
+    ],
+    [
+      "raw.sectors",
+      "XLK"
+    ],
+    [
+      "raw.sectors",
+      "XLP"
+    ],
+    [
+      "raw.sectors",
+      "XLRE"
+    ],
+    [
+      "raw.sectors",
+      "XLU"
+    ],
+    [
+      "raw.sectors",
+      "XLV"
+    ],
+    [
+      "raw.sectors",
+      "XLY"
+    ],
+    [
+      "raw.macro",
+      "DFF"
+    ],
+    [
+      "raw.macro",
+      "DGS10"
+    ],
+    [
+      "raw.macro",
+      "DGS2"
+    ],
+    [
+      "raw.macro",
+      "T10Y2Y"
+    ],
+    [
+      "raw.macro",
+      "CPIAUCSL"
+    ],
+    [
+      "raw.macro",
+      "PCEPI"
+    ]
+  ],
+  "duplicated_columns": [
+    "atr_norm"
+  ]
+}
