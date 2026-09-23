@@ -520,7 +520,7 @@ def test_a3_identical_across_fresh_processes(
 def test_a3_hash_is_fixed_with_prefix(real_report: PipelineReport) -> None:
     """A3: el test **fija** el digest, con su prefijo (un sha256 desnudo lo bloquea el hook)."""
     assert real_report.report_sha256 == (
-        "sha256:f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f80"
+        "sha256:687e6b67c3413292aba9b9413748eff0df114aff548e84957d28a4e0a01ffc59"
     )
 
 
