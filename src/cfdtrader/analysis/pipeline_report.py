@@ -1967,6 +1967,12 @@ def _comparison_payload(
     La atribucion se **mide**: se compara el retorno medio que aporta el benchmark (``beta x media
     del benchmark``) con el alfa de Jensen de la misma fila y se publica cual de los dos pesa mas.
     La frase no afirma nada que no salga de esos numeros.
+
+    **Convencion de unidades (una sola, A13):** ``benchmark`` ya llega en **%**
+    (``_close_to_close_pct`` = ``100 x (close / prev - 1)``), ``beta`` es adimensional y
+    ``alpha_pct`` sale de ``_row_metrics`` ya en %. Todo lo que este bloque publica va en %, asi
+    que **no se vuelve a multiplicar por 100**: hacerlo era el error de unidades 100x de A13, que
+    dejaba ``benchmark_mean_pct`` en 100x la media por sesion y rompia la identidad de Jensen.
     """
     deltas: dict[str, object] = {}
     declared_metrics = metrics_by_name.get(ARM_COSTE_DECLARADO, {})
@@ -1985,31 +1991,31 @@ def _comparison_payload(
             ),
             "note": "diferencia del brazo de coste declarado menos la fila (medida, no afirmada)",
         }
-    benchmark_mean = _mean(benchmark)
+    benchmark_mean_pct = _mean(benchmark)
     beta = _estimate(declared_metrics, "beta")
     alpha = _estimate(declared_metrics, "alpha_pct")
-    benchmark_contribution = None if beta is None else beta * benchmark_mean * 100.0
-    if benchmark_contribution is None or alpha is None:
+    benchmark_contribution_pct = None if beta is None else beta * benchmark_mean_pct
+    if benchmark_contribution_pct is None or alpha is None:
         loader = "no_atribuible"
         statement = (
             "no hay atribucion: falta la beta o el alfa del brazo de coste declarado (benchmark de "
             "varianza cero o serie vacia)"
         )
     else:
-        loader = "beta" if abs(benchmark_contribution) > abs(alpha) else "alpha"
+        loader = "beta" if abs(benchmark_contribution_pct) > abs(alpha) else "alpha"
         statement = (
             f"el resultado del brazo de coste declarado lo carga el **{loader}**: aportacion "
-            f"del benchmark = beta x media del benchmark = {benchmark_contribution:.6f} % "
+            f"del benchmark = beta x media del benchmark = {benchmark_contribution_pct:.6f} % "
             f"frente a alfa de Jensen = {alpha:.6f} % (separados contra `{SERIES_ID}`)"
         )
     return {
         "deltas": deltas,
         "attribution": {
             "loader": loader,
-            "benchmark_contribution_pct": benchmark_contribution,
+            "benchmark_contribution_pct": benchmark_contribution_pct,
             "alpha_pct": alpha,
             "beta": beta,
-            "benchmark_mean_pct": benchmark_mean * 100.0,
+            "benchmark_mean_pct": benchmark_mean_pct,
             "statement": statement,
             "series": "series de riesgo alineadas sesion a sesion contra el indice de referencia",
         },

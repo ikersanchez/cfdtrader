@@ -533,7 +533,7 @@ def test_a3_identical_across_fresh_processes(
 def test_a3_hash_is_fixed_with_prefix(real_report: PipelineReport) -> None:
     """A3: el test **fija** el digest, con su prefijo (un sha256 desnudo lo bloquea el hook)."""
     assert real_report.report_sha256 == (
-        "sha256:a6205b95bcf2db86622feb3ebc61fb8453a53e9c64a75e6a1df2c9b09e088671"
+        "sha256:c0ee6b09013ed02421a5a570cbc8d451cb645a1aecfcbd654b8e5f6fe9b56bae"
     )
 
 
@@ -1094,16 +1094,94 @@ def test_a13_beta_alpha_benchmark_and_excess_per_arm_and_liston(
 def test_a13_markdown_says_which_of_the_two_carries_the_result(
     real_report: PipelineReport,
 ) -> None:
-    """A13: el `.md` dice si el resultado lo carga el alpha o el beta, con los numeros."""
+    """A13: el `.md` dice si el resultado lo carga el alpha o el beta, con los numeros medidos."""
     attribution = as_map(at(real_report.payload, "arm_comparison", "attribution"))
     loader = as_str(attribution["loader"])
-    assert loader in {"alpha", "beta", "no_atribuible"}
+    declared = metrics_of(real_report, ARM_COSTE_DECLARADO)
+    beta = as_float(metric_block(declared, "beta")["estimate"])
+    alpha = as_float(metric_block(declared, "alpha_pct")["estimate"])
+    benchmark_mean_pct = as_float(attribution["benchmark_mean_pct"])
+    contribution = as_float(attribution["benchmark_contribution_pct"])
+    # el cargador **no** se acepta como etiqueta libre: sale de los numeros publicados
+    assert contribution == pytest.approx(beta * benchmark_mean_pct, abs=1e-12)
+    assert loader == ("beta" if abs(contribution) > abs(alpha) else "alpha")
+    assert loader == "alpha"
     statement = as_str(attribution["statement"])
     assert loader in statement
     markdown = render_markdown(real_report)
     assert statement in markdown
     assert SERIES_ID in markdown
     assert "Atribucion: alpha contra beta" in markdown
+
+
+@needs_store
+def test_a13_attribution_units_are_percent_and_close_the_jensen_identity(
+    real_report: PipelineReport,
+) -> None:
+    """A13: la atribucion publica en % (una sola convencion) y cierra la identidad de Jensen.
+
+    Con el error de unidades 100x esto falla: ``benchmark_mean_pct`` saldria 100x la media por
+    sesion (``6,369679``) y la aportacion seria ``-0,267822`` en vez de ``-0,002678``, asi que
+    ``alpha + beta x media`` no daria el ``mean_return_pct`` publicado.
+    """
+    attribution = as_map(at(real_report.payload, "arm_comparison", "attribution"))
+    listed_mean_pct = as_float(
+        metric_block(metrics_of(real_report, "liston_c"), "mean_return_pct")["estimate"]
+    )
+    benchmark_mean_pct = as_float(attribution["benchmark_mean_pct"])
+    # misma unidad y misma cifra que el informe ya publica para el liston C
+    assert benchmark_mean_pct == pytest.approx(listed_mean_pct, abs=1e-12)
+    declared = metrics_of(real_report, ARM_COSTE_DECLARADO)
+    beta = as_float(metric_block(declared, "beta")["estimate"])
+    alpha = as_float(metric_block(declared, "alpha_pct")["estimate"])
+    mean = as_float(metric_block(declared, "mean_return_pct")["estimate"])
+    contribution = as_float(attribution["benchmark_contribution_pct"])
+    # la aportacion es ``beta x media``, **sin** volver a multiplicar por 100
+    assert contribution == pytest.approx(beta * benchmark_mean_pct, abs=1e-12)
+    assert contribution != pytest.approx(beta * benchmark_mean_pct * 100.0, abs=1e-9)
+    # la identidad de Jensen cierra con los numeros publicados
+    assert alpha + contribution == pytest.approx(mean, abs=1e-12)
+    # y el cargador sale de la clasificacion corregida (no de una etiqueta fija)
+    assert as_str(attribution["loader"]) == ("beta" if abs(contribution) > abs(alpha) else "alpha")
+    assert as_str(attribution["loader"]) == "alpha"
+    assert "alpha" in as_str(attribution["statement"])
+
+
+@pytest.mark.parametrize(
+    ("metrics", "loader", "contribution", "alpha"),
+    [
+        ({"beta": {"estimate": 1.5}, "alpha_pct": {"estimate": 0.5}}, "beta", 3.0, 0.5),
+        ({"beta": {"estimate": 0.5}, "alpha_pct": {"estimate": 1.5}}, "alpha", 1.0, 1.5),
+        ({"beta": {"estimate": None}, "alpha_pct": {"estimate": 0.5}}, "no_atribuible", None, 0.5),
+        ({"beta": {"estimate": 1.5}}, "no_atribuible", 3.0, None),
+    ],
+)
+def test_a13_attribution_classifies_from_the_measured_numbers(
+    metrics: dict[str, dict[str, float | None]],
+    loader: str,
+    contribution: float | None,
+    alpha: float | None,
+) -> None:
+    """A13: el cargador sale de los numeros medidos (una sola convencion, %) y `no_atribuible`.
+
+    El benchmark va en % (``1, 2, 3`` => media ``2``): con el error 100x la aportacion saldria
+    ``200 x beta`` y el caso ``no_atribuible`` (sin beta o sin alfa) no tendria rama propia.
+    """
+    payload = pipeline_report._comparison_payload(  # pyright: ignore[reportPrivateUsage]
+        rows=(),
+        metrics_by_name={ARM_COSTE_DECLARADO: metrics},
+        benchmark=(1.0, 2.0, 3.0),
+    )
+    attribution = as_map(payload["attribution"])
+    assert as_float(attribution["benchmark_mean_pct"]) == 2.0
+    assert attribution["benchmark_contribution_pct"] == contribution
+    assert attribution["alpha_pct"] == alpha
+    assert as_str(attribution["loader"]) == loader
+    statement = as_str(attribution["statement"])
+    if loader == "no_atribuible":
+        assert "no hay atribucion" in statement
+    else:
+        assert loader in statement
 
 
 @needs_store
@@ -1128,6 +1206,46 @@ def test_a14_tests_write_only_under_tmp_path(real_report: PipelineReport) -> Non
     assert "tmp_path" in source
     assert "PYTHONHASHSEED" in source
     assert "Store(REAL_DATA)" in source
+
+
+def test_a14_cli_in_process_resolves_dirs_and_exits_zero(tmp_path: Path) -> None:
+    """A14: `main` **en proceso** resuelve `--data-root`/`--reports-dir`, escribe y sale 0.
+
+    Los dos procesos frescos de A2/A3 no registran estas lineas para `coverage`, asi que el punto
+    de entrada se ejerce aqui: resolver el directorio de informes, delegar en `analyse` y publicar
+    la tabla. Se usa `_patched_fast` (el doble deterministico de #15) para no repetir el remuestreo
+    de la corrida de sesion; ninguna decision ni clave del payload cambia.
+    """
+    reports = tmp_path / "informes"
+    with _patched_fast():
+        code = main(
+            [
+                "--data-root",
+                str(REAL_DATA),
+                "--reports-dir",
+                str(reports),
+                "--as-of",
+                NOW.isoformat(),
+            ]
+        )
+    assert code == 0
+    assert (reports / f"{STEM}.json").is_file()
+    assert (reports / f"{STEM}.md").is_file()
+
+
+def test_a14_cli_default_reports_dir_and_typed_exit_codes(tmp_path: Path) -> None:
+    """A14: sin `--reports-dir` cuelga de `--data-root`; sin `--as-of` o con un almacen que
+    falla, sale 2 y **no** escribe nada.
+    """
+    data_root = tmp_path / "almacen"
+    # la salida tipada por `--as-of` ausente (no se escribe nada)
+    assert main(["--data-root", str(data_root)]) == 2
+    assert not (data_root / "derived" / "reports").exists()
+    # `--as-of` presente pero un almacen vacio: `analyse` falla, sale 2 y no escribe
+    empty = tmp_path / "vacio"
+    empty.mkdir()
+    assert main(["--data-root", str(empty), "--as-of", NOW.isoformat()]) == 2
+    assert not (empty / "derived" / "reports").exists()
 
 
 @needs_store
