@@ -32,10 +32,11 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Final, cast
 
+import polars as pl
 import pytest
 
 from cfdtrader.analysis import pipeline_report
-from cfdtrader.analysis.backtest_report import PHASE1_PLAN, SERIES_ID, load_history
+from cfdtrader.analysis.backtest_report import NOTIONAL_USD, PHASE1_PLAN, SERIES_ID, load_history
 from cfdtrader.analysis.pipeline_report import (
     ARM_COSTE_DECLARADO,
     ARM_ESCENARIO,
@@ -59,13 +60,22 @@ from cfdtrader.analysis.pipeline_report import (
     scenario_parameters,
 )
 from cfdtrader.backtest.baselines import BASELINE_IDS, NO_TRADE
-from cfdtrader.backtest.costs import declared_cost_model, declared_slippage_assumption
+from cfdtrader.backtest.costs import (
+    CostBreakdown,
+    Side,
+    cost_breakdown,
+    declared_cost_model,
+    declared_slippage_assumption,
+)
 from cfdtrader.backtest.engine import (
     STATUS_NO_TRADE,
     STATUS_SKIPPED,
     STATUS_TRADED,
     BacktestRun,
+    Direction,
+    FoldOutcome,
     SessionOutcome,
+    SessionView,
     canonical_text,
 )
 from cfdtrader.backtest.metrics import (
@@ -77,9 +87,15 @@ from cfdtrader.backtest.metrics import (
 from cfdtrader.data.store import Store
 from cfdtrader.decision.gate import (
     DECISION_THRESHOLD,
+    GATE_HASH_PREFIX,
     TARGET_MIN_COST_MULTIPLE,
+    TIER_A,
+    TIER_B,
+    TIER_C,
     GateOutput,
     GateParameters,
+    GateStatus,
+    Tier,
 )
 from cfdtrader.models.baseline import BASELINE_FEATURES, DESIGN_LAG_SESSIONS
 
@@ -1274,6 +1290,499 @@ def test_a14_errors_are_typed(real_report: PipelineReport) -> None:
         real_report.arm("inexistente")
     with pytest.raises(PipelineReportError):
         real_report.row("inexistente")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A14 · Ramas de las guardas tipadas (unidad directa, sin corrida completa)
+# ─────────────────────────────────────────────────────────────────────────────
+# Las ramas que faltan son las guardas defensivas y los rechazos tipados del modulo: la corrida
+# real solo recorre el camino feliz de cada una, asi que se ejercen **directamente** sobre el
+# helper, con la entrada invalida que debe producir el error declarado. Todo es determinista y
+# sin almacen: la corrida cara de la sesion no se repite. Los alias de abajo llevan el `ignore`
+# de `pyright` una sola vez por helper en vez de una vez por llamada.
+_as_utc = pipeline_report._as_utc  # pyright: ignore[reportPrivateUsage]
+_plain = pipeline_report._plain  # pyright: ignore[reportPrivateUsage]
+_session_instants = pipeline_report._session_instants  # pyright: ignore[reportPrivateUsage]
+_daily_by_session = pipeline_report._daily_by_session  # pyright: ignore[reportPrivateUsage]
+_expected_move_pct = pipeline_report._expected_move_pct  # pyright: ignore[reportPrivateUsage]
+_derived_seed = pipeline_report._derived_seed  # pyright: ignore[reportPrivateUsage]
+_declared_tier = pipeline_report._declared_tier  # pyright: ignore[reportPrivateUsage]
+_barrier_prices = pipeline_report._barrier_prices  # pyright: ignore[reportPrivateUsage]
+_declared_cost_decision = pipeline_report._declared_cost_decision  # pyright: ignore[reportPrivateUsage]
+_bundle = pipeline_report._bundle  # pyright: ignore[reportPrivateUsage]
+_deciders = pipeline_report._deciders  # pyright: ignore[reportPrivateUsage]
+_declared_return_pct = pipeline_report._declared_return_pct  # pyright: ignore[reportPrivateUsage]
+_series_of_run = pipeline_report._series_of_run  # pyright: ignore[reportPrivateUsage]
+_close_to_close_pct = pipeline_report._close_to_close_pct  # pyright: ignore[reportPrivateUsage]
+_beta = pipeline_report._beta  # pyright: ignore[reportPrivateUsage]
+_alpha = pipeline_report._alpha  # pyright: ignore[reportPrivateUsage]
+_metric_statistic = pipeline_report._metric_statistic  # pyright: ignore[reportPrivateUsage]
+_add_excess_metric = pipeline_report._add_excess_metric  # pyright: ignore[reportPrivateUsage]
+_counts_by = pipeline_report._counts_by  # pyright: ignore[reportPrivateUsage]
+_rule_11_payload = pipeline_report._rule_11_payload  # pyright: ignore[reportPrivateUsage]
+_check_payload = pipeline_report._check_payload  # pyright: ignore[reportPrivateUsage]
+
+#: Sesion de las piezas de prueba: el modulo nunca lee el reloj, tampoco aqui.
+SESSION: Final[date] = date(2026, 9, 23)
+NEXT_SESSION: Final[date] = date(2026, 9, 24)
+
+
+def declared_cost_breakdown() -> CostBreakdown:
+    """El `CostBreakdown` declarado de #8/#11 con el nocional del informe: la misma pieza que
+    `analyse`, para que las guardas bajo prueba vean las unidades reales.
+    """
+    return cost_breakdown(
+        model=declared_cost_model(),
+        slippage=declared_slippage_assumption(),
+        notional_usd=NOTIONAL_USD,
+        side=Side.LONG,
+        nights=0,
+    )
+
+
+def _gate_output(
+    *,
+    ev_declared_pct: Decimal | None = None,
+    target_pct: Decimal | None = None,
+    cost_pct: Decimal = Decimal("0.0042"),
+    probability: float = 0.5,
+    direction: Direction | None = None,
+    blockers: tuple[dict[str, str], ...] = (),
+) -> GateOutput:
+    """Una `GateOutput` minima pero **valida**: solo los campos que leen las guardas bajo prueba.
+
+    `gate_sha256` va con el prefijo y sin digest (no se publica en el informe por esta via), que
+    es tambien la politica de `detect-secrets` de #19/#20.
+    """
+    return GateOutput(
+        session=SESSION,
+        as_of=NOW,
+        today=SESSION,
+        status=GateStatus.RECOMMENDATION,
+        direction=direction,
+        tier=cast("Tier", TIER_C),
+        prob_up_calibrated=probability,
+        expected_move_pct=Decimal("2"),
+        expected_move_basis="garch_forecast",
+        cost_pct=cost_pct,
+        slippage_state="assumed",
+        ev_declared_pct=ev_declared_pct,
+        stop_pct=Decimal("1"),
+        target_pct=target_pct,
+        trades_today=0,
+        observation_sessions_remaining=0,
+        is_fomc_session=False,
+        is_half_session=False,
+        fomc_dates_count=0,
+        params={},
+        blockers=blockers,
+        gate_sha256=GATE_HASH_PREFIX,
+    )
+
+
+def _outcome(
+    *,
+    session: date,
+    status: str,
+    gross_pct: float | None = None,
+    cost: CostBreakdown | None = None,
+) -> SessionOutcome:
+    """Una `SessionOutcome` de *test* con lo minimo que leen las guardas de series."""
+    return SessionOutcome(
+        fold_index=0,
+        session=session,
+        session_index=0,
+        status=status,
+        reason=None,
+        skip_reason=STATUS_SKIPPED if status == STATUS_SKIPPED else None,
+        gap_px=None,
+        decision=None,
+        entry_session=None,
+        exit_session=None,
+        entry_px=None,
+        exit_px=None,
+        exit_reason=None,
+        exit_bar_index=None,
+        notional_usd=None,
+        gross_pct=gross_pct,
+        pnl_declared_pct=None,
+        pnl_net_pct=None,
+        pnl_net_reason=None,
+        cost=cost,
+    )
+
+
+def _run(
+    *,
+    folded: tuple[SessionOutcome, ...] = (),
+    traded: int = 0,
+    no_trade: int = 0,
+    skipped: int = 0,
+) -> BacktestRun:
+    """Una `BacktestRun` minima: los recuentos que leen las guardas y las sesiones que hay."""
+    folds = (
+        (
+            FoldOutcome(
+                index=0,
+                test_start=0,
+                test_stop=len(folded),
+                sessions=folded,
+                traded=traded,
+                no_trade=no_trade,
+                skipped=skipped,
+            ),
+        )
+        if folded
+        else ()
+    )
+    return BacktestRun(
+        folds=folds,
+        plan_sha256=f"{GATE_HASH_PREFIX}plan",
+        purge_total=0,
+        embargo_total=0,
+        embargo_in_train_total=0,
+        exclusions_are_no_op=True,
+        uncovered=(),
+        not_in_any_test=0,
+        n_sessions=len(folded),
+        traded=traded,
+        no_trade=no_trade,
+        skipped=skipped,
+        run_sha256=f"{GATE_HASH_PREFIX}run",
+        report={},
+    )
+
+
+def _arm(name: str, run: BacktestRun) -> pipeline_report.ArmRun:
+    """Un `ArmRun` minimo con los recuentos de esa corrida."""
+    return pipeline_report.ArmRun(
+        name=name,
+        run=run,
+        params=GateParameters(),
+        outputs={},
+        ledger=pipeline_report.ArmLedger(),
+    )
+
+
+def test_a14_guard_as_utc_normalises_naive_and_aware() -> None:
+    """A2: `_as_utc` (l.524-525) rellena la zona de un `datetime` naive y deja el consciente."""
+    naive = datetime(2026, 9, 23, 22, 0)
+    normalised = _as_utc(naive)
+    assert normalised == naive.replace(tzinfo=UTC)
+    assert normalised.tzinfo is UTC
+    aware = datetime(2026, 9, 23, 22, 0, tzinfo=UTC)
+    assert _as_utc(aware) is aware
+
+
+def test_a14_guard_plain_translates_only_json_types() -> None:
+    """A2: `_plain` (l.541-554) rechaza `nan`/`inf` y los tipos que el JSON no admite."""
+    assert _plain(True, where="x") is True
+    assert _plain(Decimal("1.500"), where="x") == "1.500"
+    assert (
+        _plain(datetime(2026, 9, 23, 22, 0, tzinfo=UTC), where="x") == "2026-09-23T22:00:00+00:00"
+    )
+    assert _plain({"a": [1, None]}, where="x") == {"a": [1, None]}
+    with pytest.raises(PipelineReportError, match="nan"):
+        _plain(math.nan, where="x")
+    with pytest.raises(PipelineReportError, match="nan"):
+        _plain(math.inf, where="x")
+    with pytest.raises(PipelineReportError, match="tipos JSON"):
+        _plain(object(), where="x")
+
+
+def test_a14_guard_warehouse_frames_skip_null_rows() -> None:
+    """A4/A11: las lecturas del diario (l.632-633, 643-644) saltan las filas sin sesion."""
+    daily = pl.DataFrame(
+        {
+            "session": [SESSION, None, NEXT_SESSION],
+            "as_of": [
+                None,
+                datetime(2026, 9, 23, 20, 0, tzinfo=UTC),
+                datetime(2026, 9, 24, 20, 0, tzinfo=UTC),
+            ],
+        }
+    )
+    assert _session_instants(daily) == {NEXT_SESSION: datetime(2026, 9, 24, 20, 0, tzinfo=UTC)}
+    assert _daily_by_session(pl.DataFrame({"session": [SESSION, None]})) == {
+        SESSION: {"session": SESSION}
+    }
+
+
+def test_a14_guard_expected_move_needs_the_garch_column() -> None:
+    """A11: `_expected_move_pct` (l.656-669) exige la columna y salta los valores sin sentido."""
+    with pytest.raises(PipelineReportError, match="garch_forecast"):
+        _expected_move_pct(pl.DataFrame({"session": [SESSION]}))
+    matrix = pl.DataFrame(
+        {
+            "session": [SESSION, NEXT_SESSION, date(2026, 9, 25), date(2026, 9, 28)],
+            "garch_forecast": [0.25, None, math.nan, -1.0],
+        }
+    )
+    assert _expected_move_pct(matrix) == {SESSION: Decimal("50.0")}
+
+
+def test_a14_guard_derived_seed_invariant_and_dead_branch() -> None:
+    """A8: `_derived_seed` (l.571-587) valida el offset y **siempre** cae en `[0, 2**32)`.
+
+    La guarda `not 0 <= seed <= 2**32 - 1` (l.582-583) es **inalcanzable**: `seed` es el resto
+    modulo `2**32` de un entero no negativo y el unico camino que podria salirse (offset
+    negativo) ya se rechaza antes en la l.577. Se deja sin cubrir **a proposito** y se documenta
+    aqui: la comprobacion no es codigo muerto (defiende el contrato de `RandomState`), pero
+    ninguna entrada puede activarla, asi que no se le pone `pragma: no cover` disfrazado.
+    """
+    for offset in (0, 1, 42, 2**32 - 2, 2**53):
+        seed = _derived_seed(offset=offset)
+        assert 0 <= seed <= 2**32 - 1
+    assert _derived_seed(offset=0) == DEFAULT_BOOTSTRAP_SEED
+    assert _derived_seed(offset=1) == DEFAULT_BOOTSTRAP_SEED + 1
+    with pytest.raises(PipelineReportError, match="desplazamiento"):
+        _derived_seed(offset=-1)
+
+
+def test_a14_guard_barrier_prices_need_entry_and_target() -> None:
+    """A6/#64: `_barrier_prices` (l.795-801) no inventa barreras sin `open` ni geometria rara."""
+    none_left = _barrier_prices(
+        direction=Direction.LONG,
+        entry_px=None,
+        stop_pct=Decimal("1"),
+        target_pct=Decimal("2"),
+    )
+    assert none_left == (None, None)
+    none_target = _barrier_prices(
+        direction=Direction.LONG,
+        entry_px=100.0,
+        stop_pct=Decimal("1"),
+        target_pct=None,
+    )
+    assert none_target == (None, None)
+    stop_px, target_px = _barrier_prices(
+        direction=Direction.LONG,
+        entry_px=100.0,
+        stop_pct=Decimal("1"),
+        target_pct=Decimal("2"),
+    )
+    assert (stop_px, target_px) == pytest.approx((99.0, 102.0))
+    assert stop_px is not None and target_px is not None
+    assert stop_px < 100.0 < target_px
+    stop_px, target_px = _barrier_prices(
+        direction=Direction.SHORT,
+        entry_px=100.0,
+        stop_pct=Decimal("1"),
+        target_pct=Decimal("2"),
+    )
+    assert (stop_px, target_px) == pytest.approx((101.0, 98.0))
+    assert stop_px is not None and target_px is not None
+    assert target_px < 100.0 < stop_px
+
+
+def test_a14_guard_declared_tier_derives_c_b_and_a() -> None:
+    """A6: `_declared_tier` (l.763-772) re-deriva el tier sobre el EV declarado, no el neto."""
+    params = scenario_parameters(cost_pct=Decimal("0.0042"))
+    assert _declared_tier(_gate_output(ev_declared_pct=None), params) == TIER_C
+    assert _declared_tier(_gate_output(ev_declared_pct=Decimal("0.005")), params) == TIER_C
+    assert _declared_tier(_gate_output(ev_declared_pct=Decimal("0.01")), params) == TIER_B
+    tier_a = _declared_tier(
+        _gate_output(
+            ev_declared_pct=Decimal("0.02"),
+            probability=0.60,
+            direction=Direction.LONG,
+        ),
+        params,
+    )
+    assert tier_a == TIER_A
+
+
+def test_a14_guard_declared_cost_decision_rejects_below_threshold() -> None:
+    """A6: la regla del brazo declarado (l.832-845) rechaza por EV y objetivo, sin inventar 0."""
+    params = scenario_parameters(cost_pct=Decimal("0.0042"))
+    ledger = pipeline_report.ArmLedger()
+    decision = _declared_cost_decision(
+        output=_gate_output(ev_declared_pct=None),
+        params=params,
+        capital_usd=NOTIONAL_USD,
+        entry_px=100.0,
+        ledger=ledger,
+    )
+    assert decision.direction is Direction.NOTHING
+    assert "ev_declared_pct=null" in decision.reason
+    assert ledger.rejections == {"ev_declared_not_above_threshold": 1}
+    decision = _declared_cost_decision(
+        output=_gate_output(ev_declared_pct=Decimal("0.0084")),
+        params=params,
+        capital_usd=NOTIONAL_USD,
+        entry_px=100.0,
+        ledger=ledger,
+    )
+    assert "ev_declared_pct=0.0084 <= ev_threshold_pct=0.0084" in decision.reason
+    assert ledger.rejections == {"ev_declared_not_above_threshold": 2}
+    target_ledger = pipeline_report.ArmLedger()
+    decision = _declared_cost_decision(
+        output=_gate_output(ev_declared_pct=Decimal("0.01"), target_pct=None),
+        params=params,
+        capital_usd=NOTIONAL_USD,
+        entry_px=100.0,
+        ledger=target_ledger,
+    )
+    assert "target_pct=null" in decision.reason
+    assert target_ledger.rejections == {"target_below_cost_multiple": 1}
+    decision = _declared_cost_decision(
+        output=_gate_output(ev_declared_pct=Decimal("0.01"), target_pct=Decimal("0.001")),
+        params=params,
+        capital_usd=NOTIONAL_USD,
+        entry_px=100.0,
+        ledger=target_ledger,
+    )
+    assert "target_pct=0.001 < 0.0084" in decision.reason
+    assert target_ledger.rejections == {"target_below_cost_multiple": 2}
+    trade_ledger = pipeline_report.ArmLedger()
+    decision = _declared_cost_decision(
+        output=_gate_output(
+            ev_declared_pct=Decimal("0.02"),
+            target_pct=Decimal("0.02"),
+            probability=0.60,
+            direction=Direction.LONG,
+        ),
+        params=params,
+        capital_usd=NOTIONAL_USD,
+        entry_px=100.0,
+        ledger=trade_ledger,
+    )
+    assert decision.direction is Direction.LONG
+    assert decision.notional_usd == NOTIONAL_USD
+    assert (decision.stop_px, decision.target_px) == pytest.approx((99.0, 100.02))
+    assert trade_ledger.traded == 1
+
+
+def test_a14_guard_bundle_and_missing_move_decider() -> None:
+    """A4/A11: `_bundle` (l.981-982) exige la carga declarada; sin ella el decididor la declara.
+
+    La sesion que viaja con `context = None` (sin `garch_forecast`, l.1012-1013) **no** se
+    rompe: se declara como no operada y se cuenta en `without_expected_move`, nunca se inventa un
+    movimiento por defecto.
+    """
+    view = SessionView(session=SESSION, open_px=100.0, gap_px=None, context=None)
+    with pytest.raises(PipelineReportError, match="SessionBundle"):
+        _bundle(view)
+    bundle = pipeline_report.SessionBundle(
+        probability=0.5, oficial=_gate_output(), escenario=_gate_output()
+    )
+    loaded = SessionView(session=SESSION, open_px=100.0, gap_px=None, context=bundle)
+    assert _bundle(loaded) is bundle
+    ledger = pipeline_report.ArmLedger()
+    decide = _deciders(
+        name=ARM_OFICIAL,
+        params=GateParameters(),
+        ledger=ledger,
+        capital_usd=NOTIONAL_USD,
+        n_folds=1,
+    )[0]
+    decision = decide(view)
+    assert decision.direction is Direction.NOTHING
+    assert "arm_missing_expected_move" in decision.reason
+    assert "garch_forecast" in decision.reason
+    assert ledger.without_expected_move == 1
+
+
+def test_a14_guard_declared_return_and_series_skip() -> None:
+    """A10: `_declared_return_pct` (l.1118-1119) exige operacion y coste; la serie (l.1134-1135)
+    salta las sesiones `skipped` sin meterlas como cero.
+    """
+    cost = declared_cost_breakdown()
+    with pytest.raises(PipelineReportError, match="retorno declarado"):
+        _declared_return_pct(_outcome(session=SESSION, status=STATUS_TRADED))
+    traded = _outcome(session=SESSION, status=STATUS_TRADED, gross_pct=0.01, cost=cost)
+    skipped = _outcome(session=NEXT_SESSION, status=STATUS_SKIPPED)
+    expected = 100.0 * 0.01 - float(cost.c_declared_pct)
+    assert _declared_return_pct(traded) == pytest.approx(expected)
+    run = _run(folded=(traded, skipped), traded=1, skipped=1)
+    assert _series_of_run(run) == (pytest.approx(expected),)
+
+
+def test_a14_guard_close_to_close_needs_the_daily_row() -> None:
+    """A7: `_close_to_close_pct` (l.1153-1154) exige cierre y cierre previo en el diario."""
+    with pytest.raises(PipelineReportError, match="cierre"):
+        _close_to_close_pct(SESSION, {})
+    with pytest.raises(PipelineReportError, match="cierre"):
+        _close_to_close_pct(SESSION, {SESSION: {"close": 101.0, "prev_close": None}})
+    assert _close_to_close_pct(SESSION, {SESSION: {"close": 101.0, "prev_close": 100.0}}) == (
+        pytest.approx(1.0)
+    )
+
+
+def test_a14_guard_beta_alpha_of_a_flat_benchmark() -> None:
+    """A13: con varianza 0 del benchmark no hay beta ni alfa: `nan`, nunca una cifra inventada."""
+    flat = (0.5, 0.5, 0.5)
+    assert math.isnan(_beta((0.01, -0.02, 0.03), flat))
+    assert math.isnan(_beta((), ()))
+    assert math.isnan(_alpha((0.01, -0.02, 0.03), flat))
+    assert _beta((0.01, 0.02), (0.0, 0.02)) == pytest.approx(0.5)
+    assert _alpha((0.01, 0.02), (0.0, 0.02)) == pytest.approx(0.01)
+
+
+def test_a14_guard_metric_statistic_has_every_branch() -> None:
+    """A8/A13: `_metric_statistic` (l.1266-1274) cubre `profit_factor`, `alpha_pct` y la caida."""
+    benchmark = (0.0, 0.02)
+    sample = (0.01, -0.02)
+    assert _metric_statistic("mean_return_pct", benchmark)(sample) == pytest.approx(-0.005)
+    assert _metric_statistic("profit_factor", benchmark)((0.02,)) == pytest.approx(0.0)
+    assert _metric_statistic("alpha_pct", benchmark)(sample) == pytest.approx(
+        _alpha(sample, benchmark)
+    )
+    assert _metric_statistic("no_existe", benchmark)(sample) == pytest.approx(-0.005 - 0.01)
+
+
+def test_a14_guard_excess_metric_without_a_mean() -> None:
+    """A13: `_add_excess_metric` (l.1371-1381) publica la metrica sin valor si no hay sesiones."""
+    blocks: dict[str, object] = {}
+    _add_excess_metric(
+        blocks,
+        mean_block={"estimate": None},
+        benchmark=(0.0, 0.02),
+        n=0,
+        basis=BASIS_DECLARED_COST,
+        seed=DEFAULT_BOOTSTRAP_SEED,
+    )
+    excess = as_map(blocks["excess_return_pct"])
+    assert excess["estimate"] is None
+    assert excess["lower"] is None
+    assert excess["upper"] is None
+    assert "ninguna sesion" in as_str(excess["reason"])
+
+
+def test_a14_guard_counts_by_orders_and_counts() -> None:
+    """A3: `_counts_by` (l.1510-1516) ordena las claves para que el hash no dependa de un `dict`."""
+    assert _counts_by(()) == {}
+    assert _counts_by(("b", "a", "b")) == {"a": 1, "b": 2}
+
+
+def test_a14_guard_rule_11_band_verdicts() -> None:
+    """A12: la banda de la regla 11 (l.1839-1844) distingue por encima, dentro y por debajo."""
+    cache: dict[tuple[str, tuple[float, ...]], dict[str, object]] = {}
+    arms = (
+        _arm(ARM_OFICIAL, _run(traded=1, no_trade=1)),
+        _arm(ARM_ESCENARIO, _run(traded=1, no_trade=3)),
+        _arm(ARM_COSTE_DECLARADO, _run(traded=0, no_trade=2)),
+    )
+    payload = _rule_11_payload(arms, cache=cache)
+    published = as_map(at(payload, "arms"))
+    verdicts = {name: as_str(as_map(published[name])["verdict"]) for name in ARM_NAMES}
+    assert verdicts == {
+        ARM_OFICIAL: "above",
+        ARM_ESCENARIO: "inside",
+        ARM_COSTE_DECLARADO: "below",
+    }
+    assert at(payload, "band") == [RULE_11_BAND[0], RULE_11_BAND[1]]
+    assert as_float(as_map(published[ARM_OFICIAL])["share"]) == pytest.approx(0.5)
+    assert as_map(published[ARM_ESCENARIO])["share_interval"] is None
+
+
+def test_a14_guard_check_payload_needs_a_traded_sample() -> None:
+    """A10: `_check_payload` (l.1889-1890) exige una sesion operada en `always_long`."""
+    with pytest.raises(PipelineReportError, match="always_long"):
+        _check_payload(
+            runs={"always_long": _run(traded=0, no_trade=2)},
+            cost=declared_cost_breakdown(),
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
