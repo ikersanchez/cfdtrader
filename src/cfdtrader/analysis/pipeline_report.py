@@ -1266,7 +1266,7 @@ def _metric_statistic(name: str, benchmark: Sequence[float]) -> Callable[[Sequen
     if name == "profit_factor":
         return lambda sample: profit_factor(sample) or 0.0
     if name == "benchmark_return_pct":
-        return lambda sample: (math.prod(1.0 + value for value in sample) - 1.0) * 100.0
+        return lambda sample: math.prod(1.0 + value for value in sample) - 1.0
     if name == "beta":
         return lambda sample: _beta(sample, benchmark)
     if name == "alpha_pct":
@@ -1808,7 +1808,7 @@ def _null_arms_payload(
         "decision_reason": reasons,
         "measured_on": "run_sha256 del informe canonico del motor (el `reason` viaja dentro)",
         "why": (
-            "los hashes **no** coinciden con el de `no_trade` y el motivo se mide, no se afirma: "
+            "los tres hashes no coinciden con el de `no_trade` y el motivo se mide, no se afirma: "
             "el `reason` de la decision viaja en el informe del motor y los tres son distintos "
             f"(`no_trade`: {reasons[NO_TRADE]!r}; `{ARM_OFICIAL}`: {reasons[ARM_OFICIAL]!r}; "
             f"`{ARM_ESCENARIO}`: {reasons[ARM_ESCENARIO]!r})"
