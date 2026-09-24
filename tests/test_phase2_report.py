@@ -55,11 +55,13 @@ MODEL_ARTIFACT: Final[Path] = REAL_REPORTS / "model_comparison_2026-09-22.json"
 #: Instante declarado de las corridas que fijan el hash dorado (A4).
 NOW: Final[datetime] = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
 
-#: `report_sha256` dorado de la corrida real, **con** prefijo (A4). Un sha256 desnudo lo
-#: bloquea `detect-secrets`; el prefijo viaja dentro del valor.
-GOLDEN_REPORT_SHA256: Final[str] = (
-    "sha256:abb27361ea96e670a99663d00df2f0b055066e97e94fd392a86614b8eb875f5c"
-)
+# #96: aqui vivia `GOLDEN_REPORT_SHA256`, el `report_sha256` dorado de la corrida real. Ese
+# digest es el del payload de **este** informe, y dentro viaja el `sha256` del artefacto de #28
+# (que #92 regenero al publicar `hit_rate_per_trade`), asi que **cualquier** tarea posterior lo
+# invalida: un dorado asi convierte un trabajo ajeno en un fallo de #29. No se vuelve a cablear
+# ningun digest regenerable. Lo que A4 vigila —prefijo `sha256:` + 64 hex, autoconsistencia del
+# payload y determinismo entre procesos— se comprueba sin literal. Los unicos dorados estables
+# de la fase son el `sha256` del bloque §11.6 de `plan.md` y las nueve filas, que siguen abajo.
 
 #: `sha256` dorado del bloque de la tabla de §11.6 (A6): si `plan.md` cambia, esto falla.
 GOLDEN_PLAN_SHA256: Final[str] = "3a42a85708eb78f4ca31dda740cdf5c6c6b6ece2bf350f59b5a922fadc6987f1"
@@ -395,16 +397,28 @@ def test_a3_ast_forbids_clock_network_and_foreign_writes() -> None:
 # A4 — `report_sha256` canonico de #13, con prefijo, identico en procesos frescos
 # ─────────────────────────────────────────────────────────────────────────────
 def test_a4_hash_format_and_golden(real_report: phase2_report.Phase2Report) -> None:
-    assert real_report.report_sha256.startswith("sha256:")
-    assert real_report.report_sha256 == GOLDEN_REPORT_SHA256
+    """A4: el digest lleva el prefijo, cuadra con el payload y con el JSON publicado.
+
+    #96: aqui se **fijaba** el literal `GOLDEN_REPORT_SHA256`. Ese digest es el del payload de
+    este informe, y dentro viaja el `sha256` del artefacto de #28 (regenerable por cualquier
+    tarea posterior: #92 lo regenero al publicar `hit_rate_per_trade`), asi que no puede ser un
+    dorado. La corrida real sigue teniendo que publicar un digest con el formato declarado
+    (prefijo `sha256:` + 64 hex), autoconsistente con su payload y sellado en el JSON; el
+    determinismo entre procesos lo vigila `test_a4_fresh_processes_with_hashseeds`.
+    """
+    digest = real_report.report_sha256
+    assert digest.startswith("sha256:")
+    body = digest.removeprefix("sha256:")
+    assert len(body) == 64
+    assert all(character in "0123456789abcdef" for character in body)
     without_hash = dict(real_report.payload)
     recomputed = (
         "sha256:" + hashlib.sha256(canonical_text(without_hash).encode("utf-8")).hexdigest()
     )
-    assert recomputed == real_report.report_sha256
+    assert recomputed == digest
     # El payload publicado sella el hash **con** prefijo.
     published = json.loads(real_report.json_text())
-    assert published["report_sha256"] == GOLDEN_REPORT_SHA256
+    assert published["report_sha256"] == digest
 
 
 def test_a4_fresh_processes_with_hashseeds(tmp_path: Path, reports: Path) -> None:

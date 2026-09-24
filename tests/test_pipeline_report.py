@@ -557,15 +557,20 @@ def test_a3_identical_across_fresh_processes(
 
 @needs_store
 def test_a3_hash_is_fixed_with_prefix(real_report: PipelineReport) -> None:
-    """A3: el test **fija** el digest, con su prefijo (un sha256 desnudo lo bloquea el hook).
+    """A3: el digest es funcion del payload (no una constante cableada), con su prefijo.
 
-    #80 retiro el bloque `check` del payload, asi que el digest de la corrida real cambio: se
-    vuelve a fijar con el texto ya sin la narrativa del defecto. #92 anade la onceava metrica
-    (`hit_rate_per_trade`) al payload, asi que el digest se vuelve a fijar con ella dentro.
+    #96: aqui se **fijaba** el literal `report_sha256` de la corrida real. Ese digest depende
+    de artefactos regenerables (#92 anadio `hit_rate_per_trade` al payload y lo cambio), asi
+    que cualquier tarea posterior lo invalida: un dorado asi convierte un trabajo ajeno en un
+    fallo de #28. El formato (`sha256:` + 64 hex), la autoconsistencia con el payload y el
+    determinismo entre procesos ya los vigilan `test_a3_hash_format_and_self_consistency` y
+    `test_a3_identical_across_fresh_processes`; aqui queda la sensibilidad: cambiar un campo
+    del payload cambia el digest.
     """
-    assert real_report.report_sha256 == (
-        "sha256:477e144eb65a93750a3ea7469f1b2494b1a040dff6494ace2ce70185e54b3a21"
-    )
+    mutated = dict(real_report.payload)
+    mutated["generated_at"] = "1999-01-01T00:00:00+00:00"
+    recomputed = "sha256:" + hashlib.sha256(canonical_text(mutated).encode("utf-8")).hexdigest()
+    assert recomputed != real_report.report_sha256
 
 
 # ─────────────────────────────────────────────────────────────────────────────
