@@ -111,7 +111,7 @@ STEM: Final[str] = f"{REPORT_PREFIX}_{NOW.date().isoformat()}"
 #: Commit de partida de la entrega (el arbol venia limpio en el): A15 compara contra el.
 BASE_COMMIT: Final[str] = "6aa582d"
 
-#: Los dos ficheros que la entrega **solo** puede tocar, y los seis congelados (A15).
+#: Los dos ficheros que la entrega debe traer en el diff, y los seis congelados (A15).
 WRITTEN: Final[frozenset[str]] = frozenset(
     {
         "src/cfdtrader/analysis/pipeline_report.py",
@@ -1802,10 +1802,13 @@ def _git(*arguments: str) -> str:
 
 
 def test_a15_frozen_modules_are_untouched() -> None:
-    """A15: `git diff <base>..HEAD` solo trae los dos ficheros de la entrega."""
+    """A15: la entrega toca sus dos ficheros y **ningun** modulo congelado."""
     assert _git("status", "--porcelain").strip() == ""
     changed = set(_git("diff", "--name-only", f"{BASE_COMMIT}..HEAD").splitlines())
-    assert changed == set(WRITTEN)
+    # #89: la igualdad contra `BASE_COMMIT` solo valia mientras `HEAD` fuese la punta de #28;
+    # cualquier commit posterior anade ficheros al diff. La intencion de A15 es subconjunto
+    # (los dos ficheros de la entrega estan) y disyuncion (ningun congelado esta), como en #26.
+    assert set(WRITTEN) <= changed
     assert changed.isdisjoint(FROZEN)
 
 
