@@ -92,8 +92,9 @@ GOLDEN_KILL_ROWS: Final[tuple[tuple[str, str, str], ...]] = (
     ),
 )
 
-#: Ficheros congelados que A20 prohibe tocar. `pyproject.toml`/`uv.lock` no entran: sobre
-#: esta copia de trabajo traen un cambio previo a la tarea (`pytest-xdist`), ajeno a #29.
+#: Ficheros congelados que A20 prohibe tocar. `pyproject.toml`/`uv.lock` no entran: su
+#: cambio (`pytest-xdist` en el grupo `dev`) esta **autorizado por el propietario** y se
+#: declara como **excepcion explicita a A21** en el comentario de la entrega de #29.
 FORBIDDEN_PATHS: Final[frozenset[str]] = frozenset(
     {
         "src/cfdtrader/analysis/pipeline_report.py",
