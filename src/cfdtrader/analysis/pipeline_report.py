@@ -250,7 +250,16 @@ UNDECIDED_ISSUES: Final[tuple[str, ...]] = ("#59", "#60")
 #: Metrics publicadas **sin** intervalo bootstrap, con su motivo declarado en el bloque (A8).
 NO_INTERVAL_METRICS: Final[tuple[str, ...]] = ("profit_factor",)
 
-#: Las diez metricas del informe, en orden estable (y el orden del que salen las semillas).
+#: Las dos denominaciones de una tasa de acierto (#92). La `hit_rate` de #28 se estima sobre la
+#: **serie de riesgo**: una sesion `no_trade` entra como 0 exacto y diluye la tasa, luego es una
+#: tasa **por sesion**. La `p_win` de plan.md §11.6 es **por operacion**: la tasa comparable con
+#: ella es `hit_rate_per_trade`. Las dos se publican, cada una con su denominacion declarada.
+DENOMINATOR_SESSION: Final[str] = "session"
+DENOMINATOR_TRADE: Final[str] = "trade"
+
+#: Las once metricas del informe, en orden estable (y el orden del que salen las semillas).
+#: `hit_rate_per_trade` va la **ultima** (posicion 11) para que las diez semillas historicas
+#: (43-52) no se muevan: la suya es `_derived_seed(offset=11)` = 53 (#92).
 METRIC_NAMES: Final[tuple[str, ...]] = (
     "mean_return_pct",
     "hit_rate",
@@ -262,6 +271,7 @@ METRIC_NAMES: Final[tuple[str, ...]] = (
     "excess_return_pct",
     "beta",
     "alpha_pct",
+    "hit_rate_per_trade",
 )
 
 #: Cuantizacion del nocional: el mismo quantum declarado del gate (#27), que no es publico.
@@ -424,8 +434,10 @@ class TableRow:
 
     ``series_pct`` es la serie declarada de la fila en **puntos porcentuales** (una entrada por
     sesion de *test*, en orden), derivada aqui en unidades coherentes (A10) o tomada del diario
-    para los listones B y C. Las metricas se calculan sobre esa misma serie dividida por 100 (la
-    convencion decimal de #15) y cada una viaja con su intervalo bootstrap (A8).
+    para los listones B y C. ``traded_series_pct`` es la misma derivacion pero **solo** con las
+    sesiones operadas: es la serie de la tasa de acierto **por operacion** (#92). Las metricas se
+    calculan sobre esa misma serie dividida por 100 (la convencion decimal de #15) y cada una
+    viaja con su intervalo bootstrap (A8).
     """
 
     row: str
@@ -433,6 +445,7 @@ class TableRow:
     is_invertible: bool
     provenance: str
     series_pct: tuple[float, ...]
+    traded_series_pct: tuple[float, ...]
     n_test: int
     traded: int
     no_trade: int
@@ -1128,6 +1141,21 @@ def _series_of_run(run: BacktestRun) -> tuple[float, ...]:
     return tuple(values)
 
 
+def _traded_series_pct(run: BacktestRun) -> tuple[float, ...]:
+    """La serie declarada de **solo** las sesiones operadas, una entrada por operacion (#92).
+
+    Es la serie de la tasa de acierto **por operacion**: los `no_trade` no entran (no hubo
+    operacion que contar) y las sesiones `skipped` tampoco. Se re-deriva con
+    `_declared_return_pct`, como la serie de riesgo, y **no** se lee el P&L declarado del motor
+    (A10).
+    """
+    return tuple(
+        _declared_return_pct(outcome)
+        for outcome in _sessions_of_run(run)
+        if outcome.status == STATUS_TRADED
+    )
+
+
 def _exit_counts(run: BacktestRun) -> dict[str, int]:
     """Recuento por motivo de salida, en orden estable (los ceros medidos viajan)."""
     raw: dict[str, int] = {}
@@ -1246,7 +1274,7 @@ def _metric_statistic(name: str, benchmark: Sequence[float]) -> Callable[[Sequen
     """
     if name == "mean_return_pct":
         return _mean
-    if name == "hit_rate":
+    if name in ("hit_rate", "hit_rate_per_trade"):
         return lambda sample: sum(1 for value in sample if value > 0.0) / max(len(sample), 1)
     if name == "sharpe":
         return sharpe_ratio
@@ -1268,11 +1296,12 @@ def _metric_statistic(name: str, benchmark: Sequence[float]) -> Callable[[Sequen
 def _row_metrics(
     *,
     series_pct: Sequence[float],
+    traded_series_pct: Sequence[float],
     benchmark_pct: Sequence[float],
     basis: str,
     cache: dict[tuple[str, tuple[float, ...]], dict[str, object]],
 ) -> dict[str, object]:
-    """Las diez metricas declaradas de una fila, cada una con su intervalo bootstrap (A8).
+    """Las once metricas declaradas de una fila, cada una con su intervalo bootstrap (A8).
 
     El remuestreo es el helper exportado de #15. Para ``beta``, ``alpha_pct`` y
     ``excess_return_pct`` la serie remuestreada es la de la estrategia y el benchmark queda **fijo**
@@ -1280,10 +1309,19 @@ def _row_metrics(
     helper solo admite una serie (se declara en ``bootstrap_note``). ``excess_return_pct`` no gasta
     otro remuestreo: su intervalo es el de la media desplazado por la media del benchmark, que es
     una constante.
+
+    ``hit_rate_per_trade`` (#92) es la excepcion: su serie es ``traded_series_pct`` (solo las
+    sesiones operadas) y no la serie de riesgo, porque su denominacion es **por operacion**. Las
+    dos tasas se publican con su ``denominator``, su ``denominator_note``, su ``n_wins`` y su
+    ``wins_fraction``: ``estimate == n_wins / n``.
     """
     values = _decimal_series(series_pct)
+    traded_values = _decimal_series(traded_series_pct)
     benchmark = _decimal_series(benchmark_pct)
     n = len(values)
+    n_trades = len(traded_values)
+    n_wins_session = sum(1 for value in values if value > 0.0)
+    n_wins_trade = sum(1 for value in traded_values if value > 0.0)
     seeds = _seed_by_metric()
     scales: dict[str, float] = {
         "mean_return_pct": 100.0,
@@ -1296,6 +1334,7 @@ def _row_metrics(
         "excess_return_pct": 100.0,
         "beta": 1.0,
         "alpha_pct": 100.0,
+        "hit_rate_per_trade": 1.0,
     }
     blocks: dict[str, object] = {}
     for name in METRIC_NAMES:
@@ -1316,6 +1355,32 @@ def _row_metrics(
             continue
         if name == "excess_return_pct":
             continue
+        if name == "hit_rate_per_trade":
+            if not traded_values:
+                blocks[name] = _metric_block(
+                    estimate=None,
+                    lower=None,
+                    upper=None,
+                    basis=basis,
+                    n=0,
+                    seed=seeds[name],
+                    reason=(
+                        "ninguna sesion opero: la tasa de acierto por operacion no existe y se "
+                        "publica `null`, nunca `0`; sin operaciones no hay intervalo que estimar"
+                    ),
+                )
+            else:
+                key = (name, tuple(traded_values))
+                if key not in cache:
+                    cache[key] = _measure(
+                        traded_values,
+                        _metric_statistic(name, benchmark),
+                        scale=scales[name],
+                        basis=basis,
+                        seed=seeds[name],
+                    )
+                blocks[name] = dict(cache[key])
+            continue
         source = benchmark if name == "benchmark_return_pct" else values
         key = (name, tuple(source))
         if key not in cache:
@@ -1335,6 +1400,31 @@ def _row_metrics(
         basis=basis,
         seed=seeds["excess_return_pct"],
     )
+    blocks["hit_rate"] = _annotate_rate(
+        cast("dict[str, object]", blocks["hit_rate"]),
+        denominator=DENOMINATOR_SESSION,
+        note=(
+            "denominacion **por sesion**: entran todas las sesiones de *test* que no estan "
+            "`skipped`; una sesion `no_trade` entra como 0 exacto (no se opero, el retorno es "
+            "0 %) y diluye la tasa. Las sesiones `skipped` **no** entran. La `p_win` de "
+            "plan.md §11.6 es por operacion: la tasa comparable con ella es `hit_rate_per_trade` "
+            "(#92)"
+        ),
+        n_wins=n_wins_session,
+        n_trades=n_trades,
+    )
+    blocks["hit_rate_per_trade"] = _annotate_rate(
+        cast("dict[str, object]", blocks["hit_rate_per_trade"]),
+        denominator=DENOMINATOR_TRADE,
+        note=(
+            "denominacion **por operacion**: entran solo las sesiones `traded`, una por operacion "
+            "(los `no_trade` entran como 0 exacto en la tasa por sesion de al lado, pero aqui no "
+            "cuentan; las `skipped` no entran en ninguna de las dos). Es la `p_win` de plan.md "
+            "§11.6; la `hit_rate` por sesion diluye con los `no_trade` y no es comparable (#92)"
+        ),
+        n_wins=n_wins_trade,
+        n_trades=n_trades,
+    )
     blocks["metric_names"] = list(METRIC_NAMES)
     blocks["bootstrap_note"] = (
         "cada intervalo usa `bootstrap_confidence_interval` (#15) con "
@@ -1346,6 +1436,30 @@ def _row_metrics(
         "plan"
     )
     return blocks
+
+
+def _annotate_rate(
+    block: dict[str, object],
+    *,
+    denominator: str,
+    note: str,
+    n_wins: int,
+    n_trades: int,
+) -> dict[str, object]:
+    """Declara la denominacion de una tasa de acierto y su recuento de aciertos (#92).
+
+    ``n`` es el tamano de la serie sobre la que se estima (sesiones de la serie de riesgo o
+    operaciones) y ``wins_fraction`` su fraccion exacta, de modo que ``estimate == n_wins / n``.
+    ``n_trades`` viaja en las dos tasas para poder comprobar la denominacion sin reconstruir la
+    corrida.
+    """
+    n = cast("int", block["n"])
+    block["denominator"] = denominator
+    block["denominator_note"] = note
+    block["n_wins"] = n_wins
+    block["n_trades"] = n_trades
+    block["wins_fraction"] = _fraction_text(n_wins, n)
+    return block
 
 
 def _add_excess_metric(
@@ -1412,6 +1526,7 @@ def _table_rows(
                     "declarado; retorno derivado aquí con `100 x gross_pct - c_declared_pct` (A10)"
                 ),
                 series_pct=_series_of_run(run),
+                traded_series_pct=_traded_series_pct(run),
                 n_test=run.traded + run.no_trade + run.skipped,
                 traded=run.traded,
                 no_trade=run.no_trade,
@@ -1439,6 +1554,7 @@ def _table_rows(
                 "y mismo `run_sha256`; el baseline obligatorio de plan.md §11.2"
             ),
             series_pct=always_long.series_pct,
+            traded_series_pct=always_long.traded_series_pct,
             n_test=always_long.n_test,
             traded=always_long.traded,
             no_trade=always_long.no_trade,
@@ -1461,6 +1577,7 @@ def _table_rows(
                 "por el motor, es #70) y el instante de corte de la financiación es #87"
             ),
             series_pct=tuple(value - carry_pct for value in close_to_close),
+            traded_series_pct=tuple(value - carry_pct for value in close_to_close),
             n_test=len(sessions),
             traded=len(sessions),
             no_trade=0,
@@ -1482,6 +1599,7 @@ def _table_rows(
                 "seis baselines"
             ),
             series_pct=close_to_close,
+            traded_series_pct=close_to_close,
             n_test=len(sessions),
             traded=len(sessions),
             no_trade=0,
@@ -2109,6 +2227,9 @@ def render_markdown(report: PipelineReport) -> str:
     universe = cast("dict[str, object]", payload["universe"])
     comparison = cast("dict[str, object]", payload["arm_comparison"])
     attribution = cast("dict[str, object]", comparison["attribution"])
+    declared_metrics = cast("dict[str, object]", arms[ARM_COSTE_DECLARADO]["metrics"])
+    session_rate = cast("dict[str, object]", declared_metrics["hit_rate"])
+    trade_rate = cast("dict[str, object]", declared_metrics["hit_rate_per_trade"])
 
     lines: list[str] = [
         f"# Pipeline completo sobre el motor *walk-forward* - `{universe['series_id']}`",
@@ -2169,6 +2290,13 @@ def render_markdown(report: PipelineReport) -> str:
             f"{null_arms['equals_no_trade']}. {null_arms['why']}",
             f"- Recuento por `code` de bloqueo del brazo de escenario: "
             f"{null_arms['blocker_code_counts']}.",
+            "",
+            f"- Tasa de acierto de `{ARM_COSTE_DECLARADO}`, con su denominacion declarada: "
+            f"`hit_rate` **por sesion** (`{session_rate['wins_fraction']}`, n = "
+            f"{session_rate['n']}) frente a `hit_rate_per_trade` **por operacion** "
+            f"(`{trade_rate['wins_fraction']}`, n = {trade_rate['n']}): los `no_trade` "
+            "diluyen la primera y no entran en la segunda, y las sesiones `skipped` no entran "
+            "en ninguna de las dos (#92).",
             "",
             "## Atribucion: alpha contra beta",
             "",
@@ -2258,6 +2386,7 @@ def _build_rows(
     for row in rows:
         metrics_by_name[row.row] = _row_metrics(
             series_pct=row.series_pct,
+            traded_series_pct=row.traded_series_pct,
             benchmark_pct=benchmark,
             basis=BASIS_DECLARED_COST,
             cache=cache,
@@ -2267,6 +2396,7 @@ def _build_rows(
         series = _series_of_run(arm.run)
         metrics_by_name[arm.name] = _row_metrics(
             series_pct=series,
+            traded_series_pct=_traded_series_pct(arm.run),
             benchmark_pct=benchmark,
             basis=BASIS_DECLARED_COST,
             cache=cache,

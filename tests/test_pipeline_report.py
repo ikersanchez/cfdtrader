@@ -83,6 +83,7 @@ from cfdtrader.backtest.metrics import (
     DEFAULT_BOOTSTRAP_SEED,
     DEFAULT_CONFIDENCE_LEVEL,
     ConfidenceInterval,
+    bootstrap_confidence_interval,
 )
 from cfdtrader.data.store import Store
 from cfdtrader.decision.gate import (
@@ -540,9 +541,18 @@ def test_a3_hash_format_and_self_consistency(real_report: PipelineReport) -> Non
 def test_a3_identical_across_fresh_processes(
     real_report: PipelineReport, fresh_runs: Mapping[str, CliRun]
 ) -> None:
-    """A3: el mismo hash con `PYTHONHASHSEED` 0, 1 y el aleatorio de este proceso."""
+    """A3: el mismo hash con `PYTHONHASHSEED` 0, 1 y el aleatorio de este proceso.
+
+    #92: ademas, el bloque de la tasa por operacion es identico byte a byte entre la corrida de
+    la sesion y los dos procesos frescos (criterio 7 de #92).
+    """
     assert fresh_runs["seed0"].report_sha256 == real_report.report_sha256
     assert fresh_runs["seed1"].report_sha256 == real_report.report_sha256
+    ours = metrics_of(real_report, ARM_COSTE_DECLARADO)["hit_rate_per_trade"]
+    for name in ("seed0", "seed1"):
+        fresh = as_map(json.loads(fresh_runs[name].json_path().read_text(encoding="utf-8")))
+        published = as_map(at(fresh, "arms", ARM_COSTE_DECLARADO, "metrics"))["hit_rate_per_trade"]
+        assert as_map(published) == ours
 
 
 @needs_store
@@ -550,10 +560,11 @@ def test_a3_hash_is_fixed_with_prefix(real_report: PipelineReport) -> None:
     """A3: el test **fija** el digest, con su prefijo (un sha256 desnudo lo bloquea el hook).
 
     #80 retiro el bloque `check` del payload, asi que el digest de la corrida real cambio: se
-    vuelve a fijar con el texto ya sin la narrativa del defecto.
+    vuelve a fijar con el texto ya sin la narrativa del defecto. #92 anade la onceava metrica
+    (`hit_rate_per_trade`) al payload, asi que el digest se vuelve a fijar con ella dentro.
     """
     assert real_report.report_sha256 == (
-        "sha256:bc0fb5a8d2fce48aa427727d00702e8fba002d0ed46ce908cd5607a97f7688f3"
+        "sha256:7473f736ffa398ad38e00dda86a92b9e2a0a88307717246533344840fb83f3b8"
     )
 
 
@@ -880,6 +891,13 @@ def test_a8_every_metric_carries_its_interval_label(real_report: PipelineReport)
             block = metric_block(metrics, metric)
             if metric in NO_INTERVAL_METRICS:
                 assert block["lower"] is None and block["upper"] is None
+                assert as_str(block["reason"]).strip()
+                continue
+            if block["estimate"] is None:
+                # `hit_rate_per_trade` sin operaciones (#92): null, nunca 0 ni `[0, 0]`.
+                assert metric == "hit_rate_per_trade"
+                assert block["lower"] is None and block["upper"] is None
+                assert as_int(block["n"]) == 0
                 assert as_str(block["reason"]).strip()
                 continue
             lower = as_float(block["lower"])
@@ -1773,6 +1791,227 @@ def test_a14_guard_rule_11_band_verdicts() -> None:
     assert at(payload, "band") == [RULE_11_BAND[0], RULE_11_BAND[1]]
     assert as_float(as_map(published[ARM_OFICIAL])["share"]) == pytest.approx(0.5)
     assert as_map(published[ARM_ESCENARIO])["share_interval"] is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #92 · Tasa de acierto por operacion junto a la de #28 (que es por sesion)
+# ─────────────────────────────────────────────────────────────────────────────
+#: La tasa por operacion del brazo de coste declarado, con los goldens declarados en #92.
+PER_TRADE_ESTIMATE: Final[float] = 0.3870967741935484
+PER_TRADE_LOWER: Final[float] = 0.22580645161290322
+PER_TRADE_UPPER: Final[float] = 0.5806451612903226
+
+
+def traded_series(run: BacktestRun) -> tuple[float, ...]:
+    """La serie declarada de **solo** las sesiones operadas, re-derivada aqui (#92)."""
+    return tuple(
+        _declared_return_pct(outcome)
+        for outcome in sessions_of(run)
+        if outcome.status == STATUS_TRADED
+    )
+
+
+def _synthetic_metrics(run: BacktestRun) -> dict[str, dict[str, object]]:
+    """Las metricas de una corrida sintetica (sin almacen) que ejercen la denominacion (#92)."""
+    series = declared_series(run)
+    benchmark = tuple(0.01 * (index % 3) for index in range(len(series)))
+    return cast(
+        "dict[str, dict[str, object]]",
+        pipeline_report._row_metrics(  # pyright: ignore[reportPrivateUsage]
+            series_pct=series,
+            traded_series_pct=traded_series(run),
+            benchmark_pct=benchmark,
+            basis=BASIS_DECLARED_COST,
+            cache={},
+        ),
+    )
+
+
+@needs_store
+def test_a92_per_trade_rate_is_published_with_its_own_seed(real_report: PipelineReport) -> None:
+    """Criterios 1 y 4 de #92: la tasa por operacion con su IC, su semilla propia y su base."""
+    metrics = metrics_of(real_report, ARM_COSTE_DECLARADO)
+    block = metric_block(metrics, "hit_rate_per_trade")
+    assert block["estimate"] == PER_TRADE_ESTIMATE
+    assert block["lower"] == PER_TRADE_LOWER
+    assert block["upper"] == PER_TRADE_UPPER
+    assert as_int(block["n"]) == 31
+    assert as_int(block["n_trades"]) == 31
+    assert as_int(block["n_wins"]) == 12
+    assert 0.0 <= as_float(block["lower"]) <= as_float(block["upper"]) <= 1.0
+    assert block["estimate"] == as_int(block["n_wins"]) / as_int(block["n_trades"])
+    seeds = pipeline_report._seed_by_metric()  # pyright: ignore[reportPrivateUsage]
+    seed = as_int(block["seed"])
+    assert seed == 53 == _derived_seed(offset=11)
+    assert seed >= DEFAULT_BOOTSTRAP_SEED
+    historical = {name: seeds[name] for name in METRIC_NAMES if name != "hit_rate_per_trade"}
+    assert seed not in set(historical.values())
+    assert as_int(metrics["hit_rate"]["seed"]) == 44
+    assert seed != as_int(metrics["hit_rate"]["seed"])
+
+
+@needs_store
+def test_a92_per_trade_estimate_is_the_rederived_ratio(real_report: PipelineReport) -> None:
+    """Criterio 8 de #92: la estimacion publicada **es** `n_wins / n_trades` de la serie operada."""
+    arm = real_report.arm(ARM_COSTE_DECLARADO)
+    trades = [outcome for outcome in sessions_of(arm.run) if outcome.status == STATUS_TRADED]
+    returns = tuple(_declared_return_pct(outcome) for outcome in trades)
+    n_wins = sum(1 for value in returns if value > 0.0)
+    assert len(returns) == arm.run.traded
+    block = metrics_of(real_report, ARM_COSTE_DECLARADO)["hit_rate_per_trade"]
+    assert as_int(block["n"]) == len(returns)
+    assert as_int(block["n_wins"]) == n_wins
+    assert block["estimate"] == n_wins / len(returns)
+    assert block["wins_fraction"] == f"{n_wins}/{len(returns)}"
+    interval = bootstrap_confidence_interval(
+        tuple(value / 100.0 for value in returns),
+        lambda sample: sum(1 for value in sample if value > 0.0) / max(len(sample), 1),
+        confidence_level=DEFAULT_CONFIDENCE_LEVEL,
+        n_bootstrap=DEFAULT_BOOTSTRAP_SAMPLES,
+        seed=as_int(block["seed"]),
+    )
+    assert block["lower"] == interval.lower
+    assert block["upper"] == interval.upper
+    assert as_float(block["lower"]) < as_float(block["estimate"]) < as_float(block["upper"])
+
+
+@needs_store
+def test_a92_per_trade_does_not_touch_the_session_rate(real_report: PipelineReport) -> None:
+    """Criterio 2 de #92: `hit_rate` conserva nombre, valor, semilla y posicion; nada desaparece."""
+    metrics = metrics_of(real_report, ARM_COSTE_DECLARADO)
+    block = metric_block(metrics, "hit_rate")
+    assert block["estimate"] == 0.024
+    assert block["lower"] == 0.012
+    assert block["upper"] == 0.038
+    assert as_int(block["n"]) == 500
+    assert as_int(block["n_bootstrap"]) == DEFAULT_BOOTSTRAP_SAMPLES
+    assert as_int(block["seed"]) == 44
+    names = list(cast("list[str]", metrics["metric_names"]))
+    assert names == list(METRIC_NAMES)
+    assert names.index("hit_rate") == 1
+    assert names[10] == "hit_rate_per_trade"
+    historical = (
+        "mean_return_pct",
+        "hit_rate",
+        "sharpe",
+        "sortino",
+        "max_drawdown_pct",
+        "profit_factor",
+        "benchmark_return_pct",
+        "excess_return_pct",
+        "beta",
+        "alpha_pct",
+    )
+    for name in (*BASELINE_IDS, "liston_a", "liston_b", "liston_c", *ARM_NAMES):
+        other = metrics_of(real_report, name)
+        assert all(metric in other for metric in historical)
+        assert list(cast("list[str]", other["metric_names"])) == names
+
+
+@needs_store
+def test_a92_per_trade_denominations_are_declared(real_report: PipelineReport) -> None:
+    """Criterio 3 de #92: cada tasa declara su denominacion, su nota, sus aciertos y su fraccion."""
+    for name in (*BASELINE_IDS, "liston_a", "liston_b", "liston_c", *ARM_NAMES):
+        metrics = metrics_of(real_report, name)
+        session = metrics["hit_rate"]
+        trade = metrics["hit_rate_per_trade"]
+        assert session["denominator"] == "session"
+        assert trade["denominator"] == "trade"
+        for block in (session, trade):
+            note = as_str(block["denominator_note"]).strip()
+            assert note
+            assert "no_trade" in note and "0 exacto" in note and "skipped" in note
+            n = as_int(block["n"])
+            n_wins = as_int(block["n_wins"])
+            assert block["wins_fraction"] == f"{n_wins}/{n}"
+            if n:
+                assert block["estimate"] == n_wins / n
+
+
+@needs_store
+def test_a92_per_trade_denominators_are_measured(real_report: PipelineReport) -> None:
+    """Criterio 5 de #92: los `n` salen de los recuentos publicados, no de una afirmacion."""
+    for arm_name in ARM_NAMES:
+        block = row_block(real_report, arm_name)
+        metrics = metrics_of(real_report, arm_name)
+        traded = as_int(block["traded"])
+        no_trade = as_int(block["no_trade"])
+        assert as_int(metrics["hit_rate"]["n"]) == traded + no_trade
+        assert as_int(metrics["hit_rate_per_trade"]["n"]) == traded
+    for row in as_objects(at(real_report.payload, "table", "rows")):
+        metrics = cast("dict[str, dict[str, object]]", row["metrics"])
+        traded = as_int(row["traded"])
+        no_trade = as_int(row["no_trade"])
+        assert as_int(metrics["hit_rate"]["n"]) == traded + no_trade
+        assert as_int(metrics["hit_rate_per_trade"]["n"]) == traded
+        assert as_int(metrics["hit_rate_per_trade"]["n"]) == as_int(
+            as_map(row["rotation"])["traded"]
+        )
+
+
+@needs_store
+def test_a92_per_trade_is_null_and_never_zero_without_trades(real_report: PipelineReport) -> None:
+    """Criterio 6 de #92: cero operaciones ⇒ `null` en la tasa por operacion, nunca `0`."""
+    for name in (ARM_OFICIAL, ARM_ESCENARIO, NO_TRADE):
+        block = metrics_of(real_report, name)["hit_rate_per_trade"]
+        assert block["estimate"] is None
+        assert block["lower"] is None
+        assert block["upper"] is None
+        assert block["estimate"] != 0.0
+        assert as_int(block["n"]) == 0
+        assert as_int(block["n_trades"]) == 0
+        assert as_int(block["n_wins"]) == 0
+        assert as_str(block["reason"]).strip()
+
+
+def test_a92_per_trade_denominators_on_a_synthetic_run() -> None:
+    """Criterio 9(a) de #92: `traded + no_trade` y `traded`; una `skipped` de mas no los mueve."""
+    cost = declared_cost_breakdown()
+    win = _outcome(session=date(2026, 9, 1), status=STATUS_TRADED, gross_pct=0.01, cost=cost)
+    loss = _outcome(session=date(2026, 9, 2), status=STATUS_TRADED, gross_pct=-0.01, cost=cost)
+    flat = _outcome(session=date(2026, 9, 3), status=STATUS_NO_TRADE)
+    skip = _outcome(session=date(2026, 9, 4), status=STATUS_SKIPPED)
+    run = _run(folded=(win, loss, flat), traded=2, no_trade=1)
+    metrics = _synthetic_metrics(run)
+    assert as_int(metrics["hit_rate"]["n"]) == run.traded + run.no_trade == 3
+    assert as_int(metrics["hit_rate_per_trade"]["n"]) == run.traded == 2
+    assert as_int(metrics["hit_rate"]["n_wins"]) == 1
+    assert len(traded_series(run)) == 2
+    with_skip = _run(folded=(win, loss, flat, skip), traded=2, no_trade=1, skipped=1)
+    skipped_metrics = _synthetic_metrics(with_skip)
+    assert as_int(skipped_metrics["hit_rate"]["n"]) == 3
+    assert as_int(skipped_metrics["hit_rate_per_trade"]["n"]) == 2
+
+
+def test_a92_per_trade_zero_return_is_not_a_win() -> None:
+    """Criterio 9(b) de #92: un retorno declarado exactamente `0.0` no cuenta como ganador."""
+    cost = declared_cost_breakdown()
+    flat_return = float(cost.c_declared_pct) / 100.0
+    win = _outcome(session=date(2026, 9, 1), status=STATUS_TRADED, gross_pct=0.01, cost=cost)
+    zero = _outcome(
+        session=date(2026, 9, 2), status=STATUS_TRADED, gross_pct=flat_return, cost=cost
+    )
+    loss = _outcome(session=date(2026, 9, 3), status=STATUS_TRADED, gross_pct=-0.01, cost=cost)
+    assert _declared_return_pct(zero) == 0.0
+    run = _run(folded=(win, zero, loss), traded=3, no_trade=0)
+    block = _synthetic_metrics(run)["hit_rate_per_trade"]
+    assert as_int(block["n_wins"]) == 1
+    assert as_int(block["n_trades"]) == 3
+    assert block["estimate"] == 1 / 3
+    assert as_int(_synthetic_metrics(run)["hit_rate"]["n_wins"]) == 1
+
+
+@needs_store
+def test_support_markdown_declares_both_denominations(real_report: PipelineReport) -> None:
+    """Criterio 12 de #92: el Markdown declara la tasa por sesion y la de por operacion."""
+    markdown = render_markdown(real_report)
+    assert "`hit_rate` **por sesion**" in markdown
+    assert "`hit_rate_per_trade` **por operacion**" in markdown
+    metrics = metrics_of(real_report, ARM_COSTE_DECLARADO)
+    session = metrics["hit_rate"]
+    trade = metrics["hit_rate_per_trade"]
+    assert f"`{session['wins_fraction']}`, n = {session['n']}" in markdown
+    assert f"`{trade['wins_fraction']}`, n = {trade['n']}" in markdown
 
 
 # ─────────────────────────────────────────────────────────────────────────────
