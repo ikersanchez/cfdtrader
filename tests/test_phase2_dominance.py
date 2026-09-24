@@ -93,12 +93,14 @@ NOW: Final[datetime] = datetime(2026, 9, 24, 0, 0, tzinfo=UTC)
 #: Nombre base del informe de esa corrida.
 STEM: Final[str] = "phase2_dominance_2026-09-24"
 
-#: `report_sha256` dorado de la corrida real, **con** prefijo (A4). Un sha256 desnudo lo
-#: bloquea `detect-secrets`; el prefijo viaja dentro del valor. Depende de los artefactos de
-#: #28/#26 y de la tabla de §11.6, no de la ruta de `--reports-dir` (A4).
-GOLDEN_REPORT_SHA256: Final[str] = (
-    "sha256:d4a86da8693744405000284c9a2c554d36f50462c6b9e4f7c01c84257a33258d"
-)
+# #95: aqui vivia `GOLDEN_REPORT_SHA256`, el `report_sha256` dorado de la corrida real. Ese
+# digest es el del payload de **este** informe, y dentro viaja el `sha256` del artefacto de #28
+# (que #92 regenero al publicar `hit_rate_per_trade`), asi que **cualquier** tarea posterior lo
+# invalida: un dorado asi convierte un trabajo ajeno en un fallo de #93. No se vuelve a cablear
+# ningun digest regenerable. Lo que A4 vigila —prefijo `sha256:` + 64 hex, autoconsistencia del
+# payload, determinismo entre procesos y que `provenance.pipeline.sha256` sea el del **fichero**
+# del artefacto— se comprueba sin literal. El unico dorado estable de la fase es el `sha256` del
+# bloque §11.6 de `plan.md`, que ya fija `tests/test_phase2_report.py` (#29).
 
 #: Los tres percentiles declarados de #8 que la rejilla tiene que incluir (A7).
 GOLDEN_GRID_BP: Final[tuple[float, ...]] = (0.0, 13.2, 26.6, 46.8)
@@ -119,32 +121,36 @@ CELL_KEYS: Final[tuple[str, ...]] = (
 )
 METRIC_KEYS: Final[tuple[str, ...]] = ("estimate", "lower", "upper")
 
-#: Solo estos ficheros puede tocar la tarea (A18): el modulo, sus tests y el `__init__` si
-#: hiciera falta un export (no ha hecho falta: `analysis/__init__.py` no exporta ninguno de los
-#: informes de la fase, asi que no se toca).
-ALLOWED_PATHS: Final[frozenset[str]] = frozenset(
+#: Los ficheros que la entrega de #93 **debe** traer en el diff (A18): el modulo y sus tests. El
+#: `__init__` no hizo falta (no exporta ningun informe de la fase), asi que no entra: un
+#: subconjunto no exige que la tarea toque todo lo que podria tocar.
+WRITTEN: Final[frozenset[str]] = frozenset(
     {
         "src/cfdtrader/analysis/phase2_dominance.py",
         "tests/test_phase2_dominance.py",
-        "src/cfdtrader/analysis/__init__.py",
     }
 )
 
-#: Modulos congelados o de otras tareas que A18 prohibe tocar. Las guardias de
-#: `tests/test_pipeline_report.py` (A15) y `tests/test_model_comparison.py` (A12) apuntan a los
-#: mismos ficheros.
-FORBIDDEN_PATHS: Final[frozenset[str]] = frozenset(
+#: Los modulos **realmente congelados** que A18 prohibe tocar. Tras #80 son exactamente estos
+#: cuatro; las guardias A15 de `tests/test_pipeline_report.py` y A12 de
+#: `tests/test_model_comparison.py` apuntan a los mismos.
+FROZEN: Final[frozenset[str]] = frozenset(
     {
-        "src/cfdtrader/analysis/pipeline_report.py",
-        "src/cfdtrader/analysis/phase2_report.py",
         "src/cfdtrader/backtest/baselines.py",
         "src/cfdtrader/backtest/metrics.py",
-        "src/cfdtrader/backtest/costs.py",
-        "src/cfdtrader/backtest/engine.py",
         "src/cfdtrader/models/baseline.py",
         "src/cfdtrader/analysis/feature_frame.py",
     }
 )
+
+# #95: #93 declaraba ademas «ajenos» y exigia `changed <= ALLOWED_PATHS` para **todo** el diff
+# desde `BASE_COMMIT`, es decir que ningun fichero ajeno al de la entrega cambiara nunca mas.
+# Eso no se sostiene: una tarea posterior legitima los toca (#92 ya regenero
+# `pipeline_report.py` y su test). Se quedan solo como nota documental, **sin** asercion: la
+# disyuncion permanente es contra FROZEN.
+#   ajenos que #93 declaraba: src/cfdtrader/analysis/pipeline_report.py,
+#       src/cfdtrader/analysis/phase2_report.py, src/cfdtrader/backtest/engine.py,
+#       src/cfdtrader/backtest/costs.py
 
 #: Commit del que arranca la tarea: el `git diff` del rango tiene que tocar solo lo declarado.
 BASE_COMMIT: Final[str] = "35d2592"
@@ -675,8 +681,34 @@ def test_a4_identical_across_fresh_processes(
 
 @needs_store
 def test_a4_hash_is_fixed_with_prefix(fresh_runs: Mapping[str, CliRun]) -> None:
-    """A4: el test **fija** el digest, con su prefijo (un sha256 desnudo lo bloquea el hook)."""
-    assert fresh_runs["seed0"].report_sha256 == GOLDEN_REPORT_SHA256
+    """A4: el digest de un proceso fresco lleva el prefijo, cuadra con el fichero y con su fuente.
+
+    #95: aqui se **fijaba** el literal `GOLDEN_REPORT_SHA256`. Ese digest es el del payload de
+    este informe, que publica el `sha256` del artefacto de #28 (regenerable por cualquier tarea
+    posterior: #92 lo regenero), asi que no puede ser un dorado. La corrida fresca sigue teniendo
+    que publicar un digest con el formato declarado (prefijo `sha256:` + 64 hex, como el de la
+    corrida de la sesion), autoconsistente con lo que escribio en disco, y una procedencia cuyo
+    `sha256` sea el del **fichero** del artefacto que consume.
+    """
+    run = fresh_runs["seed0"]
+    assert run.report_sha256.startswith("sha256:")
+    body = run.report_sha256.removeprefix("sha256:")
+    assert len(body) == 64
+    assert all(character in "0123456789abcdef" for character in body)
+
+    reports = run.directory / "derived" / "reports"
+    published = as_map(json.loads((reports / f"{STEM}.json").read_text(encoding="utf-8")))
+    assert published["report_sha256"] == run.report_sha256
+    without_hash = {key: value for key, value in published.items() if key != "report_sha256"}
+    recomputed = hashlib.sha256(canonical_text(without_hash).encode("utf-8")).hexdigest()
+    assert recomputed == body
+
+    provenance = as_map(at(published, "provenance", "pipeline"))
+    assert provenance["path"] == PIPELINE_ARTIFACT.name
+    assert (
+        provenance["sha256"]
+        == hashlib.sha256((reports / PIPELINE_ARTIFACT.name).read_bytes()).hexdigest()
+    )
 
 
 @needs_store
@@ -1137,8 +1169,14 @@ def test_a18_no_new_dependency() -> None:
     }
 
 
-def test_a18_diff_touches_only_the_declared_files() -> None:
-    """A18: el diff del rango de la tarea y el arbol de trabajo solo tocan lo declarado."""
+def test_a18_frozen_modules_are_untouched() -> None:
+    """A18: la entrega trae sus ficheros y **no** toca ningun modulo congelado.
+
+    #95: antes exigia `changed <= ALLOWED_PATHS`, es decir que **todo** el cambio del repositorio
+    desde `BASE_COMMIT` cupiera en los ficheros de #93. Cualquier tarea posterior que toque otro
+    fichero rompia la suite. La intencion de A18 es subconjunto (los ficheros de #93 estan) y
+    disyuncion (ningun congelado esta), como en #26 y en la relajacion A15 de #89.
+    """
     git = shutil.which("git")
     if git is None:  # pragma: no cover - entorno sin git
         pytest.skip("git no disponible")
@@ -1149,9 +1187,8 @@ def test_a18_diff_touches_only_the_declared_files() -> None:
         if line.strip()
     }
     changed = committed | working
-    assert changed.isdisjoint(FORBIDDEN_PATHS), f"ficheros ajenos o congelados tocados: {changed}"
-    assert changed <= ALLOWED_PATHS, f"ficheros fuera del alcance: {changed - ALLOWED_PATHS}"
-    assert MODULE_PATH.relative_to(REPO_ROOT).as_posix() in changed
+    assert set(WRITTEN) <= changed, f"la entrega no trae: {sorted(set(WRITTEN) - changed)}"
+    assert changed.isdisjoint(FROZEN), f"modulos congelados tocados: {sorted(changed & FROZEN)}"
 
 
 def _git_lines(git: str, arguments: Sequence[str]) -> set[str]:
