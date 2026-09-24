@@ -564,7 +564,7 @@ def test_a3_hash_is_fixed_with_prefix(real_report: PipelineReport) -> None:
     (`hit_rate_per_trade`) al payload, asi que el digest se vuelve a fijar con ella dentro.
     """
     assert real_report.report_sha256 == (
-        "sha256:7473f736ffa398ad38e00dda86a92b9e2a0a88307717246533344840fb83f3b8"
+        "sha256:477e144eb65a93750a3ea7469f1b2494b1a040dff6494ace2ce70185e54b3a21"
     )
 
 
