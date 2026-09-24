@@ -424,6 +424,26 @@ def test_a1_module_api_and_cli(fresh_runs: Mapping[str, CliRun]) -> None:
     assert run.markdown_bytes.startswith(b"# Veredicto robusto de Fase 2")
 
 
+@needs_store
+def test_a1_cli_success_in_process(tmp_path: Path) -> None:
+    """A1: la CLI sale con 0 y escribe el par, aunque el veredicto no sea aprobar."""
+    reports = _copy_artifacts(tmp_path)
+    with _patched_fast(ours=False):
+        code = phase2_dominance.main(
+            [
+                "--data-root",
+                str(REAL_DATA),
+                "--reports-dir",
+                str(reports),
+                "--as-of",
+                NOW.isoformat(),
+            ]
+        )
+    assert code == 0
+    assert (reports / f"{STEM}.json").is_file()
+    assert (reports / f"{STEM}.md").is_file()
+
+
 def _cli_flags() -> list[str]:
     """Los `--flags` que la CLI declara, leidos del AST del modulo (A1)."""
     flags: list[str] = []
@@ -523,6 +543,58 @@ def test_a3_missing_and_ambiguous_artifacts_exit_2_without_writing(tmp_path: Pat
     shutil.copy2(MODEL_ARTIFACT, broken / MODEL_ARTIFACT.name)
     assert phase2_dominance.main(["--reports-dir", str(broken), "--as-of", NOW.isoformat()]) == 2
     assert not list(broken.glob("phase2_dominance_*"))
+
+
+def test_a3_malformed_artifact_fields_are_typed_errors(tmp_path: Path) -> None:
+    """A3: un artefacto mal formado es error tipado y **no** gasta la reejecucion del pipeline."""
+    broken_arms = _copy_artifacts(tmp_path / "arms")
+    payload = json.loads(PIPELINE_ARTIFACT.read_text(encoding="utf-8"))
+    payload["arms"] = []
+    (broken_arms / PIPELINE_ARTIFACT.name).write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(Phase2DominanceError):
+        phase2_dominance.analyse(
+            store=Store(REAL_DATA),
+            reports_dir=broken_arms,
+            as_of=datetime(2026, 9, 24),  # sin zona: A2 lo interpreta como UTC
+            write=True,
+        )
+    assert not list(broken_arms.glob("phase2_dominance_*"))
+
+    broken_counts = _copy_artifacts(tmp_path / "counts")
+    payload = json.loads(PIPELINE_ARTIFACT.read_text(encoding="utf-8"))
+    payload["arms"]["coste_declarado"]["traded"] = "treinta y uno"
+    (broken_counts / PIPELINE_ARTIFACT.name).write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(Phase2DominanceError):
+        phase2_dominance.analyse(
+            store=Store(REAL_DATA), reports_dir=broken_counts, as_of=NOW, write=True
+        )
+    assert not list(broken_counts.glob("phase2_dominance_*"))
+
+
+def test_a3_pipeline_failure_exits_2_without_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A3: si el pipeline de #28 no se puede reejecutar, la CLI sale con 2 y no escribe."""
+    reports = _copy_artifacts(tmp_path)
+
+    def _boom(**_: object) -> object:
+        raise pipeline_report.PipelineReportError("el almacen no esta disponible")
+
+    monkeypatch.setattr(pipeline_report, "analyse", _boom)
+    assert (
+        phase2_dominance.main(
+            [
+                "--data-root",
+                str(REAL_DATA),
+                "--reports-dir",
+                str(reports),
+                "--as-of",
+                NOW.isoformat(),
+            ]
+        )
+        == 2
+    )
+    assert not list(reports.glob("phase2_dominance_*"))
 
 
 @needs_store

@@ -819,10 +819,13 @@ def _arm_counts(payload: Mapping[str, object], arm: str) -> dict[str, object]:
     }
 
 
-def _base_arm_block(payload: Mapping[str, object], *, series: DeclaredSeries) -> dict[str, object]:
+def _base_arm_block(
+    *,
+    counts: Mapping[str, object],
+    others: Mapping[str, Mapping[str, object]],
+    series: DeclaredSeries,
+) -> dict[str, object]:
     """El brazo base declarado, con sus recuentos leidos del artefacto (A6)."""
-    counts = _arm_counts(payload, BASE_ARM)
-    others = {name: _arm_counts(payload, name) for name in (ARM_OFICIAL, ARM_ESCENARIO)}
     return {
         "name": BASE_ARM,
         "basis": BASIS_DECLARED_COST,
@@ -830,12 +833,12 @@ def _base_arm_block(payload: Mapping[str, object], *, series: DeclaredSeries) ->
         "is_validation": False,
         "evidence": "artifact",
         "reason": DOMINANCE_RULE,
-        "counts": counts,
+        "counts": dict(counts),
         "counts_source": (
             f"artefacto de #28, `arms.{BASE_ARM}.traded/no_trade/skipped/n_test`: los recuentos "
             "se **leen**, no se recalculan"
         ),
-        "other_arms": others,
+        "other_arms": {name: dict(block) for name, block in others.items()},
         "other_arms_note": (
             "los otros dos brazos del gate no operan ninguna sesion (0 / 500): sin operaciones no "
             "hay serie sobre la que decidir, y por eso la base declarada es la unica base "
@@ -1128,6 +1131,11 @@ def analyse(
     pipeline = load_input_artifact(reports_dir, PIPELINE_CLASS, store=store)
     model = load_input_artifact(reports_dir, MODEL_CLASS, store=store)
     scenario_payload = _mapping(pipeline.payload.get("scenario"), where="scenario")
+    # Fallar rapido: los recuentos que A6 publica se **leen** del artefacto antes de reejecutar
+    # el pipeline, que cuesta minutos. Un artefacto mal formado sale como error tipado sin
+    # gastar la corrida (A3, A6).
+    counts = _arm_counts(pipeline.payload, BASE_ARM)
+    others = {name: _arm_counts(pipeline.payload, name) for name in (ARM_OFICIAL, ARM_ESCENARIO)}
 
     cost_pct = Decimal(str(scenario_payload.get("cost_basis_pct")))
     cost_source = str(scenario_payload.get("cost_provenance"))
@@ -1141,7 +1149,7 @@ def analyse(
     reproduction = _reproduction_block(
         payload=pipeline.payload, artifact=pipeline, cells=dominance.cells
     )
-    base_arm = _base_arm_block(pipeline.payload, series=series)
+    base_arm = _base_arm_block(counts=counts, others=others, series=series)
 
     criteria = evaluate_criteria(
         pipeline=pipeline.payload, model=model.payload, table=table, stars=stars
