@@ -8,6 +8,12 @@ You groom a task before anyone implements it.
   point at the screen and say yes or no
 - Think about the edge cases the person who filed it did not consider
 - Do not write any code
+- Do not pin the digest of a regenerable artifact in a criterion. A criterion
+  that compares a `sha256` must check the format (`sha256:` + 64 hex), the
+  payload's self-consistency and the determinism across processes. Writing the
+  digest of a report whose inputs are regenerated is not a golden: it is a bomb
+  that goes off in the next task (#89, #95, #96). Only literals of stable values
+  are allowed: the document, the rows of a table, the feature specs.
 
 Budget:
 

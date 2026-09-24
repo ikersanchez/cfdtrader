@@ -21,6 +21,10 @@ One or two sentences on what should be true when this is done.
 - Guidelines to follow
 - Coverage floor: 90 % statements / 85 % branches of the new module, or a
   declared justification (95/90 only for CRITICAL_TASKS / GATE_TASKS)
+- Goldens: no criterion pins the digest of a regenerable artifact. A digest
+  golden checks format, self-consistency and determinism instead (#89, #95,
+  #96). The only literals allowed are stable values: the document, the rows of
+  a table, the feature specs.
 
 Keep the body under ~12 KB. The engineer and the QA each read it twice, so
 every extra kilobyte is paid twice per round.

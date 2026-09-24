@@ -58,6 +58,9 @@ Rules
   `unshare -rn` only when the criteria ask for the no-network gate.
 - Coverage floors are 90 % statements / 85 % branches for the new module, or
   a declared justification. Never open a round just to cross the line.
+- A criterion that pins the digest of a regenerable artifact is a grooming FAIL,
+  not a style detail. Three instances so far (#89, #95, #96), and all three
+  broke `uv run pytest -q` in a later task.
 
 
 Budget
