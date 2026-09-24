@@ -76,12 +76,12 @@ NOW: Final[datetime] = datetime(2026, 9, 22, 22, 0, tzinfo=UTC)
 #: Base de la entrega: `main == origin/main` al empezar la tarea (#26).
 BASE_COMMIT: Final[str] = "9cb5068"
 
-#: Ficheros que la entrega **no** puede tocar (A1, A12).
+#: Ficheros que la entrega **no** puede tocar (A1, A12). #80 retira `engine.py` y `costs.py`:
+#: la entrega transversal de #80 **si** toca el motor (es su arreglo) y la guardia de `git diff`
+#: se reduce a los modulos que siguen congelados (A8).
 UNTOUCHABLE: Final[tuple[str, ...]] = (
     "src/cfdtrader/models/baseline.py",
     "src/cfdtrader/models/calibration.py",
-    "src/cfdtrader/backtest/engine.py",
-    "src/cfdtrader/backtest/costs.py",
 )
 
 #: Los dos modulos nuevos y sus tests (A1, A14).
