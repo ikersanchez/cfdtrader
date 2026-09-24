@@ -655,11 +655,12 @@ def test_a9_more_trials_deflate_the_same_series_more(
         )
         return Registry(entries=entries, registry_sha256="fake")
 
-    # La serie real de esta corrida tiene Sharpe negativo: su DSR se satura a `0.0` en
-    # cualquier registro y no distinguiria tres intentos de diez. Por eso la deflacion se
-    # mide con una serie determinista de Sharpe positivo y del orden del `SR0` esperado (A9).
-    saturated = deflate_block(returns=real_report.evaluated[0].series, registry=registry_of(3))
-    assert float(cast("float", saturated["dsr"])) == 0.0
+    # #80 corrigio la unidad del P&L declarado (fraccion del nocional): la serie real ya **no**
+    # tiene Sharpe negativo, asi que su DSR no se satura a `0.0` y su deflacion es casi plana:
+    # no distingue tres intentos de diez. Por eso la deflacion se **mide** con una serie
+    # determinista de Sharpe positivo y del orden del `SR0` esperado (A9).
+    real = deflate_block(returns=real_report.evaluated[0].series, registry=registry_of(3))
+    assert float(cast("float", real["dsr"])) >= 0.0
     small = deflate_block(returns=series, registry=registry_of(3))
     large = deflate_block(returns=series, registry=registry_of(10))
     assert small["n_trials"] == 3
@@ -914,21 +915,21 @@ def test_a12_the_net_metrics_are_refused_and_the_slippage_is_assumed(
 
 
 @needs_store
-def test_a12_the_unit_bug_is_measured_and_not_fixed(real_report: ModelComparisonReport) -> None:
-    """El bloque de #80 publica la constante medida por operacion, sin arreglar el motor (A12)."""
+def test_a12_the_unit_bug_is_fixed_and_measured(real_report: ModelComparisonReport) -> None:
+    """El bloque de #80 publica la constante medida por operacion, ya arreglado el motor (A12)."""
     bug = _block(real_report, "unit_bug_80")
     assert bug["issue"] == "#80"
-    assert bug["fixed_here"] is False
-    assert abs(float(cast("float", bug["observed_per_operation"])) - 0.0042) <= 1e-15
+    assert bug["state"] == "fixed_and_measured"
+    assert abs(float(cast("float", bug["observed_per_operation"])) - 0.000042) <= 1e-15
     assert abs(float(cast("float", bug["correct_term_per_operation"])) - 0.000042) <= 1e-15
-    assert abs(float(cast("float", bug["difference_per_operation"])) - 0.004158) <= 1e-12
+    assert abs(float(cast("float", bug["difference_per_operation"]))) <= 1e-12
     assert bug["n_operations"] == real_report.evaluated[0].n_traded
-    assert "engine.py" in str(bug["statement"])
-    assert "engine.py" in str(bug["note"])
-    assert _git("diff", "--name-only", f"{BASE_COMMIT}..HEAD")
+    assert "c_fraction_of_notional" in str(bug["statement"])
+    assert "c_fraction_of_notional" in str(bug["resolution"])
+    # A8: la guardia de `git diff` se reduce al contrato nuevo. El motor (#80) **si** entra en
+    # el diff de esta entrega; lo que ya no se afirma es que resta 100x el coste declarado.
     changed = set(_git("diff", "--name-only", f"{BASE_COMMIT}..HEAD").splitlines())
-    assert "src/cfdtrader/backtest/engine.py" not in changed
-    assert "src/cfdtrader/backtest/costs.py" not in changed
+    assert "src/cfdtrader/backtest/engine.py" in changed
 
 
 @needs_store
@@ -990,9 +991,9 @@ def test_a12_the_markdown_carries_the_table_and_the_rule(
     for variant in (BASELINE_VARIANT_ID, VARIANT_ID):
         assert text.count(f"| `{variant}` |") >= 3
     assert "## Regla de seleccion (pre-declarada)" in text
-    assert "## Desajuste de unidades del motor (#80, medido y **no** arreglado)" in text
+    assert "## Unidades del motor (#80, arreglado y medido)" in text
     assert (
-        "0.004158"
+        "0.000042"
         in cast("dict[str, str]", _block(real_report, "unit_bug_80")["constants"])["identity"]
     )
     assert text.endswith("\n")

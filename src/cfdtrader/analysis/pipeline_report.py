@@ -31,10 +31,9 @@ Tres brazos declarados (A4-A6):
 Que **no** hace, y se declara en el payload en vez de rellenarse:
 
 - ninguna metrica neta: ``net_metrics = not_computable`` con motivo y seguimientos #62 y #60;
-- **#80 no se hereda**: el retorno de coste declarado se calcula **aqui**, en unidades coherentes
-  (``100 x gross_pct - c_declared_pct``, ambos en %), y el AST de este modulo **no** lee el atributo
-  del P&L declarado del motor; el bloque ``check`` publica la discrepancia de 100x de una sesion de
-  muestra;
+- las unidades del motor las declara **#80** (fraccion del nocional): el retorno de coste
+  declarado se calcula **aqui**, en %, y el AST de este modulo **no** lee el atributo del P&L
+  declarado del motor, lo re-deriva;
 - el liston B es una **serie de referencia declarada** (cierre a cierre menos la financiacion
   declarada por noche, importada de la tabla de costes): el liston B de primera clase, con
   posiciones overnight por el motor, es #70.
@@ -328,16 +327,8 @@ DOES_NOT_DO: Final[tuple[dict[str, str], ...]] = (
     },
 )
 
-#: Seguimientos vivos que este informe crea o alimenta (con #80, que aqui se **declara**).
+#: Seguimientos vivos que este informe crea o alimenta.
 FOLLOW_UPS: Final[tuple[dict[str, str], ...]] = (
-    {
-        "issue": "#80",
-        "topic": "unidades del P&L declarado del motor",
-        "why": (
-            "el motor resta un porcentaje a una fraccion (100x); aqui el retorno declarado se "
-            "deriva en unidades coherentes y el bloque `check` publica la discrepancia medida"
-        ),
-    },
     {
         "issue": "#62",
         "topic": "medir el *slippage*",
@@ -1110,9 +1101,9 @@ def _sessions_of_run(run: BacktestRun) -> tuple[SessionOutcome, ...]:
 def _declared_return_pct(outcome: SessionOutcome) -> float:
     """El retorno de coste declarado, en **unidades coherentes** y dentro del informe (A10).
 
-    ``100 x gross_pct - c_declared_pct``: ``gross_pct`` llega como **fraccion** y
-    ``c_declared_pct`` en **%**, asi que el producto por 100 los pone en la misma unidad. El motor
-    resta el porcentaje a la fraccion (100x, #80): aqui no se lee su resultado, se re-deriva.
+    ``100 x gross_pct - c_declared_pct``: ``gross_pct`` llega como **fraccion** (la unidad que
+    declara #80) y ``c_declared_pct`` en **%**, asi que el producto por 100 los pone en la misma
+    unidad. El informe **no** lee el P&L declarado del motor: lo re-deriva aqui, en %.
     """
     cost = outcome.cost
     if outcome.gross_pct is None or cost is None:
@@ -1871,51 +1862,6 @@ def _rule_11_payload(
     }
 
 
-def _check_payload(*, runs: Mapping[str, BacktestRun], cost: CostBreakdown) -> dict[str, object]:
-    """El bloque ``check`` de #80: la discrepancia de 100x, medida en una sesion (A10).
-
-    La sesion de muestra es la primera operacion del baseline ``always_long``: se publican
-    ``gross_pct`` (fraccion), ``c_declared_pct`` (%), la resta tal como la hace el motor (porcentaje
-    menos fraccion) y la resta declarada en unidades coherentes.
-    """
-    sample = next(
-        (
-            outcome
-            for outcome in _sessions_of_run(runs["always_long"])
-            if outcome.status == STATUS_TRADED
-        ),
-        None,
-    )
-    if sample is None or sample.gross_pct is None:
-        raise PipelineReportError(
-            "`always_long` no trae ninguna sesion operada: sin una sesion de muestra no se puede "
-            "medir la discrepancia de #80 (A10)"
-        )
-    gross = sample.gross_pct
-    declared_cost_pct = float(cost.c_declared_pct)
-    engine_value = gross - declared_cost_pct
-    declared_value = 100.0 * gross - declared_cost_pct
-    return {
-        "issue": "#80",
-        "sample_run": "always_long",
-        "session": sample.session.isoformat(),
-        "gross_pct": gross,
-        "gross_pct_units": "fraccion (el motor publica `gross_pct = exit/entry - 1`)",
-        "c_declared_pct": _num(cost.c_declared_pct),
-        "c_declared_pct_units": "% del nocional",
-        "engine_subtraction": engine_value,
-        "declared_subtraction": declared_value,
-        "discrepancy": declared_value - engine_value,
-        "formula_declared": "100 x gross_pct - c_declared_pct (ambos en %)",
-        "formula_engine": "gross_pct - c_declared_pct (fraccion menos porcentaje: 100x)",
-        "statement": (
-            "el motor resta un porcentaje a una fraccion (#80); este informe **no** lee su "
-            "resultado: deriva el retorno declarado en unidades coherentes y publica aquí la "
-            "discrepancia medida de la sesion de muestra, con la issue en `follow_ups`"
-        ),
-    }
-
-
 def _row_payload(row: TableRow, *, metrics: Mapping[str, object]) -> dict[str, object]:
     """Una fila de la tabla con su identidad, sus metricas y sus cifras exactas (A7, A8)."""
     return {
@@ -2093,7 +2039,6 @@ def _payload(
         "arm_comparison": _comparison_payload(
             rows=rows, metrics_by_name=metrics_by_name, benchmark=benchmark
         ),
-        "check": _check_payload(runs=runs, cost=cost),
         "net_metrics": {
             "state": "not_computable",
             "reason": NET_METRICS_REASON,
@@ -2158,7 +2103,6 @@ def render_markdown(report: PipelineReport) -> str:
     rule_11 = cast("dict[str, object]", payload["rule_11"])
     table = cast("dict[str, object]", payload["table"])
     rows = cast("list[dict[str, object]]", table["rows"])
-    check = cast("dict[str, object]", payload["check"])
     net = cast("dict[str, object]", payload["net_metrics"])
     scenario = cast("dict[str, object]", payload["scenario"])
     plan = cast("dict[str, object]", payload["plan"])
@@ -2251,15 +2195,6 @@ def render_markdown(report: PipelineReport) -> str:
         [
             "",
             f"- {table['note']}",
-            "",
-            "## Chequeo de unidades (#80)",
-            "",
-            f"- Sesion `{check['session']}` de `{check['sample_run']}`: `gross_pct = "
-            f"{check['gross_pct']}` ({check['gross_pct_units']}), `c_declared_pct = "
-            f"{check['c_declared_pct']}` ({check['c_declared_pct_units']}).",
-            f"- Resta del motor: **{cast('float', check['engine_subtraction']):.10f}**; resta "
-            f"declarada: **{cast('float', check['declared_subtraction']):.10f}**; discrepancia "
-            f"**{cast('float', check['discrepancy']):.10f}**.",
             "",
             "## Metricas netas",
             "",

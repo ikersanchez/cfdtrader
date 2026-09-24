@@ -24,15 +24,16 @@ Consume, no produce
 - El **stop** entra ya calculado (``stop_pct``): derivarlo de la volatilidad es una decision
   declarada de #60 y **no se inventa aqui**.
 
-Unidades (trampa #80)
----------------------
+Unidades (trampa #80, ya arreglada)
+-----------------------------------
 
 ``cost_pct`` y ``ev_declared_pct``/``ev_net_pct`` se publican en **porcentaje**, copiando el
 campo del ``CostBreakdown`` **sin conversion**: ``c_declared_pct`` vale ``0,0042`` y eso son
-``0,0042 %`` (su gemelo es ``c_fraction_of_notional``, ``0,000042``). El defecto de
-``backtest/engine.py:840`` —restar un porcentaje a una fraccion, 100x el coste— **no se
-replica ni se arregla aqui**: es **#80**. La convencion del modulo es una sola y esta escrita
-en cada ``Field``: los porcentajes van en puntos porcentuales como numero (``2`` son 2 %).
+``0,0042 %`` (su gemelo en fraccion es ``c_fraction_of_notional``, ``0,000042``). El motor
+(#13) ya usa la **fraccion** del nocional —la unidad que declara **#80**— y resta
+``c_fraction_of_notional``: el defecto de 100x esta corregido alli. Este modulo mantiene su
+unica convencion, escrita en cada ``Field``: los porcentajes van en puntos porcentuales como
+numero (``2`` son 2 %), y por eso copia ``c_declared_pct`` sin convertir.
 
 El *slippage* no se fusiona con nada
 ------------------------------------
@@ -118,7 +119,6 @@ Que **no** hace este modulo (fronteras declaradas, con su issue)
 - **No** es #39/#40: no persiste nada en el diario, no implementa la guardia completa de
   obsolescencia ni el contador del modo observacion.
 - **No** es #62: no mide el *slippage*; consume el estado que #11 le entrega.
-- **No** es #80: no arregla las unidades de ``pnl_declared_pct`` en el motor.
 - **No** es #83: no acumula el P&L diario, semanal ni mensual; lo recibe ya acumulado.
 - **No** es #84: no coloca la orden *bracket* en el broker.
 - **No** decide los umbrales ni el tamano de ``R``: son #59 y #60, con ``None`` = sin decidir.
@@ -475,8 +475,9 @@ LIMITATIONS: Final[tuple[dict[str, str], ...]] = (
         "id": "unidades_del_motor",
         "issue": "#80",
         "statement": (
-            "el defecto de unidades de pnl_declared_pct en backtest/engine.py:840 no se arregla "
-            "aqui (#80) y no se replica: este modulo tiene una sola convencion, el porcentaje"
+            "las unidades del motor las declara #80 (la **fraccion** del nocional) y alli quedan "
+            "corregidas; este modulo **no** las replica ni las convierte: tiene una sola "
+            "convencion, el porcentaje, y copia `c_declared_pct` tal cual"
         ),
     },
     {
@@ -500,7 +501,6 @@ FOLLOW_UPS: Final[tuple[str, ...]] = (
     "#59",
     "#60",
     "#62",
-    "#80",
     "#83",
     "#84",
 )

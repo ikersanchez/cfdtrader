@@ -989,6 +989,16 @@ def test_a26_the_units_are_the_ones_the_gate_consumes() -> None:
     assert "breakeven" not in keys
 
 
+def test_a3_the_fraction_has_a_single_named_source() -> None:
+    """A3: la fraccion del nocional se declara **una vez** (``c_fraction_of_notional``)."""
+    breakdown = _breakdown()
+    assert breakdown.c_fraction_of_notional == breakdown.c_declared_pct / Decimal(100)
+    assert breakdown.c_fraction_of_notional == Decimal("0.000042")
+    units = costs.report_payload()["units"]
+    assert units["c_pct_of_notional"] == "0.0042"
+    assert units["c_fraction_of_notional"] == "0.000042"
+
+
 def test_a27_the_report_has_every_required_block() -> None:
     payload = costs.report_payload()
     for key in (

@@ -682,6 +682,15 @@ class CostBreakdown(BaseModel):
         default=(), description="términos del total que hoy son null, con su motivo"
     )
 
+    @property
+    def c_fraction_of_notional(self) -> Decimal:
+        """El coste declarado como **fracción del nocional** (``c_declared_pct / 100``).
+
+        **Fuente única de la fracción** (A3): el motor (#13) y cualquier consumidor que publique
+        en tanto por uno la citan en vez de repetir la división entre 100.
+        """
+        return self.c_declared_pct / Decimal(100)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Escenarios declarados (se construyen con las constantes **importadas** de #8)
@@ -1254,7 +1263,7 @@ def _units_block(breakdown: CostBreakdown) -> dict[str, Any]:
         "fraction_of_notional": "fracción del nocional (pct / 100), la unidad de `R` y de `c`",
         "ratio_unit": RATIO_UNIT,
         "c_pct_of_notional": _num(breakdown.c_declared_pct),
-        "c_fraction_of_notional": _num(breakdown.c_declared_pct / Decimal(100)),
+        "c_fraction_of_notional": _num(breakdown.c_fraction_of_notional),
         "c_note": (
             "`c` son los costes declarados de esta operación; `c_total` añade el *slippage* "
             "**cuando está medido** y si no, queda `null`"

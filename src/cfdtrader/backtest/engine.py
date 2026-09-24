@@ -82,6 +82,18 @@ Dudas declaradas, no resueltas por cuenta propia: el ``R`` del *slippage* supues
 medición real del *slippage* (#62), el *gap* a través del *stop* y el diferencial por tramo
 (#66) y la sigma con información del futuro (#63).
 
+Unidades
+--------
+
+``gross_pct``, ``pnl_declared_pct`` y ``pnl_net_pct`` son **fracciones del nocional**
+(``exit/entry - 1``), no puntos porcentuales: es la misma unidad que ``R``. El coste declarado
+llega de #11 en **puntos porcentuales** (``c_declared_pct``: ``0,0042`` son ``0,0042 %``) y se
+convierte a fracción con la **única fuente con nombre** ``c_fraction_of_notional`` de
+``backtest.costs`` (``c_declared_pct / 100``), que el motor cita en vez de repetir la
+división. Quien publica en puntos porcentuales multiplica por 100 **en su propio consumidor**;
+la unidad del motor no cambia para contentar a un consumidor. El sufijo ``_pct`` de estos
+campos se conserva: renombrarlos es #91.
+
 Convención de tipos y aritmética
 --------------------------------
 
@@ -837,8 +849,10 @@ def _evaluate_session(
         overnight_reason=None,
         financing_cut=financing_cut,
     )
-    pnl_declared_pct = gross_pct - float(cost.c_declared_pct)
-    pnl_net_pct = None if cost.c_total_pct is None else gross_pct - float(cost.c_total_pct)
+    # La unidad del motor es la **fraccion** del nocional (ver «Unidades» arriba): el coste de
+    # #11 llega en % del nocional y se convierte con la unica fuente con nombre de ``costs``.
+    pnl_declared_pct = gross_pct - float(cost.c_fraction_of_notional)
+    pnl_net_pct = None if cost.c_total_pct is None else gross_pct - float(cost.c_total_pct) / 100
     return _outcome(
         index=index,
         fold_index=fold_index,

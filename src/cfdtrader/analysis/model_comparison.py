@@ -15,8 +15,9 @@ registro y la correccion por intentos (`analysis.experiment_log`, #16). El plan,
 los bins y el coste se **importan**: el payload los publica, no los redeclara (A3).
 
 Las series por sesion salen del **motor** (``run_walk_forward``, como en #24): heredan su
-convencion, incluido el desajuste de unidades de #80, que se publica medido en su propio
-bloque y **no** se arregla aqui (arreglarlo es #80, y `backtest/engine.py` no se toca).
+convencion de unidades, que declara **#80** (fraccion del nocional, ``exit/entry - 1``). El
+informe lo **mide** en su bloque ``unit_bug_80`` (constante por operacion ``c_declared_pct / 100``)
+y ya no arrastra el desajuste de 100x: el motor resta la fraccion correcta.
 
 Determinismo (A13): el ``run_sha256`` sale de la configuracion de #16, el ``model_sha256`` y
 el ``report_sha256`` del canonicamente hasheable de #13, y el modulo **no consulta el reloj**
@@ -202,18 +203,20 @@ PBO_BLOCKS: Final[int] = 10
 #:
 #: No se copian al informe: se **verifican** contra la reconstruccion (A7). Una discrepancia
 #: mayor que :data:`FROZEN_TOLERANCE` es error tipado, nunca una cifra publicada en silencio.
+#: ``pnl_declared_sum`` se **volvio a medir** con la unidad corregida por #80 (fraccion del
+#: nocional): antes restaba 100x el coste declarado.
 FROZEN_BASELINE: Final[dict[str, dict[str, float]]] = {
     "raw": {
         "n_traded": 356,
         "brier_score": 0.2511418117147099,
         "log_loss": 0.6953995223105118,
-        "pnl_declared_sum": -1.4594798813611285,
+        "pnl_declared_sum": 0.020768118638871198,
     },
     "calibrated": {
         "n_traded": 404,
         "brier_score": 0.2548043292843032,
         "log_loss": 0.7672355544413263,
-        "pnl_declared_sum": -1.663373389040144,
+        "pnl_declared_sum": 0.016458610959855593,
     },
 }
 
@@ -248,7 +251,7 @@ NET_METRICS_REASON: Final[str] = (
     "`measured` para poder publicar metricas netas esta **prohibido**"
 )
 
-#: El bloque de #80: el desajuste de unidades del motor, medido y **no** arreglado aqui.
+#: El bloque de #80: las unidades del motor, **arregladas y medidas** aqui (A12).
 UNIT_BUG_ISSUE: Final[str] = "#80"
 
 #: Que **no** hace este modulo, legible por maquina. Cada frontera con su issue.
@@ -261,16 +264,6 @@ REPORT_DOES_NOT_DO: Final[tuple[dict[str, str], ...]] = (
             "LightGBM con la constante `LIGHTGBM_HYPERPARAMETERS` y no acepta banderas de "
             "ajuste. Otra variante exige una entrada nueva en `runs/` con otro `variant_id`, y "
             "la busqueda es #82"
-        ),
-    },
-    {
-        "id": "no_arregla_el_motor",
-        "issue": "#80",
-        "statement": (
-            "**si** encuentra el desajuste de unidades de `backtest/engine.py` (`pnl_declared_pct` "
-            "resta un porcentaje a una fraccion) y lo publica **medido** en `unit_bug_80`, con su "
-            "magnitud y su efecto; **no** lo arregla: `backtest/engine.py` y `backtest/costs.py` "
-            "no se tocan"
         ),
     },
     {
@@ -323,14 +316,6 @@ FOLLOW_UPS: Final[tuple[dict[str, str], ...]] = (
         "why": (
             "la familia LightGBM se ajusta con una constante a priori; moverla exige una entrada "
             "nueva en `runs/` y un presupuesto declarado, que es #82"
-        ),
-    },
-    {
-        "issue": "#80",
-        "topic": "desajuste de unidades de `pnl_declared_pct` en el motor",
-        "why": (
-            "el retorno declarado resta 100x el coste declarado; el orden entre variantes y las "
-            "metricas de probabilidad no cambian, el Sharpe si"
         ),
     },
     {
@@ -1004,8 +989,8 @@ def _matrix_block(evaluated: Sequence[Variant], *, registry: Registry) -> dict[s
         ),
         "note": (
             "cada serie sale del **motor** (`run_walk_forward`, como en #24): hereda su "
-            "convencion, incluido el desajuste de unidades de #80, que se publica en "
-            "`unit_bug_80` y no se arregla aqui"
+            "convencion de unidades (#80: la **fraccion** del nocional), que se mide en "
+            "`unit_bug_80`"
         ),
     }
 
@@ -1122,11 +1107,13 @@ def _gate_block(
 # El bloque de #80 y el bloque de coste declarado (A12)
 # ─────────────────────────────────────────────────────────────────────────────
 def _unit_bug_block(variant: Variant | None) -> dict[str, object]:
-    """El desajuste de unidades del motor, **medido** en esta corrida (A12).
+    """Las unidades del P&L declarado del motor, **arregladas y medidas** aqui (A12).
 
-    `engine.py` resta `c_declared_pct` (porcentaje del nocional) a `gross_pct` (fraccion): el
-    termino que se resta es 100x el correcto. La constante por operacion se **mide** aqui
-    (``gross - declared``) y se compara con el termino correcto (``c_declared_pct / 100``).
+    #80 declaro la unidad del motor: la **fraccion** del nocional. El motor resta
+    `c_fraction_of_notional` (`c_declared_pct / 100`) a `gross_pct`, los dos en fraccion, asi que
+    el termino restado es el correcto. La constante por operacion se **mide** aqui
+    (``gross - declared``) y se compara con `c_declared_pct / 100`: hoy coinciden y su diferencia
+    es 0.
     """
     traded = (
         [
@@ -1146,11 +1133,12 @@ def _unit_bug_block(variant: Variant | None) -> dict[str, object]:
             continue
         differences.append(float(cast("float", session.gross_pct)) - float(declared))
         if session.cost is not None:
-            correct.append(float(session.cost.c_declared_pct) / 100.0)
+            correct.append(float(session.cost.c_fraction_of_notional))
     observed = math.fsum(differences) / len(differences) if differences else None
     correct_term = math.fsum(correct) / len(correct) if correct else None
     return {
         "issue": UNIT_BUG_ISSUE,
+        "state": "fixed_and_measured",
         "observed_on": None if variant is None else variant.run_sha256,
         "n_operations": len(traded),
         "observed_per_operation": observed,
@@ -1159,30 +1147,28 @@ def _unit_bug_block(variant: Variant | None) -> dict[str, object]:
             None if observed is None or correct_term is None else observed - correct_term
         ),
         "constants": {
-            "c_declared_pct": "0.0042 (% del nocional, lo que el motor resta)",
-            "c_fraction_of_notional": "0.000042 (fraccion, el termino correcto)",
-            "identity": "0.0042 - 0.000042 = 0.004158",
+            "c_declared_pct": "0.0042 (% del nocional, el coste declarado)",
+            "c_fraction_of_notional": "0.000042 (fraccion, la unidad del motor)",
+            "identity": "c_declared_pct / 100 = 0.0042 / 100 = 0.000042 (fraccion correcta)",
         },
+        "unit": "fraccion del nocional (`exit/entry - 1`), la unidad de `gross_pct` y de `R`",
         "statement": (
-            "`backtest/engine.py` publica `pnl_declared_pct = gross_pct - c_declared_pct`, con "
-            "`gross_pct = close / open - 1` (**fraccion**) y `c_declared_pct` en **porcentaje** "
-            "del nocional: se resta 100x el coste declarado, una constante por operacion"
+            "`backtest/engine.py` publica `pnl_declared_pct = gross_pct - c_fraction_of_notional`, "
+            "con `gross_pct = close / open - 1` y `c_fraction_of_notional = c_declared_pct / 100` "
+            "(**fraccion**): la unidad la declara #80 y el motor resta el termino correcto"
         ),
         "affects": (
             "la media y la suma de `pnl_declared_pct` de **todas** las filas que operan y, con "
-            "ellas, el Sharpe deflactado: el desplazamiento es constante y del mismo signo en "
-            "todas las variantes"
+            "ellas, el Sharpe: ahora usan el coste declarado en la unidad correcta"
         ),
         "does_not_affect": (
-            "el **orden** entre variantes (todas restan la misma constante), las metricas de "
-            "**probabilidad** (Brier, log-loss, curva) ni el PBO, que reordena columnas de la "
-            "misma matriz desplazada"
+            "el **orden** entre variantes ni las metricas de **probabilidad** (Brier, log-loss, "
+            "curva) ni el PBO, que no leen el P&L: el bloque y el orden se publican medidos"
         ),
-        "fixed_here": False,
-        "follow_up": [UNIT_BUG_ISSUE],
+        "resolution": "arreglado en #80: `backtest/engine.py` cita `c_fraction_of_notional`",
         "note": (
-            "este informe **no** arregla el motor: `backtest/engine.py` y `backtest/costs.py` no "
-            "se tocan (A12). El bloque esta medido en esta corrida, no copiado"
+            "el bloque esta **medido** en esta corrida, no copiado: `observed_per_operation` y "
+            "`correct_term_per_operation` coinciden y su diferencia es 0"
         ),
     }
 
@@ -1692,8 +1678,8 @@ LIMITATIONS: Final[tuple[str, ...]] = (
     "la comparacion es en el espacio de **probabilidad** y de coste **declarado**: el "
     "*slippage* de #64 es un supuesto (`pnl_net_pct` nulo en el 100 % de las operaciones), asi "
     "que ninguna cifra economica es una validacion (#62, #60)",
-    "el `pnl_declared_pct` con el que se mide el Sharpe arrastra el desajuste de unidades de "
-    "#80: el **orden** entre variantes y las metricas de probabilidad no cambian, el Sharpe si",
+    "las series de retorno salen del motor en la **fraccion** del nocional que declara #80: el "
+    "Sharpe se mide sobre la serie corregida, con el coste declarado en su unidad",
     "la direccion es la **larga unica** (`y = 1{ret_long > 0}`): la pata corta es #78",
     "la familia LightGBM se ajusta con una constante **a priori** (`LIGHTGBM_HYPERPARAMETERS`) y "
     "sin busqueda: mejorarla exige un presupuesto declarado y es #82",
@@ -1888,18 +1874,19 @@ def render_markdown(report: ModelComparisonReport) -> str:
             f"*slippage* `{cast('dict[str, object]', cost['slippage'])['state']}`.",
             f"- Metricas netas: `{net['state']}` — {net['reason']}",
             "",
-            "## Desajuste de unidades del motor (#80, medido y **no** arreglado)",
+            "## Unidades del motor (#80, arreglado y medido)",
             "",
             f"- Operaciones medidas: **{unit_bug['n_operations']}** (`{unit_bug['observed_on']}`).",
             f"- Constante observada por operacion: "
             f"`{_number(unit_bug['observed_per_operation'])}`; termino correcto: "
             f"`{_number(unit_bug['correct_term_per_operation'])}`; diferencia: "
             f"`{_number(unit_bug['difference_per_operation'])}`.",
+            f"- Unidad declarada: {unit_bug['unit']}.",
             f"- Identidad declarada: {constants['identity']}.",
             f"- {unit_bug['statement']}",
             f"- Afecta a: {unit_bug['affects']}",
             f"- **No** afecta a: {unit_bug['does_not_affect']}",
-            f"- Seguimiento: {', '.join(cast('list[str]', unit_bug['follow_up']))}.",
+            f"- {unit_bug['resolution']}.",
             "",
             "## Modelo LightGBM ajustado",
             "",

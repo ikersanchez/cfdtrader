@@ -839,7 +839,11 @@ def test_a16_the_cost_is_identical_in_both_legs() -> None:
         assert cost.spread_pct == Decimal("0.0042")
         assert outcome.exit_reason == "session_close"
         assert outcome.gross_pct == pytest.approx(0.0)
-        assert outcome.pnl_declared_pct == pytest.approx(-float(cost.c_declared_pct), abs=1e-12)
+        # #80: la unidad del motor es la **fraccion** del nocional. El coste declarado
+        # (`c_declared_pct` = 0.0042 %) se resta convertido con `c_fraction_of_notional`
+        # (0.000042), nunca 100x.
+        assert outcome.pnl_declared_pct == pytest.approx(-0.000042, abs=1e-12)
+        assert outcome.pnl_declared_pct == pytest.approx(-float(cost.c_fraction_of_notional))
         expected = cost_breakdown(
             model=DECLARED,
             slippage=ASSUMED,
@@ -898,9 +902,13 @@ def test_a18_the_three_slippage_states_are_not_merged() -> None:
     assert cost is not None
     assert cost.c_total_pct is not None
     assert outcome.pnl_net_pct is not None
+    # #80: el total tambien se convierte a fraccion antes de restarlo (`gross - total/100`);
+    # `c_total_pct` = 0.0062 % (0.0042 declarado + 0.002 medido) -> 0.000062 en fraccion.
+    assert float(cost.c_total_pct) == pytest.approx(0.0062)
     assert outcome.pnl_net_pct == pytest.approx(
-        cast("float", outcome.gross_pct) - float(cost.c_total_pct)
+        cast("float", outcome.gross_pct) - float(cost.c_total_pct) / 100
     )
+    assert outcome.pnl_net_pct == pytest.approx(cast("float", outcome.gross_pct) - 0.000062)
     assert outcome.pnl_net_reason is None
     assert block(result.report, "slippage")["state"] == MeasureState.MEASURED.value
 

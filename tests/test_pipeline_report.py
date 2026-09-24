@@ -118,9 +118,9 @@ WRITTEN: Final[frozenset[str]] = frozenset(
         "tests/test_pipeline_report.py",
     }
 )
+#: Los ficheros que la entrega de #80 **si** toca (motor, gate) se han retirado de
+#: ``FROZEN``: este modulo no los toca, pero la entrega transversal de #80 si (#80 A6).
 FROZEN: Final[tuple[str, ...]] = (
-    "src/cfdtrader/decision/gate.py",
-    "src/cfdtrader/backtest/engine.py",
     "src/cfdtrader/backtest/baselines.py",
     "src/cfdtrader/backtest/metrics.py",
     "src/cfdtrader/models/baseline.py",
@@ -547,9 +547,13 @@ def test_a3_identical_across_fresh_processes(
 
 @needs_store
 def test_a3_hash_is_fixed_with_prefix(real_report: PipelineReport) -> None:
-    """A3: el test **fija** el digest, con su prefijo (un sha256 desnudo lo bloquea el hook)."""
+    """A3: el test **fija** el digest, con su prefijo (un sha256 desnudo lo bloquea el hook).
+
+    #80 retiro el bloque `check` del payload, asi que el digest de la corrida real cambio: se
+    vuelve a fijar con el texto ya sin la narrativa del defecto.
+    """
     assert real_report.report_sha256 == (
-        "sha256:c0ee6b09013ed02421a5a570cbc8d451cb645a1aecfcbd654b8e5f6fe9b56bae"
+        "sha256:bc0fb5a8d2fce48aa427727d00702e8fba002d0ed46ce908cd5607a97f7688f3"
     )
 
 
@@ -961,22 +965,18 @@ def test_a10_ast_does_not_read_the_engine_declared_pnl() -> None:
 
 
 @needs_store
-def test_a10_check_block_measures_the_hundredfold_discrepancy(
-    real_report: PipelineReport,
-) -> None:
-    """A10: el bloque `check` publica `gross_pct`, `c_declared_pct` y la discrepancia medida."""
-    check = as_map(at(real_report.payload, "check"))
-    assert check["issue"] == "#80"
-    gross = as_float(check["gross_pct"])
-    cost = float(as_str(check["c_declared_pct"]))
-    assert as_float(check["engine_subtraction"]) == pytest.approx(gross - cost)
-    assert as_float(check["declared_subtraction"]) == pytest.approx(100.0 * gross - cost)
-    assert as_float(check["discrepancy"]) == pytest.approx(99.0 * gross)
+def test_a10_the_defect_narrative_is_gone(real_report: PipelineReport) -> None:
+    """A5: el bloque `check` de #80, su seccion Markdown y su seguimiento desaparecen."""
+    assert "check" not in real_report.payload
     issues = [as_str(entry["issue"]) for entry in as_objects(at(real_report.payload, "follow_ups"))]
-    assert issues[0] == "#80"
-    assert as_str(check["session"]) in {
-        session.isoformat() for session in real_report.test_sessions
-    }
+    assert "#80" not in issues
+    markdown = render_markdown(real_report)
+    assert "Chequeo de unidades" not in markdown
+    assert "#80" not in markdown
+    # El AST sigue sin leer el P&L declarado del motor: la derivacion propia no cambia.
+    for node in ast.walk(TREE):
+        if isinstance(node, ast.Attribute):
+            assert node.attr != "pnl_declared_pct"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1320,7 +1320,6 @@ _metric_statistic = pipeline_report._metric_statistic  # pyright: ignore[reportP
 _add_excess_metric = pipeline_report._add_excess_metric  # pyright: ignore[reportPrivateUsage]
 _counts_by = pipeline_report._counts_by  # pyright: ignore[reportPrivateUsage]
 _rule_11_payload = pipeline_report._rule_11_payload  # pyright: ignore[reportPrivateUsage]
-_check_payload = pipeline_report._check_payload  # pyright: ignore[reportPrivateUsage]
 
 #: Sesion de las piezas de prueba: el modulo nunca lee el reloj, tampoco aqui.
 SESSION: Final[date] = date(2026, 9, 23)
@@ -1776,15 +1775,6 @@ def test_a14_guard_rule_11_band_verdicts() -> None:
     assert as_map(published[ARM_ESCENARIO])["share_interval"] is None
 
 
-def test_a14_guard_check_payload_needs_a_traded_sample() -> None:
-    """A10: `_check_payload` (l.1889-1890) exige una sesion operada en `always_long`."""
-    with pytest.raises(PipelineReportError, match="always_long"):
-        _check_payload(
-            runs={"always_long": _run(traded=0, no_trade=2)},
-            cost=declared_cost_breakdown(),
-        )
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # A15 · Nada congelado se toca
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1868,7 +1858,6 @@ def test_support_markdown_covers_the_sections(real_report: PipelineReport) -> No
         "## Mapeo temporal declarado",
         "## Los tres brazos",
         "## Tabla unica (seis baselines y los tres listones)",
-        "## Chequeo de unidades (#80)",
         "## Metricas netas",
         "## Limitaciones y seguimientos",
     ):
