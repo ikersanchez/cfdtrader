@@ -529,6 +529,11 @@ def test_a2_write_false_and_missing_as_of_write_nothing(tmp_path: Path) -> None:
     assert pipeline_report._parse_as_of("2026-09-23T22:00:00+00:00") == NOW  # pyright: ignore[reportPrivateUsage]
 
 
+#: Operadas del artefacto previo **sintetico** del bloque `regeneration`: no es el 31 de S1, es
+#: un valor propio del caso para no fijar ningun recuento regenerable (#98).
+SYNTHETIC_PREVIOUS_TRADED: Final[int] = 7
+
+
 def test_previous_artifact_is_keyword_only_and_the_cli_declares_the_flag() -> None:
     """A5/#98: `analyse` acepta `previous_artifact` (keyword-only, por defecto `None`).
 
@@ -558,7 +563,7 @@ def test_previous_artifact_block_is_top_level_and_measures_the_delta(tmp_path: P
                 "arms": {
                     ARM_OFICIAL: {"traded": 0},
                     ARM_ESCENARIO: {"traded": 0},
-                    ARM_COSTE_DECLARADO: {"traded": 31},
+                    ARM_COSTE_DECLARADO: {"traded": SYNTHETIC_PREVIOUS_TRADED},
                 }
             }
         ),
@@ -585,8 +590,11 @@ def test_previous_artifact_block_is_top_level_and_measures_the_delta(tmp_path: P
     rows = {as_str(row["arm"]): row for row in as_objects(block["rows"])}
     assert set(rows) == set(ARM_NAMES)
     declared = rows[ARM_COSTE_DECLARADO]
-    assert as_int(declared["traded_before"]) == 31
+    assert as_int(declared["traded_before"]) == SYNTHETIC_PREVIOUS_TRADED
     assert as_int(declared["traded_after"]) == report.arm(ARM_COSTE_DECLARADO).run.traded
+    assert as_int(declared["delta_traded"]) == (
+        report.arm(ARM_COSTE_DECLARADO).run.traded - SYNTHETIC_PREVIOUS_TRADED
+    )
     assert declared["previous_published_direction_counts"] is False
     assert as_map(declared["direction_counts"]) == as_map(
         row_block(report, ARM_COSTE_DECLARADO)["direction_counts"]
@@ -859,7 +867,7 @@ def test_favourable_probability_follows_the_decider_direction(
     assert favourable(_gate_output(probability=0.1)) == Decimal("0.9")
 
 
-def test_favourable_probability_ast_does_not_read_the_gate_direction() -> None:
+def test_favourable_ast_does_not_read_the_gate_direction() -> None:
     """A3/#98: el AST de `_favourable_probability` no lee `output.direction`.
 
     Los unicos nombres que usa son `prob_up_calibrated` (la probabilidad) y
@@ -1956,10 +1964,10 @@ def test_a14_guard_rule_11_band_verdicts() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # #92 · Tasa de acierto por operacion junto a la de #28 (que es por sesion)
 # ─────────────────────────────────────────────────────────────────────────────
-# #98: aqui vivian `PER_TRADE_ESTIMATE`/`PER_TRADE_LOWER`/`PER_TRADE_UPPER`, los goldens
-# literales de la corrida regenerable de S1. Al corregir `_favourable_probability` cambian, y un
-# literal regenerable convierte cualquier tarea posterior en un fallo de #92: se re-deriva del
-# run (estimacion y limites con la semilla publicada), nunca se sustituye por otro literal.
+# #98: aqui vivian los tres goldens literales de la corrida regenerable de S1. Al corregir
+# `_favourable_probability` cambian, y un literal regenerable convierte cualquier tarea posterior
+# en un fallo de #92: se re-deriva del run (estimacion y limites con la semilla publicada), nunca
+# se sustituye por otro literal.
 
 
 def traded_series(run: BacktestRun) -> tuple[float, ...]:
