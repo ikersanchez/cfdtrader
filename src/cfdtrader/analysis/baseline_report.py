@@ -46,7 +46,7 @@ from typing import Final, cast
 
 from loguru import logger
 
-from cfdtrader.analysis import backtest_report
+from cfdtrader.analysis import backtest_report, regeneration_delta
 from cfdtrader.analysis.backtest_report import (
     BaselineOutcome,
     _baseline_row,  # pyright: ignore[reportPrivateUsage]
@@ -1038,6 +1038,48 @@ def _limits_block() -> dict[str, object]:
     }
 
 
+def _declared_sum(row: Mapping[str, object]) -> float | None:
+    """La `sum` de la suma declarada de una fila, o ``None`` si no se pudo medir."""
+    block = row.get("pnl_declared_pct")
+    if not isinstance(block, dict):
+        return None
+    value = cast("dict[str, object]", block).get("sum")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _regeneration_block(
+    previous: Mapping[str, object],
+    comparison: Mapping[str, object],
+    *,
+    name: str,
+) -> dict[str, object]:
+    """La diferencia declarada frente al artefacto previo, fila a fila (#90).
+
+    El motor corregido por #80 resta el coste declarado en **fraccion** (`0.000042`), no en
+    porcentaje (`0.0042`), asi que cada fila que opera gana `traded x 0.004158` de suma
+    declarada. El bloque **mide** esa diferencia contra el previo; no la copia.
+    """
+    previous_comparison = previous.get("comparison")
+    previous_rows = (
+        cast("list[Mapping[str, object]]", previous_comparison["rows"])
+        if isinstance(previous_comparison, Mapping) and "rows" in previous_comparison
+        else []
+    )
+    current_rows = cast("list[Mapping[str, object]]", comparison["rows"])
+    deltas = regeneration_delta.declared_row_deltas(
+        previous_rows,
+        current_rows,
+        label=lambda row: str(row["strategy"]),
+        summary=_declared_sum,
+        traded=lambda row: int(cast("int", row["traded"])),
+    )
+    return regeneration_delta.declared_deltas_block(
+        previous_name=name, rows=deltas, subject="baseline sobre coste declarado"
+    )
+
+
 def _payload(
     *,
     as_of: datetime,
@@ -1051,6 +1093,8 @@ def _payload(
     model_digest: str,
     registry: Mapping[str, object],
     declared_cost: Mapping[str, object],
+    previous: Mapping[str, object] | None = None,
+    previous_name: str | None = None,
 ) -> dict[str, object]:
     """El payload canonico del informe: tipos JSON puros y determinista (A8, A13)."""
     raw_series, calibrated_series, outcomes, references = probability_series
@@ -1060,6 +1104,13 @@ def _payload(
         outcomes=outcomes,
         references=references,
         folds=model.folds,
+    )
+    comparison = _comparison_block(
+        model_run=model_run,
+        baselines=baselines,
+        universe=universe,
+        plan=plan,
+        probability_block=probability_block,
     )
     raw: dict[str, object] = {
         "analysis": "cfdtrader.analysis.baseline_report",
@@ -1132,13 +1183,7 @@ def _payload(
         "registry": dict(registry),
         "model_sha256": model_digest,
         "model_hash_format": MODEL_HASH_FORMAT,
-        "comparison": _comparison_block(
-            model_run=model_run,
-            baselines=baselines,
-            universe=universe,
-            plan=plan,
-            probability_block=probability_block,
-        ),
+        "comparison": comparison,
         "net_metrics": {
             "state": "not_computable",
             "reason": NET_METRICS_REASON,
@@ -1155,6 +1200,8 @@ def _payload(
         "does_not_do": [dict(item) for item in REPORT_DOES_NOT_DO],
         "follow_ups": [dict(item) for item in FOLLOW_UPS],
     }
+    if previous is not None and previous_name is not None:
+        raw["regeneration"] = _regeneration_block(previous, comparison, name=previous_name)
     return raw
 
 
@@ -1409,6 +1456,22 @@ def render_markdown(report: BaselineReport) -> str:
             "",
             f"- {comparison['note']}",
             "",
+        ]
+    )
+    regeneration = payload.get("regeneration")
+    if isinstance(regeneration, dict):
+        lines.extend(
+            regeneration_delta.render_declared_section(
+                cast("Mapping[str, object]", regeneration),
+                intro=(
+                    "Este informe se ha **regenerado** con el motor corregido por #80 y declara, "
+                    "fila a fila, la suma declarada previa, la nueva y el delta por operacion."
+                ),
+            )
+        )
+    lines.extend(
+        [
+            "",
             "## Limitaciones",
             "",
         ]
@@ -1482,13 +1545,18 @@ def analyse(
     runs_root: Path,
     as_of: datetime,
     write: bool = True,
+    previous_artifact: Path | None = None,
 ) -> BaselineReport:
     """Entrena, evalua, registra y (por defecto) escribe el informe del baseline (A13).
 
     ``as_of`` es **obligatorio** y es el unico instante de la corrida: ninguna ruta consulta el
     reloj. ``write=False`` no escribe **nada** (ni el informe ni la carpeta del registro).
+    ``previous_artifact`` es la ruta del informe anterior: cuando se declara, el payload publica
+    el bloque `regeneration` con la diferencia medida fila a fila (#90).
     """
     moment = _as_utc(as_of)
+    previous = regeneration_delta.load_previous(previous_artifact)
+    previous_name = regeneration_delta.artifact_name(previous_artifact)
     history = backtest_report.load_history(store, series_id=backtest_report.SERIES_ID)
     calendar = load_calendar(years=_calendar_years(history.daily))
     universe = backtest_report.build_inputs(history, calendar=calendar)
@@ -1568,6 +1636,8 @@ def analyse(
             record, registry, model_digest=model_digest, model_path=model_path
         ),
         declared_cost=declared_cost,
+        previous=previous,
+        previous_name=previous_name,
     )
     report = BaselineReport(
         as_of=moment,
@@ -1660,6 +1730,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="instante declarado ISO-8601, obligatorio para escribir (el modulo no lee el reloj)",
     )
+    parser.add_argument(
+        "--previous-artifact",
+        type=Path,
+        default=None,
+        help=(
+            "ruta del informe anterior: si se declara, el payload publica la diferencia de la "
+            "suma declarada fila a fila (#90)"
+        ),
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -1683,12 +1762,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             runs_root=runs_root,
             as_of=moment,
             write=True,
+            previous_artifact=cast("Path | None", args.previous_artifact),
         )
     except (
         BaselineReportError,
         FeatureFrameError,
         ExperimentLogError,
         backtest_report.BacktestReportError,
+        regeneration_delta.RegenerationError,
     ) as error:
         print(f"no se puede emitir el informe del baseline: {error}", file=sys.stderr)
         return 2

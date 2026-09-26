@@ -43,7 +43,7 @@ import numpy as np
 import polars as pl
 from loguru import logger
 
-from cfdtrader.analysis import backtest_report
+from cfdtrader.analysis import backtest_report, regeneration_delta
 from cfdtrader.analysis.backtest_report import (
     PHASE1_PLAN,
     SERIES_ID,
@@ -225,9 +225,11 @@ FROZEN_BASELINE: Final[dict[str, dict[str, float]]] = {
 #: orden; el valor medido coincide en las cuatro cifras de las dos series.
 FROZEN_TOLERANCE: Final[float] = 1e-9
 
-#: Formato estable del ``report_sha256`` (A13).
+#: Formato estable del ``report_sha256`` (A13). El prefijo `sha256:` viaja dentro del valor:
+#: un digest desnudo lo bloquea `detect-secrets` (misma convencion que #93).
 REPORT_HASH_FORMAT: Final[str] = (
-    "sha256(UTF-8) de cfdtrader.backtest.engine.canonical_text(payload), **sin** la clave "
+    "`sha256:<64 hex>` del sha256(UTF-8) de cfdtrader.backtest.engine.canonical_text(payload), "
+    "**sin** la clave "
     "report_sha256 (un informe no se hashea a si mismo). El payload es JSON puro y no lleva "
     "ninguna ruta absoluta: el directorio del registro se publica relativo (`runs/<sha>`) y de "
     "`--settings` solo viaja la raiz declarada en forma relativa, asi que el hash no depende de "
@@ -394,6 +396,11 @@ def _as_utc(value: datetime) -> datetime:
 def _digest(payload: Mapping[str, object]) -> str:
     """sha256 del texto canonico de #13: la **unica** funcion de hash que se usa."""
     return hashlib.sha256(canonical_text(payload).encode("utf-8")).hexdigest()
+
+
+def _report_digest(payload: Mapping[str, object]) -> str:
+    """El `report_sha256` publicado: el digest canonico **con** el prefijo `sha256:` (A13)."""
+    return regeneration_delta.HASH_PREFIX + _digest(payload)
 
 
 def _json_text(document: Mapping[str, object]) -> str:
@@ -1490,6 +1497,49 @@ def _calibration_parity_block(evaluated: Sequence[Variant]) -> dict[str, object]
     }
 
 
+def _comparison_row_label(row: Mapping[str, object]) -> str:
+    """La etiqueta estable de una fila de la tabla: variante y si esta calibrada."""
+    kind = "calibrada" if row["calibrated"] else "cruda"
+    return f"{row['variant_id']} ({kind})"
+
+
+def _regeneration_block(
+    previous: Mapping[str, object],
+    comparison: Mapping[str, object],
+    *,
+    name: str,
+) -> dict[str, object]:
+    """La diferencia declarada frente al artefacto previo, fila a fila (#90).
+
+    El motor corregido por #80 resta el coste declarado en **fraccion** (`0.000042`), no en
+    porcentaje (`0.0042`): cada fila que opera gana `n_traded x 0.004158` de suma declarada.
+    """
+    previous_comparison = previous.get("comparison")
+    previous_rows = (
+        cast("list[Mapping[str, object]]", previous_comparison["rows"])
+        if isinstance(previous_comparison, Mapping) and "rows" in previous_comparison
+        else []
+    )
+    current_rows = cast("list[Mapping[str, object]]", comparison["rows"])
+
+    def _declared_sum(row: Mapping[str, object]) -> float | None:
+        value = row.get("pnl_declared_pct_sum")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return float(value)
+
+    deltas = regeneration_delta.declared_row_deltas(
+        previous_rows,
+        current_rows,
+        label=_comparison_row_label,
+        summary=_declared_sum,
+        traded=lambda row: int(cast("int", row["n_traded"])),
+    )
+    return regeneration_delta.declared_deltas_block(
+        previous_name=name, rows=deltas, subject="comparacion de modelos sobre coste declarado"
+    )
+
+
 def _payload(
     *,
     as_of: datetime,
@@ -1505,6 +1555,8 @@ def _payload(
     selection: Mapping[str, object],
     cost_model: CostModel,
     slippage: SlippageParameter,
+    previous: Mapping[str, object] | None = None,
+    previous_name: str | None = None,
 ) -> dict[str, object]:
     """El payload canonico del informe: tipos JSON puros y determinista (A13)."""
     evaluated = _evaluated(candidates)
@@ -1521,6 +1573,7 @@ def _payload(
         next(iter(evaluated), None),
     )
     unit_bug = _unit_bug_block(unit_bug_variant)
+    comparison = _comparison_block(evaluated)
     library = cast("Mapping[str, object]", lightgbm.to_payload()["library"])
     raw: dict[str, object] = {
         "analysis": "cfdtrader.analysis.model_comparison",
@@ -1629,7 +1682,7 @@ def _payload(
             },
         },
         "selection": dict(selection),
-        "comparison": _comparison_block(evaluated),
+        "comparison": comparison,
         "declared_cost": _declared_cost_block(evaluated, model=cost_model),
         "net_metrics": {
             "state": "not_computable",
@@ -1670,6 +1723,8 @@ def _payload(
         "does_not_do": [dict(item) for item in REPORT_DOES_NOT_DO],
         "follow_ups": [dict(item) for item in FOLLOW_UPS],
     }
+    if previous is not None and previous_name is not None:
+        raw["regeneration"] = _regeneration_block(previous, comparison, name=previous_name)
     return raw
 
 
@@ -1810,6 +1865,25 @@ def render_markdown(report: ModelComparisonReport) -> str:
         [
             "",
             f"- {comparison['note']}",
+        ]
+    )
+    regeneration = payload.get("regeneration")
+    if isinstance(regeneration, dict):
+        lines.extend(
+            [
+                "",
+                *regeneration_delta.render_declared_section(
+                    cast("Mapping[str, object]", regeneration),
+                    intro=(
+                        "Este informe se ha **regenerado** con el motor corregido por #80 y "
+                        "declara, fila a fila, la suma declarada previa, la nueva y el delta por "
+                        "operacion. La tabla ya **no** resta `0.0042`: resta `0.000042`."
+                    ),
+                ),
+            ]
+        )
+    lines.extend(
+        [
             "",
             "## Regla de seleccion (pre-declarada)",
             "",
@@ -2014,13 +2088,18 @@ def analyse(
     settings: Settings,
     as_of: datetime,
     write: bool = True,
+    previous_artifact: Path | None = None,
 ) -> ModelComparisonReport:
     """Ajusta LightGBM, reconstruye la linea base, registra y escribe el informe (A2, A13).
 
     ``as_of`` es **obligatorio** y es el unico instante de la corrida: ninguna ruta consulta el
     reloj. ``write=False`` no escribe **nada** (ni el informe ni las carpetas del registro).
+    ``previous_artifact`` es la ruta del informe anterior: cuando se declara, el payload publica
+    el bloque `regeneration` con la diferencia medida fila a fila (#90).
     """
     moment = _as_utc(as_of)
+    previous = regeneration_delta.load_previous(previous_artifact)
+    previous_name = regeneration_delta.artifact_name(previous_artifact)
     history = load_history(store, series_id=SERIES_ID)
     calendar = load_calendar(years=_calendar_years(history.daily))
     universe = build_inputs(history, calendar=calendar)
@@ -2131,12 +2210,14 @@ def analyse(
         selection=selection,
         cost_model=cost_model,
         slippage=slippage,
+        previous=previous,
+        previous_name=previous_name,
     )
     report = ModelComparisonReport(
         as_of=moment,
         report_date=moment.date(),
         payload=payload,
-        report_sha256=_digest(payload),
+        report_sha256=_report_digest(payload),
         universe=universe,
         features=frame,
         split_plan=plan,
@@ -2204,6 +2285,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="instante declarado ISO-8601, obligatorio para escribir (el modulo no lee el reloj)",
     )
+    parser.add_argument(
+        "--previous-artifact",
+        type=Path,
+        default=None,
+        help=(
+            "ruta del informe anterior: si se declara, el payload publica la diferencia de la "
+            "suma declarada fila a fila (#90)"
+        ),
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -2228,12 +2318,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             settings=settings,
             as_of=moment,
             write=True,
+            previous_artifact=cast("Path | None", args.previous_artifact),
         )
     except (
         ModelComparisonError,
         FeatureFrameError,
         ExperimentLogError,
         backtest_report.BacktestReportError,
+        regeneration_delta.RegenerationError,
     ) as error:
         print(f"no se puede emitir la comparacion de modelos: {error}", file=sys.stderr)
         return 2

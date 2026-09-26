@@ -74,7 +74,7 @@ from typing import Final, cast
 
 from loguru import logger
 
-from cfdtrader.analysis import pipeline_report
+from cfdtrader.analysis import pipeline_report, regeneration_delta
 from cfdtrader.analysis.backtest_report import BacktestReportError
 from cfdtrader.analysis.cost_audit import slippage_assumption_block
 from cfdtrader.analysis.phase0_report import HalfResult
@@ -1113,20 +1113,76 @@ def _net_metrics_block(payload: Mapping[str, object]) -> dict[str, object]:
     }
 
 
+def _grid_bp(payload: Mapping[str, object]) -> list[object]:
+    """La rejilla de *slippage* en bp publicada en `cells`, en su orden."""
+    cells = payload.get("cells")
+    if not isinstance(cells, list):
+        return []
+    out: list[object] = []
+    for cell in cast("list[object]", cells):
+        if isinstance(cell, dict):
+            out.append(cast("dict[str, object]", cell).get("slippage_bp"))
+    return out
+
+
+def _regeneration_block(
+    previous: Mapping[str, object], payload: Mapping[str, object], *, name: str
+) -> dict[str, object]:
+    """La diferencia declarada frente al artefacto previo de este informe (#90).
+
+    Este informe **no** publica P&L declarado: lo unico que cambia al regenerar es el puntero
+    al artefacto de #28 consumido. La rejilla y el veredicto se recalculan y tienen que salir
+    iguales; el bloque lo declara con banderas **medidas**, no supuestas.
+    """
+    pointers = [
+        regeneration_delta.pointer_delta(
+            previous, payload, path=("provenance", "pipeline", "sha256")
+        ),
+        regeneration_delta.pointer_delta(
+            previous, payload, path=("provenance", "pipeline", "report_sha256")
+        ),
+        regeneration_delta.pointer_delta(
+            previous, payload, path=("provenance", "model_comparison", "sha256")
+        ),
+    ]
+    previous_gate = previous.get("gate")
+    gate = payload.get("gate")
+    gate_aggregate = bool(
+        isinstance(previous_gate, dict)
+        and isinstance(gate, dict)
+        and cast("dict[str, object]", previous_gate).get("aggregate")
+        == cast("dict[str, object]", gate).get("aggregate")
+    )
+    unchanged = {
+        "slippage_grid_bp": _grid_bp(previous) == _grid_bp(payload),
+        "no_cell_crosses": previous.get("no_cell_crosses") == payload.get("no_cell_crosses"),
+        "phase2_ready": previous.get("phase2_ready") == payload.get("phase2_ready"),
+        "gate_aggregate": gate_aggregate,
+    }
+    return regeneration_delta.pointer_deltas_block(
+        previous_name=name, pointers=pointers, unchanged=unchanged
+    )
+
+
 def analyse(
     *,
     store: Store,
     reports_dir: Path,
     as_of: datetime,
     write: bool = True,
+    previous_artifact: Path | None = None,
 ) -> DominanceReport:
     """Emite el veredicto por dominancia de la base declarada (A1, A3, A9-A17).
 
     ``as_of`` es **obligatorio** y es el unico instante de la corrida: ninguna ruta consulta el
     reloj. Los artefactos de #28/#26 se consumen **en solo lectura**; ``write=False`` no escribe
-    **nada**.
+    **nada**. ``previous_artifact`` es la ruta del informe anterior: cuando se declara, el
+    payload publica el bloque `regeneration` con el delta de puntero y las banderas de
+    invariantes (#90).
     """
     moment = _as_utc(as_of)
+    previous = regeneration_delta.load_previous(previous_artifact)
+    previous_name = regeneration_delta.artifact_name(previous_artifact)
     table = load_kill_table()
     pipeline = load_input_artifact(reports_dir, PIPELINE_CLASS, store=store)
     model = load_input_artifact(reports_dir, MODEL_CLASS, store=store)
@@ -1206,6 +1262,8 @@ def analyse(
         "does_not_do": [dict(entry) for entry in REPORT_DOES_NOT_DO],
         "follow_ups": [dict(entry) for entry in FOLLOW_UPS],
     }
+    if previous is not None and previous_name is not None:
+        payload["regeneration"] = _regeneration_block(previous, payload, name=previous_name)
     report = DominanceReport(
         as_of=moment,
         report_date=moment.date().isoformat(),
@@ -1345,6 +1403,22 @@ def render_markdown(report: DominanceReport) -> str:
             for entry in cast("list[object]", payload["follow_ups"])
         ],
     )
+    regeneration = payload.get("regeneration")
+    if isinstance(regeneration, dict):
+        lines += [""]
+        lines += regeneration_delta.render_pointer_section(
+            cast("Mapping[str, object]", regeneration),
+            intro=(
+                "Este informe se ha **regenerado**: cambia el puntero al artefacto de #28 "
+                "consumido y se declara el delta, junto con las invariantes que **no** cambian."
+            ),
+            unchanged_labels={
+                "slippage_grid_bp": "La rejilla de *slippage* (0.0, 13.2, 26.6, 46.8 bp)",
+                "no_cell_crosses": "`no_cell_crosses`",
+                "phase2_ready": "`phase2_ready`",
+                "gate_aggregate": "El veredicto agregado de la puerta",
+            },
+        )
     lines += ["", ""]
     return "\n".join(lines)
 
@@ -1391,6 +1465,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="instante declarado ISO-8601, obligatorio para escribir (el modulo no lee el reloj)",
     )
+    parser.add_argument(
+        "--previous-artifact",
+        type=Path,
+        default=None,
+        help=(
+            "ruta del informe anterior: si se declara, el payload publica el delta de puntero y "
+            "las invariantes de la regeneracion (#90)"
+        ),
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -1406,12 +1489,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         else data_root / "derived" / "reports"
     )
     try:
-        report = analyse(store=Store(data_root), reports_dir=reports_dir, as_of=moment, write=True)
+        report = analyse(
+            store=Store(data_root),
+            reports_dir=reports_dir,
+            as_of=moment,
+            write=True,
+            previous_artifact=cast("Path | None", args.previous_artifact),
+        )
     except (
         Phase2DominanceError,
         Phase2ReportError,
         PipelineReportError,
         BacktestReportError,
+        regeneration_delta.RegenerationError,
     ) as error:
         print(f"no se puede emitir el veredicto por dominancia: {error}", file=sys.stderr)
         return 2
