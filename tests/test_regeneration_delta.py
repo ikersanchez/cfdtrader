@@ -371,7 +371,7 @@ def test_t30_o_the_canonical_text_of_the_block_is_stable() -> None:
 @pytest.mark.parametrize(
     ("name", "prefixed"),
     (
-        ("baseline_2026-09-22.json", False),
+        ("baseline_2026-09-22.json", True),
         ("model_comparison_2026-09-22.json", True),
         ("phase2_dominance_2026-09-24.json", True),
     ),

@@ -589,7 +589,7 @@ def _clock_identifiers(tree: ast.Module) -> set[str]:
 def test_a13_the_report_is_deterministic_and_the_module_never_reads_the_clock(
     real_report: BaselineReport, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A13: el informe se escribe con ``report_sha256 = sha256(canonical_text(payload))``.
+    """A13: el informe se escribe con ``report_sha256 = "sha256:" + sha256(canonical_text)``.
 
     Y la CLI **exige** ``--as-of``: sin el sale ``2`` por ``stderr`` y no escribe **ningun**
     fichero. El modulo no consulta el reloj (test por AST).
@@ -601,8 +601,12 @@ def test_a13_the_report_is_deterministic_and_the_module_never_reads_the_clock(
         )
     assert "datetime.now" not in (baseline_report.__doc__ or "")
     payload = real_report.payload
+    # #90: el digest viaja con el prefijo declarado; lo que se fija es el **cuerpo**
+    # (autoconsistencia con el `canonical_text`), nunca un literal de un artefacto regenerable
+    # (semantica de #89/#95/#96).
+    assert real_report.report_sha256.startswith("sha256:")
     assert (
-        real_report.report_sha256
+        real_report.report_sha256.removeprefix("sha256:")
         == hashlib.sha256(canonical_text(payload).encode("utf-8")).hexdigest()
     )
     assert "report_sha256" not in payload

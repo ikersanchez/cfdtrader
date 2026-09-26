@@ -171,12 +171,15 @@ NO_TRADE_REASON: Final[str] = (
     "economico y el *sizing* son #27 y #60, no este"
 )
 
-#: Formato estable del ``report_sha256`` (A13).
+#: Formato estable del ``report_sha256`` (A13, #90). El prefijo `sha256:` viaja dentro del valor
+#: (convencion de #89/#93/#95/#96: un digest se comprueba por formato, autoconsistencia del
+#: `canonical_text` y determinismo entre procesos, nunca por un literal).
 REPORT_HASH_FORMAT: Final[str] = (
-    "sha256(UTF-8) de cfdtrader.backtest.engine.canonical_text(payload) **sin** la clave "
-    "report_sha256: un informe no se hashea a si mismo. El payload es JSON puro (Decimal como "
-    "cadena decimal exacta, fechas en ISO-8601) y no lleva ni la ruta del informe ni ningun "
-    "instante distinto del `as_of` declarado: por eso el hash no depende de `--reports-dir` (A8)"
+    "`sha256:<64 hex>` del sha256(UTF-8) de cfdtrader.backtest.engine.canonical_text(payload) "
+    "**sin** la clave report_sha256: un informe no se hashea a si mismo. El payload es JSON puro "
+    "(Decimal como cadena decimal exacta, fechas en ISO-8601) y no lleva ni la ruta del informe "
+    "ni ningun instante distinto del `as_of` declarado: por eso el hash no depende de "
+    "`--reports-dir` (A8)"
 )
 
 #: Formato estable del ``model_sha256`` (A12).
@@ -334,6 +337,11 @@ def _as_utc(value: datetime) -> datetime:
 def _digest(payload: Mapping[str, object]) -> str:
     """sha256 del texto canonico de #13: la **unica** funcion de hash que se usa."""
     return hashlib.sha256(canonical_text(payload).encode("utf-8")).hexdigest()
+
+
+def _report_digest(payload: Mapping[str, object]) -> str:
+    """El `report_sha256` publicado: el digest canonico **con** el prefijo `sha256:` (A13, #90)."""
+    return regeneration_delta.HASH_PREFIX + _digest(payload)
 
 
 def model_sha256(model: BaselineModel) -> str:
@@ -1643,7 +1651,7 @@ def analyse(
         as_of=moment,
         report_date=moment.date(),
         payload=payload,
-        report_sha256=_digest(payload),
+        report_sha256=_report_digest(payload),
         universe=universe,
         features=frame,
         split_plan=plan,
