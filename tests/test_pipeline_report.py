@@ -43,10 +43,12 @@ from cfdtrader.analysis.pipeline_report import (
     ARM_NAMES,
     ARM_OFICIAL,
     BASIS_DECLARED_COST,
+    HASH_PREFIX,
     METRIC_NAMES,
     NO_INTERVAL_METRICS,
     REPORT_PREFIX,
     RULE_11_BAND,
+    SERIES_UNITS,
     SESSION_RULES,
     TEMPORAL_MAPPING,
     AlignmentError,
@@ -1336,6 +1338,7 @@ _bundle = pipeline_report._bundle  # pyright: ignore[reportPrivateUsage]
 _deciders = pipeline_report._deciders  # pyright: ignore[reportPrivateUsage]
 _declared_return_pct = pipeline_report._declared_return_pct  # pyright: ignore[reportPrivateUsage]
 _series_of_run = pipeline_report._series_of_run  # pyright: ignore[reportPrivateUsage]
+_declared_series_payload = pipeline_report._declared_series_payload  # pyright: ignore[reportPrivateUsage]
 _close_to_close_pct = pipeline_report._close_to_close_pct  # pyright: ignore[reportPrivateUsage]
 _beta = pipeline_report._beta  # pyright: ignore[reportPrivateUsage]
 _alpha = pipeline_report._alpha  # pyright: ignore[reportPrivateUsage]
@@ -2128,3 +2131,182 @@ def test_support_no_trade_baseline_series_is_zero(real_report: PipelineReport) -
     assert run.traded == 0
     assert set(declared_series(run)) == {0.0}
     assert real_report.row(NO_TRADE).traded == 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# T28d (#94) · La serie declarada por sesion y su `series_sha256` en `arms`
+# ─────────────────────────────────────────────────────────────────────────────
+def declared_series_block(report: PipelineReport, name: str) -> dict[str, object]:
+    """El bloque ``declared_series`` publicado por ese brazo (del payload, no del objeto)."""
+    return as_map(row_block(report, name)["declared_series"])
+
+
+def _published_series(block: Mapping[str, object]) -> list[float]:
+    """La lista ``series_pct`` del bloque, como numeros JSON."""
+    return [as_float(value) for value in as_list(block["series_pct"])]
+
+
+def _series_digest(block: Mapping[str, object]) -> str:
+    """El sha256 del cuerpo del bloque **sin** su propia clave, con su prefijo (A3/T28d)."""
+    body = {key: value for key, value in block.items() if key != "series_sha256"}
+    digest = hashlib.sha256(canonical_text(body).encode("utf-8")).hexdigest()
+    return f"{HASH_PREFIX}{digest}"
+
+
+@needs_store
+def test_t28d_declared_series_block_shape(real_report: PipelineReport) -> None:
+    """Criterio 1: los tres brazos publican las cuatro claves y ``n == n_test - skipped``."""
+    for name in ARM_NAMES:
+        arm = as_map(at(real_report.payload, "arms", name))
+        block = as_map(arm["declared_series"])
+        assert set(block) == {"units", "n", "series_pct", "series_sha256"}
+        assert as_str(block["units"]) == SERIES_UNITS
+        series = as_list(block["series_pct"])
+        assert all(isinstance(value, float) for value in series)
+        assert as_int(block["n"]) == len(series)
+        assert as_int(block["n"]) == as_int(arm["n_test"]) - as_int(arm["skipped"])
+
+
+@needs_store
+def test_t28d_declared_series_is_the_metric_series(real_report: PipelineReport) -> None:
+    """Criterio 2: la serie publicada **es** la de las metricas, recomputada sesion a sesion."""
+    for name in ARM_NAMES:
+        arm = real_report.arm(name)
+        published = tuple(_published_series(declared_series_block(real_report, name)))
+        recomputed = declared_series(arm.run)
+        assert len(published) == len(recomputed)
+        for left, right in zip(published, recomputed, strict=True):
+            assert left == right
+        kept = [outcome for outcome in sessions_of(arm.run) if outcome.status != STATUS_SKIPPED]
+        for outcome, value in zip(kept, published, strict=True):
+            if outcome.status == STATUS_NO_TRADE:
+                assert value == 0.0
+            else:
+                assert outcome.gross_pct is not None and outcome.cost is not None
+                assert value == 100.0 * outcome.gross_pct - float(outcome.cost.c_declared_pct)
+
+
+@needs_store
+def test_t28d_declared_series_is_aligned_to_test_sessions(real_report: PipelineReport) -> None:
+    """Criterio 3: hoy ``skipped == 0``, largo = 500 y el indice de cada entrada es su sesion."""
+    index_of = {session: position for position, session in enumerate(real_report.test_sessions)}
+    for name in ARM_NAMES:
+        arm = real_report.arm(name)
+        published = as_map(at(real_report.payload, "arms", name))
+        series = _published_series(declared_series_block(real_report, name))
+        assert as_int(published["skipped"]) == 0
+        assert len(series) == len(real_report.test_sessions) == 500
+        by_session = {outcome.session: outcome for outcome in sessions_of(arm.run)}
+        for outcome in sessions_of(arm.run):
+            position = index_of[outcome.session]
+            if outcome.status == STATUS_NO_TRADE:
+                assert series[position] == 0.0
+            elif outcome.status == STATUS_TRADED:
+                assert outcome.gross_pct is not None and outcome.cost is not None
+                assert series[position] == 100.0 * outcome.gross_pct - float(
+                    outcome.cost.c_declared_pct
+                )
+        for position, value in enumerate(series):
+            if value != 0.0:
+                assert by_session[real_report.test_sessions[position]].status == STATUS_TRADED
+
+
+@needs_store
+def test_t28d_series_digest_format_and_self_consistency_from_disk(
+    real_report: PipelineReport,
+) -> None:
+    """Criterios 4 y 5: ``sha256:`` + 64 hex minuscula y digest recomputado del JSON en disco."""
+    json_path = real_report.reports_dir / f"{STEM}.json"
+    on_disk = as_map(json.loads(json_path.read_text(encoding="utf-8")))
+    for name in ARM_NAMES:
+        block = as_map(at(on_disk, "arms", name, "declared_series"))
+        digest = as_str(block["series_sha256"])
+        body = digest.removeprefix(HASH_PREFIX)
+        assert digest.startswith(HASH_PREFIX)
+        assert len(body) == 64
+        assert all(character in "0123456789abcdef" for character in body)
+        assert digest == _series_digest(block)
+
+
+@needs_store
+def test_t28d_declared_series_is_identical_across_fresh_processes(
+    real_report: PipelineReport, fresh_runs: Mapping[str, CliRun]
+) -> None:
+    """Criterio 6: el bloque es identico byte a byte (y mismo ``series_sha256``) entre procesos."""
+    ours = declared_series_block(real_report, ARM_COSTE_DECLARADO)
+    for name in ("seed0", "seed1"):
+        fresh = as_map(json.loads(fresh_runs[name].json_path().read_text(encoding="utf-8")))
+        published = as_map(at(fresh, "arms", ARM_COSTE_DECLARADO, "declared_series"))
+        assert published == ours
+        assert as_str(published["series_sha256"]) == as_str(ours["series_sha256"])
+        assert as_str(fresh["report_sha256"]) == real_report.report_sha256
+
+
+@needs_store
+def test_t28d_metrics_come_from_the_published_series(real_report: PipelineReport) -> None:
+    """Criterio 7: `hit_rate` y `sharpe` se reproducen desde ``series_pct / 100`` y su ``seed``."""
+    metrics = metrics_of(real_report, ARM_COSTE_DECLARADO)
+    series = _published_series(declared_series_block(real_report, ARM_COSTE_DECLARADO))
+    values = tuple(value / 100.0 for value in series)
+    for name in ("hit_rate", "sharpe"):
+        published = metrics[name]
+        interval = bootstrap_confidence_interval(
+            values,
+            _metric_statistic(name, ()),
+            confidence_level=DEFAULT_CONFIDENCE_LEVEL,
+            n_bootstrap=DEFAULT_BOOTSTRAP_SAMPLES,
+            seed=as_int(published["seed"]),
+        )
+        assert interval.estimate == published["estimate"]
+        assert interval.lower == published["lower"]
+        assert interval.upper == published["upper"]
+
+
+@needs_store
+def test_t28d_all_zero_arms_publish_the_null_series(real_report: PipelineReport) -> None:
+    """Criterio 8: `oficial` y `escenario` publican ``n`` ceros exactos y su digest."""
+    for name in (ARM_OFICIAL, ARM_ESCENARIO):
+        arm = as_map(at(real_report.payload, "arms", name))
+        block = as_map(arm["declared_series"])
+        series = _published_series(block)
+        assert as_int(block["n"]) == len(series) == len(real_report.test_sessions)
+        assert series and all(value == 0.0 for value in series)
+        assert math.fsum(series) == 0.0
+        assert as_str(block["series_sha256"]).startswith(HASH_PREFIX)
+        assert arm["declared_return_series_all_zero"] is True
+
+
+def test_t28d_skipped_is_dropped_not_a_zero() -> None:
+    """Criterio 9: la `skipped` se descarta (``n == n_test - skipped``) y el digest es estable."""
+    cost = declared_cost_breakdown()
+    traded = _outcome(session=date(2026, 9, 1), status=STATUS_TRADED, gross_pct=0.01, cost=cost)
+    flat = _outcome(session=date(2026, 9, 2), status=STATUS_NO_TRADE)
+    skip = _outcome(session=date(2026, 9, 3), status=STATUS_SKIPPED)
+    run = _run(folded=(traded, flat, skip), traded=1, no_trade=1, skipped=1)
+    block = _declared_series_payload(_series_of_run(run))
+    series = _published_series(block)
+    assert as_int(block["n"]) == len(series) == run.traded + run.no_trade == 2
+    assert series[0] == pytest.approx(100.0 * 0.01 - float(cost.c_declared_pct))
+    assert series[1] == 0.0
+    again = _declared_series_payload(_series_of_run(run))
+    assert as_str(again["series_sha256"]) == as_str(block["series_sha256"])
+    assert as_str(block["series_sha256"]) == _series_digest(block)
+
+
+def test_t28d_null_cost_is_a_typed_error() -> None:
+    """Criterio 10: sin `gross_pct` o sin `CostBreakdown` la derivacion **lanza**."""
+    cost = declared_cost_breakdown()
+    without_gross = _outcome(session=SESSION, status=STATUS_TRADED, gross_pct=None, cost=cost)
+    with pytest.raises(PipelineReportError, match="retorno declarado"):
+        _declared_series_payload(_series_of_run(_run(folded=(without_gross,), traded=1)))
+    without_cost = _outcome(session=SESSION, status=STATUS_TRADED, gross_pct=0.01, cost=None)
+    with pytest.raises(PipelineReportError, match="retorno declarado"):
+        _series_of_run(_run(folded=(without_cost,), traded=1))
+
+
+@needs_store
+def test_t28d_render_markdown_runs_with_the_new_block(real_report: PipelineReport) -> None:
+    """Criterio 12: el Markdown se renderiza con el bloque nuevo, sin `KeyError`."""
+    markdown = render_markdown(real_report)
+    assert markdown.strip()
+    assert real_report.report_sha256 in markdown

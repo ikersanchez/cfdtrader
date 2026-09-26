@@ -153,6 +153,7 @@ __all__ = [
     "REPORT_PREFIX",
     "RULE_11_BAND",
     "SCENARIO_ID",
+    "SERIES_UNITS",
     "SESSION_RULES",
     "TASK",
     "TEMPORAL_MAPPING",
@@ -179,6 +180,7 @@ REPORT_HASH_FORMAT: Final[str] = (
     "``report_sha256``. El prefijo viaja dentro del valor: un digest desnudo lo bloquea "
     "``detect-secrets``"
 )
+SERIES_UNITS: Final[str] = "% del nocional (puntos porcentuales), una entrada por sesion de *test*"
 
 #: Los tres brazos declarados (A4). El orden es fijo: se publica tal cual, nunca el de un ``set``.
 ARM_OFICIAL: Final[str] = "oficial"
@@ -1141,6 +1143,28 @@ def _series_of_run(run: BacktestRun) -> tuple[float, ...]:
     return tuple(values)
 
 
+def _declared_series_payload(series_pct: Sequence[float]) -> dict[str, object]:
+    """El bloque publicado de la serie declarada de un brazo, con su digest autoconsistente (A10).
+
+    ``units``/``n``/``series_pct`` son el cuerpo y ``series_sha256`` viaja al lado: es el sha256
+    del ``canonical_text`` (#13) de ese cuerpo **sin** su propia clave, con el prefijo
+    ``sha256:`` (nunca un digest desnudo). El digest se puede recomputar desde el JSON en disco,
+    sin fijar ningun literal: un artefacto regenerable no se ancla a un dorado.
+
+    La serie es **la misma** con la que el informe calcula las metricas del brazo: sale de
+    ``_series_of_run`` (cero exacto en ``no_trade``, fuera las ``skipped``), no de una segunda
+    derivacion.
+    """
+    body: dict[str, object] = {
+        "units": SERIES_UNITS,
+        "n": len(series_pct),
+        "series_pct": [float(value) for value in series_pct],
+    }
+    plain = cast("Mapping[str, object]", _plain(body, where="declared_series"))
+    digest = hashlib.sha256(canonical_text(plain).encode("utf-8")).hexdigest()
+    return {**body, "series_sha256": f"{HASH_PREFIX}{digest}"}
+
+
 def _traded_series_pct(run: BacktestRun) -> tuple[float, ...]:
     """La serie declarada de **solo** las sesiones operadas, una entrada por operacion (#92).
 
@@ -1817,6 +1841,7 @@ def _arm_payload(
         "run_sha256": arm.run.run_sha256,
         "plan_sha256": arm.run.plan_sha256,
         "declared_return_series_all_zero": declared_series_zero,
+        "declared_series": _declared_series_payload(_series_of_run(arm.run)),
         "metrics": dict(metrics),
         "gate": {
             "params_declared": sorted(arm.params.model_fields_set),
@@ -1997,7 +2022,7 @@ def _row_payload(row: TableRow, *, metrics: Mapping[str, object]) -> dict[str, o
         "exit_reason_counts": dict(row.exit_reason_counts),
         "frequency": row.frequency,
         "seed": row.seed,
-        "series_units": "% del nocional (puntos porcentuales), una entrada por sesion de *test*",
+        "series_units": SERIES_UNITS,
         "n_series": len(row.series_pct),
         "sum_return_pct": math.fsum(row.series_pct),
         "n_non_zero_returns": sum(1 for value in row.series_pct if value != 0.0),
