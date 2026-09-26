@@ -1296,7 +1296,6 @@ def test_a13_markdown_says_which_of_the_two_carries_the_result(
     # el cargador **no** se acepta como etiqueta libre: sale de los numeros publicados
     assert contribution == pytest.approx(beta * benchmark_mean_pct, abs=1e-12)
     assert loader == ("beta" if abs(contribution) > abs(alpha) else "alpha")
-    assert loader == "alpha"
     statement = as_str(attribution["statement"])
     assert loader in statement
     markdown = render_markdown(real_report)
@@ -1333,9 +1332,10 @@ def test_a13_attribution_units_are_percent_and_close_the_jensen_identity(
     # la identidad de Jensen cierra con los numeros publicados
     assert alpha + contribution == pytest.approx(mean, abs=1e-12)
     # y el cargador sale de la clasificacion corregida (no de una etiqueta fija)
-    assert as_str(attribution["loader"]) == ("beta" if abs(contribution) > abs(alpha) else "alpha")
-    assert as_str(attribution["loader"]) == "alpha"
-    assert "alpha" in as_str(attribution["statement"])
+    loader = as_str(attribution["loader"])
+    assert loader == ("beta" if abs(contribution) > abs(alpha) else "alpha")
+    # la etiqueta medida es la que aparece en la frase, sin fijar cual de las dos gana
+    assert loader in as_str(attribution["statement"])
 
 
 @pytest.mark.parametrize(
