@@ -773,13 +773,18 @@ def test_a12_table_is_copied_and_reflects_the_artifact(tmp_path: Path) -> None:
 # A13 — PBO y DSR se importan/copian; el AST no importa el calculo de sobreajuste
 # ─────────────────────────────────────────────────────────────────────────────
 def test_a13_pbo_and_dsr_are_copied(real_report: phase2_report.Phase2Report) -> None:
+    # #90: el PBO de #26 se **copia** del `model_comparison` regenerado. Al corregir el motor
+    # (#80) el PBO pasa de `not_detected` (0.0476) a `detected` (0.6627) y su mitad de la puerta
+    # de `pass` a `fail`; el `dsr` sigue `fail`/`not_significant` y la agregada sigue `fail`.
+    # El `sr_variance` del DSR lo da el registro (`registry.sr_variance`), que aun mezcla el
+    # `sharpe_per_session` pre-#80 de `runs/408fead` (fuera de alcance -> #97).
     criteria = cast("list[Mapping[str, object]]", real_report.payload["criteria"])
     pbo = _row_of(criteria, phase2_report.ROW_PBO)
-    assert pbo["state"] == "pass"
+    assert pbo["state"] == "fail"
     detail = cast("Mapping[str, object]", pbo["detail"])
     assert detail["blocks"] == 10
     assert detail["n_observations"] == 500
-    assert detail["declared_verdict"] == "not_detected"
+    assert detail["declared_verdict"] == "detected"
     assert detail["pbo_max"] == 0.2
     dsr = _row_of(criteria, phase2_report.ROW_DSR)
     assert dsr["state"] == "fail"

@@ -415,12 +415,20 @@ def test_a1_module_api_and_cli(fresh_runs: Mapping[str, CliRun]) -> None:
     assert all(hasattr(phase2_dominance, name) for name in required)
 
     signature = inspect.signature(phase2_dominance.analyse)
-    assert set(signature.parameters) == {"store", "reports_dir", "as_of", "write"}
+    assert set(signature.parameters) == {
+        "store",
+        "reports_dir",
+        "as_of",
+        "write",
+        "previous_artifact",
+    }
     assert signature.parameters["write"].default is True
+    # #90: la entrada opcional "artefacto previo" es contrato declarado y no viaja por defecto.
+    assert signature.parameters["previous_artifact"].default is None
     assert callable(phase2_dominance.main)
 
     flags = _cli_flags()
-    assert flags == ["--data-root", "--reports-dir", "--as-of"]
+    assert flags == ["--data-root", "--reports-dir", "--as-of", "--previous-artifact"]
 
     run = fresh_runs["seed0"]
     assert run.code == 0, run.stderr

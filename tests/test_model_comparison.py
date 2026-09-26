@@ -357,11 +357,14 @@ def test_a2_the_signature_and_the_absence_of_the_clock() -> None:
         "settings",
         "as_of",
         "write",
+        "previous_artifact",
     ]
     assert all(
         parameter.kind is inspect.Parameter.KEYWORD_ONLY for parameter in parameters.values()
     )
     assert parameters["write"].default is True
+    # #90: la entrada opcional "artefacto previo" es contrato declarado y no viaja por defecto.
+    assert parameters["previous_artifact"].default is None
     for module in (lightgbm_model, model_comparison):
         # El reloj se busca en el **AST**, no en el texto: los dos modulos **declaran** por
         # escrito que no lo leen, y una asercion sobre el fuente se encontraria a si misma.
