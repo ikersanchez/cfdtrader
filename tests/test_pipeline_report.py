@@ -115,7 +115,7 @@ STEM: Final[str] = f"{REPORT_PREFIX}_{NOW.date().isoformat()}"
 #: Commit de partida de la entrega (el arbol venia limpio en el): A15 compara contra el.
 BASE_COMMIT: Final[str] = "6aa582d"
 
-#: Los dos ficheros que la entrega debe traer en el diff, y los seis congelados (A15).
+#: Los cinco ficheros que la entrega debe traer en el diff, y los cuatro congelados (A15).
 #: #98: la entrega toca cinco ficheros (el modulo, el barrido y los tres tests) y ningun
 #: congelado; la guarda sigue siendo SUBSET + DISJUNTO, nunca `changed <= ALLOWED` (#89).
 WRITTEN: Final[frozenset[str]] = frozenset(
@@ -2212,7 +2212,7 @@ def _git(*arguments: str) -> str:
 
 
 def test_a15_frozen_modules_are_untouched() -> None:
-    """A15: la entrega toca sus dos ficheros y **ningun** modulo congelado."""
+    """A15: la entrega toca sus cinco ficheros y **ningun** modulo congelado."""
     assert _git("status", "--porcelain").strip() == ""
     changed = set(_git("diff", "--name-only", f"{BASE_COMMIT}..HEAD").splitlines())
     # #89: la igualdad contra `BASE_COMMIT` solo valia mientras `HEAD` fuese la punta de #28;
