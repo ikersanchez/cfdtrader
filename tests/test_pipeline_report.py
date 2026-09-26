@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import inspect
 import json
 import math
 import os
@@ -115,10 +116,15 @@ STEM: Final[str] = f"{REPORT_PREFIX}_{NOW.date().isoformat()}"
 BASE_COMMIT: Final[str] = "6aa582d"
 
 #: Los dos ficheros que la entrega debe traer en el diff, y los seis congelados (A15).
+#: #98: la entrega toca cinco ficheros (el modulo, el barrido y los tres tests) y ningun
+#: congelado; la guarda sigue siendo SUBSET + DISJUNTO, nunca `changed <= ALLOWED` (#89).
 WRITTEN: Final[frozenset[str]] = frozenset(
     {
         "src/cfdtrader/analysis/pipeline_report.py",
+        "src/cfdtrader/analysis/gate_sweep.py",
         "tests/test_pipeline_report.py",
+        "tests/test_gate_sweep.py",
+        "tests/test_phase2_dominance.py",
     }
 )
 #: Los ficheros que la entrega de #80 **si** toca (motor, gate) se han retirado de
@@ -523,6 +529,74 @@ def test_a2_write_false_and_missing_as_of_write_nothing(tmp_path: Path) -> None:
     assert pipeline_report._parse_as_of("2026-09-23T22:00:00+00:00") == NOW  # pyright: ignore[reportPrivateUsage]
 
 
+def test_previous_artifact_is_keyword_only_and_the_cli_declares_the_flag() -> None:
+    """A5/#98: `analyse` acepta `previous_artifact` (keyword-only, por defecto `None`).
+
+    Sin la bandera la corrida es un no-op byte a byte: lo vigilan `test_a2_second_pass_is_byte_
+    identical` y `test_a3_identical_across_fresh_processes` (la corrida de sesion y dos procesos
+    frescos dan el mismo `report_sha256`).
+    """
+    parameters = inspect.signature(analyse).parameters
+    assert "previous_artifact" in parameters
+    declaration = parameters["previous_artifact"]
+    assert declaration.kind is inspect.Parameter.KEYWORD_ONLY
+    assert declaration.default is None
+    assert "--previous-artifact" in SOURCE
+
+
+@needs_store
+def test_previous_artifact_block_is_top_level_and_measures_the_delta(tmp_path: Path) -> None:
+    """A5/A6/#98: el bloque `regeneration` es de nivel superior y **mide** el antes/despues.
+
+    Se comprueba con el bootstrap doblado (`_patched_fast`): el doble no cambia ninguna decision
+    ni el bloque, y evita repetir los ~110 s de la corrida real por una propiedad estructural.
+    """
+    previous = tmp_path / "pipeline_backtest_2026-09-22.json"
+    previous.write_text(
+        json.dumps(
+            {
+                "arms": {
+                    ARM_OFICIAL: {"traded": 0},
+                    ARM_ESCENARIO: {"traded": 0},
+                    ARM_COSTE_DECLARADO: {"traded": 31},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    with _patched_fast():
+        plain = analyse(
+            store=Store(REAL_DATA), reports_dir=tmp_path / "sin-bandera", as_of=NOW, write=False
+        )
+        report = analyse(
+            store=Store(REAL_DATA),
+            reports_dir=tmp_path / "con-bandera",
+            as_of=NOW,
+            write=False,
+            previous_artifact=previous,
+        )
+    assert "regeneration" not in plain.payload
+    block = as_map(report.payload["regeneration"])
+    assert set(report.payload) - set(plain.payload) == {"regeneration"}
+    assert "arms" not in block
+    assert block["previous_artifact"] == previous.name
+    assert block["subject"] == "#98"
+    assert block["previous_published_directions"] is False
+    rows = {as_str(row["arm"]): row for row in as_objects(block["rows"])}
+    assert set(rows) == set(ARM_NAMES)
+    declared = rows[ARM_COSTE_DECLARADO]
+    assert as_int(declared["traded_before"]) == 31
+    assert as_int(declared["traded_after"]) == report.arm(ARM_COSTE_DECLARADO).run.traded
+    assert declared["previous_published_direction_counts"] is False
+    assert as_map(declared["direction_counts"]) == as_map(
+        row_block(report, ARM_COSTE_DECLARADO)["direction_counts"]
+    )
+    markdown = render_markdown(report)
+    assert markdown.count("## Regeneración") == 1
+    assert f"`{previous.name}`" in markdown
+    assert "#98" in markdown
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # A3 · `report_sha256`: formato, determinismo y valor fijado
 # ─────────────────────────────────────────────────────────────────────────────
@@ -636,6 +710,34 @@ def test_a4_scenario_derives_the_ev_threshold_from_the_cost_table(
     assert as_str(scenario["ev_threshold_derivation"]).startswith("ev_threshold_pct = ")
 
 
+@needs_store
+def test_a4_direction_counts_are_long_short_only(real_report: PipelineReport) -> None:
+    """A4/#98: `arms.<brazo>.direction_counts` = `{long, short}`, `long + short == traded`.
+
+    La forma es la misma que la de `gate_sweep._direction_counts` (#86), pero la implementa este
+    modulo: el bloque del brazo **no** es el bloque de la celda del barrido. En el brazo de coste
+    declarado las dos direcciones son **no nulas**: el sesgo corto de #98 esta corregido.
+    """
+    for name in ARM_NAMES:
+        block = row_block(real_report, name)
+        counts = as_map(block["direction_counts"])
+        assert set(counts) == {"long", "short"}
+        assert "nothing" not in counts
+        assert as_int(counts["long"]) + as_int(counts["short"]) == as_int(block["traded"])
+        run = real_report.arm(name).run
+        longs = sum(
+            1
+            for outcome in sessions_of(run)
+            if outcome.status == STATUS_TRADED
+            and outcome.decision is not None
+            and str(outcome.decision.direction) == "long"
+        )
+        assert as_int(counts["long"]) == longs
+    declared = as_map(row_block(real_report, ARM_COSTE_DECLARADO)["direction_counts"])
+    assert as_int(declared["long"]) > 0
+    assert as_int(declared["short"]) > 0
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # A5 · Los dos brazos del gate no operan, y se mide
 # ─────────────────────────────────────────────────────────────────────────────
@@ -719,12 +821,17 @@ def test_a6_declared_rule_is_published_literal(real_report: PipelineReport) -> N
 
 
 def _declared_tier(output: GateOutput, params: GateParameters) -> str:
-    """El tier A/B/C re-derivado sobre el EV declarado, recalculado en el test (A6)."""
+    """El tier A/B/C re-derivado sobre el EV declarado, recalculado en el test (A6, #98).
+
+    La probabilidad a favor es la de la direccion del **decididor** (`p` si `p >=
+    DECISION_THRESHOLD`, `1 - p` si no), no la de `output.direction` (que en este brazo es
+    `nothing` en las 500 sesiones).
+    """
     ev_declared = output.ev_declared_pct
     if ev_declared is None:
         return "C"
     favourable = output.prob_up_calibrated
-    if output.direction is not None and str(output.direction) != "long":
+    if favourable < DECISION_THRESHOLD:
         favourable = 1.0 - favourable
     if ev_declared > cast("Decimal", params.tier_a_cost_multiple) * output.cost_pct and Decimal(
         str(favourable)
@@ -733,6 +840,41 @@ def _declared_tier(output: GateOutput, params: GateParameters) -> str:
     if ev_declared > cast("Decimal", params.tier_b_cost_multiple) * output.cost_pct:
         return "B"
     return "C"
+
+
+def test_favourable_probability_follows_the_decider_direction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A3/#98: `_favourable_probability` cita la constante del gate, no `max(p, 1-p)`.
+
+    Con el umbral declarado (`0.5`) `p = 0.4` es corto ⇒ `0.6`; con el umbral parcheado a `0.3`
+    la **misma** `p = 0.4` es larga ⇒ `0.4` (el maximo seria `0.6`, que es lo que discrimina).
+    """
+    favourable = pipeline_report._favourable_probability  # pyright: ignore[reportPrivateUsage]
+    assert favourable(_gate_output(probability=0.4)) == Decimal("0.6")
+    monkeypatch.setattr(pipeline_report, "GATE_DECISION_THRESHOLD", 0.3)
+    assert favourable(_gate_output(probability=0.4)) == Decimal("0.4") != Decimal("0.6")
+    assert favourable(_gate_output(probability=0.2)) == Decimal("0.8")
+    assert favourable(_gate_output(probability=0.3)) == Decimal("0.3")
+    assert favourable(_gate_output(probability=0.1)) == Decimal("0.9")
+
+
+def test_favourable_probability_ast_does_not_read_the_gate_direction() -> None:
+    """A3/#98: el AST de `_favourable_probability` no lee `output.direction`.
+
+    Los unicos nombres que usa son `prob_up_calibrated` (la probabilidad) y
+    `GATE_DECISION_THRESHOLD` (la constante del gate): la direccion la decide el decididor.
+    """
+    function = next(
+        node
+        for node in TREE.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_favourable_probability"
+    )
+    attributes = {node.attr for node in ast.walk(function) if isinstance(node, ast.Attribute)}
+    assert "direction" not in attributes
+    assert "prob_up_calibrated" in attributes
+    names = {node.id for node in ast.walk(function) if isinstance(node, ast.Name)}
+    assert "GATE_DECISION_THRESHOLD" in names
 
 
 @needs_store
@@ -1615,6 +1757,16 @@ def test_a14_guard_declared_tier_derives_c_b_and_a() -> None:
         params,
     )
     assert tier_a == TIER_A
+    # #98: la direccion del gate (`nothing`) ya no decide: `p = 0.60` es tier A **sin** direccion
+    # declarada (con la convencion vieja, `1 - p = 0.4` no llegaria a `0.58`), y `p = 0.50` es B.
+    assert (
+        _declared_tier(_gate_output(ev_declared_pct=Decimal("0.02"), probability=0.60), params)
+        == TIER_A
+    )
+    assert (
+        _declared_tier(_gate_output(ev_declared_pct=Decimal("0.02"), probability=0.50), params)
+        == TIER_B
+    )
 
 
 def test_a14_guard_declared_cost_decision_rejects_below_threshold() -> None:
@@ -1804,10 +1956,10 @@ def test_a14_guard_rule_11_band_verdicts() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # #92 · Tasa de acierto por operacion junto a la de #28 (que es por sesion)
 # ─────────────────────────────────────────────────────────────────────────────
-#: La tasa por operacion del brazo de coste declarado, con los goldens declarados en #92.
-PER_TRADE_ESTIMATE: Final[float] = 0.3870967741935484
-PER_TRADE_LOWER: Final[float] = 0.22580645161290322
-PER_TRADE_UPPER: Final[float] = 0.5806451612903226
+# #98: aqui vivian `PER_TRADE_ESTIMATE`/`PER_TRADE_LOWER`/`PER_TRADE_UPPER`, los goldens
+# literales de la corrida regenerable de S1. Al corregir `_favourable_probability` cambian, y un
+# literal regenerable convierte cualquier tarea posterior en un fallo de #92: se re-deriva del
+# run (estimacion y limites con la semilla publicada), nunca se sustituye por otro literal.
 
 
 def traded_series(run: BacktestRun) -> tuple[float, ...]:
@@ -1837,15 +1989,16 @@ def _synthetic_metrics(run: BacktestRun) -> dict[str, dict[str, object]]:
 
 @needs_store
 def test_a92_per_trade_rate_is_published_with_its_own_seed(real_report: PipelineReport) -> None:
-    """Criterios 1 y 4 de #92: la tasa por operacion con su IC, su semilla propia y su base."""
+    """#92/#98: la tasa por operacion se re-deriva del run; su semilla propia sigue."""
+    arm = real_report.arm(ARM_COSTE_DECLARADO)
+    returns = traded_series(arm.run)
+    n_wins = sum(1 for value in returns if value > 0.0)
     metrics = metrics_of(real_report, ARM_COSTE_DECLARADO)
     block = metric_block(metrics, "hit_rate_per_trade")
-    assert block["estimate"] == PER_TRADE_ESTIMATE
-    assert block["lower"] == PER_TRADE_LOWER
-    assert block["upper"] == PER_TRADE_UPPER
-    assert as_int(block["n"]) == 31
-    assert as_int(block["n_trades"]) == 31
-    assert as_int(block["n_wins"]) == 12
+    assert block["estimate"] == n_wins / len(returns)
+    assert as_int(block["n"]) == len(returns)
+    assert as_int(block["n_trades"]) == len(returns)
+    assert as_int(block["n_wins"]) == n_wins
     assert 0.0 <= as_float(block["lower"]) <= as_float(block["upper"]) <= 1.0
     assert block["estimate"] == as_int(block["n_wins"]) / as_int(block["n_trades"])
     seeds = pipeline_report._seed_by_metric()  # pyright: ignore[reportPrivateUsage]
@@ -1885,12 +2038,24 @@ def test_a92_per_trade_estimate_is_the_rederived_ratio(real_report: PipelineRepo
 
 @needs_store
 def test_a92_per_trade_does_not_touch_the_session_rate(real_report: PipelineReport) -> None:
-    """Criterio 2 de #92: `hit_rate` conserva nombre, valor, semilla y posicion; nada desaparece."""
+    """#92/#98: `hit_rate` conserva nombre, posicion y semilla; su valor se re-deriva del run."""
+    arm = real_report.arm(ARM_COSTE_DECLARADO)
+    series = declared_series(arm.run)
+    n_wins = sum(1 for value in series if value > 0.0)
     metrics = metrics_of(real_report, ARM_COSTE_DECLARADO)
     block = metric_block(metrics, "hit_rate")
-    assert block["estimate"] == 0.024
-    assert block["lower"] == 0.012
-    assert block["upper"] == 0.038
+    assert as_int(block["n"]) == len(series)
+    assert as_int(block["n_wins"]) == n_wins
+    assert block["estimate"] == n_wins / len(series)
+    interval = bootstrap_confidence_interval(
+        tuple(value / 100.0 for value in series),
+        lambda sample: sum(1 for value in sample if value > 0.0) / max(len(sample), 1),
+        confidence_level=DEFAULT_CONFIDENCE_LEVEL,
+        n_bootstrap=DEFAULT_BOOTSTRAP_SAMPLES,
+        seed=as_int(block["seed"]),
+    )
+    assert block["lower"] == interval.lower
+    assert block["upper"] == interval.upper
     assert as_int(block["n"]) == 500
     assert as_int(block["n_bootstrap"]) == DEFAULT_BOOTSTRAP_SAMPLES
     assert as_int(block["seed"]) == 44

@@ -78,6 +78,12 @@ from cfdtrader.analysis.backtest_report import (
     run_all_baselines,
 )
 from cfdtrader.analysis.feature_frame import FeatureFrame, build_feature_frame
+from cfdtrader.analysis.regeneration_delta import (
+    SECTION_TITLE,
+    RegenerationError,
+    artifact_name,
+    load_previous,
+)
 from cfdtrader.backtest.baselines import BASELINE_IDS, NO_TRADE
 from cfdtrader.backtest.costs import (
     CostBreakdown,
@@ -752,9 +758,19 @@ def scenario_parameters(*, cost_pct: Decimal) -> GateParameters:
 
 
 def _favourable_probability(output: GateOutput) -> Decimal:
-    """La probabilidad a favor de la direccion derivada: ``p`` en largo y ``1 - p`` en corto."""
+    """La probabilidad de la direccion que el **decididor** va a operar (unico sitio, #98).
+
+    Es ``p`` si ``p >= GATE_DECISION_THRESHOLD`` y ``1 - p`` si no: la direccion la fija el
+    decididor con la constante del gate, asi que la probabilidad a favor cita esa constante y
+    **no** el maximo ``max(p, 1 - p)`` (coinciden solo mientras el umbral valga ``0.5``).
+
+    No se lee ``output.direction``: en el brazo ``coste_declarado`` el gate de ``escenario``
+    devuelve ``NOTHING`` en las 500 sesiones (reglas 9 y 10), asi que la probabilidad a favor
+    seria siempre ``1 - p``, el tier A exigiria ``p < 0.42`` y el lado largo (``p > 0.58``)
+    nunca llegaria a operar (#98).
+    """
     probability = output.prob_up_calibrated
-    value = probability if output.direction is Direction.LONG else 1.0 - probability
+    value = probability if probability >= GATE_DECISION_THRESHOLD else 1.0 - probability
     return Decimal(str(value))
 
 
@@ -1817,6 +1833,95 @@ def _rule_outcomes(outputs: Mapping[date, GateOutput]) -> dict[str, dict[str, in
     }
 
 
+def _direction_counts(run: BacktestRun) -> dict[str, int]:
+    """``{"long": n, "short": n}`` sobre las sesiones operadas: ``long + short == traded`` (A4).
+
+    Es la misma forma y semantica que publica el barrido de #86, pero implementada **aqui**: la
+    dependencia va de ``gate_sweep`` a este modulo, nunca al reves. La clave ``nothing`` no
+    existe: una sesion operada siempre tiene direccion y el recuento no se fabrica.
+    """
+    counts = {"long": 0, "short": 0}
+    for outcome in _sessions_of_run(run):
+        if outcome.status != STATUS_TRADED:
+            continue
+        decision = outcome.decision
+        if decision is None or decision.direction.value not in counts:
+            shown = "sin decision" if decision is None else decision.direction.value
+            raise PipelineReportError(
+                f"{outcome.session.isoformat()}: una sesion operada publica {shown!r} y no "
+                "`long`/`short`: el recuento de direcciones no se fabrica (A4)"
+            )
+        counts[decision.direction.value] += 1
+    return counts
+
+
+def _regeneration_block(
+    *, previous: Mapping[str, object], previous_name: str, arms: Sequence[ArmRun]
+) -> dict[str, object]:
+    """El antes/despues declarado del arreglo de ``_favourable_probability`` (#98).
+
+    Vive en el **nivel superior** del payload (nunca dentro de ``arms``: romperia la
+    reproduccion de #86/#93) y declara **solo el nombre** del artefacto previo: una ruta rompe el
+    determinismo byte a byte. Por brazo mide ``traded`` antes y despues y los ``direction_counts``
+    nuevos; el artefacto previo de #28 **no** publicaba direcciones, asi que no se pueden
+    diferenciar y se declara esa carencia en lugar de inventarla.
+    """
+    previous_arms = previous.get("arms")
+    previous_by_name: Mapping[str, object] = (
+        cast("Mapping[str, object]", previous_arms) if isinstance(previous_arms, Mapping) else {}
+    )
+    rows: list[dict[str, object]] = []
+    for arm in arms:
+        before = previous_by_name.get(arm.name)
+        before_map: Mapping[str, object] | None = (
+            cast("Mapping[str, object]", before) if isinstance(before, Mapping) else None
+        )
+        before_traded = None if before_map is None else before_map.get("traded")
+        if not isinstance(before_traded, int):
+            raise PipelineReportError(
+                f"el artefacto previo {previous_name!r} no publica `arms.{arm.name}.traded`: sin "
+                "el `antes` no se puede declarar el delta de #98 (A5)"
+            )
+        rows.append(
+            {
+                "arm": arm.name,
+                "traded_before": before_traded,
+                "traded_after": arm.run.traded,
+                "delta_traded": arm.run.traded - before_traded,
+                "direction_counts": _direction_counts(arm.run),
+                "previous_published_direction_counts": (
+                    before_map is not None and "direction_counts" in before_map
+                ),
+            }
+        )
+    return {
+        "previous_artifact": previous_name,
+        "subject": "#98",
+        "reason": (
+            "`_favourable_probability` deriva el tier A sobre la probabilidad de la direccion "
+            "del decididor (no sobre `output.direction`, que el gate de `escenario` devuelve "
+            "`nothing` en las 500 sesiones): el lado largo (`p > 0.58`) vuelve a alcanzar el tier A"
+        ),
+        "traded_rule": (
+            "`delta_traded` es el efecto **medido** del arreglo: el artefacto previo no "
+            "publicaba `direction_counts`, asi que las direcciones no se pueden diferenciar; "
+            "solo el recuento de operadas (y el sesgo corto corregido) es comparable"
+        ),
+        "rows": rows,
+        "previous_published_directions": any(
+            cast("bool", row["previous_published_direction_counts"]) for row in rows
+        ),
+        "directions_note": (
+            "el artefacto previo de #28 no publicaba `direction_counts` por brazo: el sesgo corto "
+            "se veia en el conteo agregado, no en el brazo"
+        ),
+        "note": (
+            "el bloque se **mide** contra el artefacto previo declarado; el `report_sha256` del "
+            "informe se recomputa con el bloque dentro"
+        ),
+    }
+
+
 def _arm_payload(
     arm: ArmRun,
     *,
@@ -1836,6 +1941,7 @@ def _arm_payload(
         "traded": arm.run.traded,
         "no_trade": arm.run.no_trade,
         "skipped": arm.run.skipped,
+        "direction_counts": _direction_counts(arm.run),
         "basis": BASIS_DECLARED_COST,
         "is_validation": False,
         "run_sha256": arm.run.run_sha256,
@@ -2132,6 +2238,7 @@ def _payload(
     moves: Mapping[date, Decimal],
     test_sessions: Sequence[date],
     cache: dict[tuple[str, tuple[float, ...]], dict[str, object]],
+    regeneration: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """El payload canonico: tipos JSON puros y determinista (A2, A3)."""
     n_test_without_move = sum(1 for session in test_sessions if session not in moves)
@@ -2226,6 +2333,8 @@ def _payload(
             for name, run in sorted(runs.items())
         },
     }
+    if regeneration is not None:
+        raw["regeneration"] = dict(regeneration)
     return cast("dict[str, object]", _plain(raw, where="payload"))
 
 
@@ -2369,8 +2478,40 @@ def render_markdown(report: PipelineReport) -> str:
         f"- **{item['issue']}** - {item['topic']}: {item['why']}"
         for item in cast("list[dict[str, str]]", payload["follow_ups"])
     )
+    regeneration = payload.get("regeneration")
+    if isinstance(regeneration, dict):
+        lines.extend(_render_regeneration(cast("Mapping[str, object]", regeneration)))
     lines.append("")
     return "\n".join(lines)
+
+
+def _render_regeneration(block: Mapping[str, object]) -> list[str]:
+    """La seccion `## Regeneración`: el antes/despues declarado del arreglo de #98 (A6)."""
+    rows = [cast("Mapping[str, object]", item) for item in cast("Sequence[object]", block["rows"])]
+    lines: list[str] = [
+        SECTION_TITLE,
+        "",
+        f"Artefacto previo declarado: `{block['previous_artifact']}`. Motivo `{block['subject']}`: "
+        f"{block['reason']}.",
+        "",
+        "| brazo | operadas antes | operadas despues | delta | `direction_counts` |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for row in rows:
+        lines.append(
+            f"| `{row['arm']}` | {row['traded_before']} | {row['traded_after']} | "
+            f"{row['delta_traded']} | `{row['direction_counts']}` |"
+        )
+    lines.extend(
+        [
+            "",
+            f"- {block['traded_rule']}",
+            f"- {block['directions_note']}",
+            f"- {block['note']}",
+            "",
+        ]
+    )
+    return lines
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2431,14 +2572,23 @@ def _build_rows(
 
 
 def analyse(
-    *, store: Store, reports_dir: Path, as_of: datetime, write: bool = True
+    *,
+    store: Store,
+    reports_dir: Path,
+    as_of: datetime,
+    write: bool = True,
+    previous_artifact: Path | None = None,
 ) -> PipelineReport:
     """Cablea el pipeline, corre los tres brazos y (por defecto) escribe el informe (A1, A2).
 
     ``as_of`` es **obligatorio** y es el unico instante de la corrida: ninguna ruta consulta el
-    reloj. ``write = False`` no escribe **nada**.
+    reloj. ``write = False`` no escribe **nada**. ``previous_artifact`` es la ruta del informe
+    anterior: cuando se declara, el payload publica el bloque `regeneration` de nivel superior
+    con el antes/despues de #98 (nunca dentro de `arms`, para no romper la reproduccion #86/#93).
     """
     moment = _as_utc(as_of)
+    previous_name = artifact_name(previous_artifact)
+    previous = load_previous(previous_artifact)
     history = load_history(store)
     calendar = load_calendar(years=_calendar_years(history.daily))
     universe = build_inputs(history, calendar=calendar)
@@ -2517,6 +2667,11 @@ def analyse(
     metrics_by_name, zero_series = _build_rows(
         arms=arms, rows=rows, benchmark=benchmark, cache=cache
     )
+    regeneration: dict[str, object] | None = None
+    if previous is not None and previous_name is not None:
+        regeneration = _regeneration_block(
+            previous=previous, previous_name=previous_name, arms=arms
+        )
     payload = _payload(
         as_of=moment,
         universe=universe,
@@ -2537,6 +2692,7 @@ def analyse(
         moves=moves,
         test_sessions=test_sessions,
         cache=cache,
+        regeneration=regeneration,
     )
     report = PipelineReport(
         as_of=moment,
@@ -2601,6 +2757,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="instante declarado ISO-8601, obligatorio para escribir (el modulo no lee el reloj)",
     )
+    parser.add_argument(
+        "--previous-artifact",
+        type=Path,
+        default=None,
+        help=(
+            "ruta del informe anterior: si se declara, el payload publica el antes/despues del "
+            "arreglo de #98 en el bloque `regeneration` de nivel superior"
+        ),
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -2617,8 +2782,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         else data_root / "derived" / "reports"
     )
     try:
-        report = analyse(store=Store(data_root), reports_dir=reports_dir, as_of=moment, write=True)
-    except (PipelineReportError, BacktestReportError) as error:
+        report = analyse(
+            store=Store(data_root),
+            reports_dir=reports_dir,
+            as_of=moment,
+            write=True,
+            previous_artifact=cast("Path | None", args.previous_artifact),
+        )
+    except (PipelineReportError, BacktestReportError, RegenerationError) as error:
         print(f"no se puede emitir el informe del pipeline: {error}", file=sys.stderr)
         return 2
 

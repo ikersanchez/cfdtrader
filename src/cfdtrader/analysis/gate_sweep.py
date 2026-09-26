@@ -727,10 +727,11 @@ def _payload(
             "issue": "#98",
             "cell": REFERENCE_CELL,
             "statement": (
-                f"en `{REFERENCE_CELL}` todas las operaciones son `short`: el gate de `escenario` "
-                "devuelve `direction = nothing` en las 500 sesiones (reglas 9 y 10) y "
-                "`_favourable_probability` deriva el tier sobre `1 - p`. La convencion se publica "
-                "medida, no se cambia en este barrido (#98)"
+                f"en `{REFERENCE_CELL}` la probabilidad a favor es la de la direccion del "
+                "**decididor** (`p` si `p >= DECISION_THRESHOLD`, `1 - p` si no): el gate de "
+                "`escenario` devuelve `direction = nothing` en las 500 sesiones (reglas 9 y 10), "
+                "asi que la convencion **no** se puede leer de `output.direction`. La fija #98 y "
+                "este barrido la publica medida: no la re-decide"
             ),
         },
         "limits": {
@@ -782,7 +783,8 @@ def _payload(
                 "issue": "#98",
                 "id": "favourable_probability_convention",
                 "statement": (
-                    "no cambia la convencion de `_favourable_probability`: la publica medida"
+                    "no re-decide la convencion de `_favourable_probability`: la fija #98 (la "
+                    "direccion del decididor) y aqui solo se mide su efecto sobre la rejilla"
                 ),
             },
             {

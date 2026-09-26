@@ -766,7 +766,11 @@ def test_a5_ast_does_not_touch_the_net_pnl() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 @needs_store
 def test_a6_base_arm_counts_are_read_from_the_artifact(dominance_report: DominanceReport) -> None:
-    """A6: `base_arm: coste_declarado` con 31 / 469 frente a 0 / 500 de los otros dos brazos."""
+    """A6: el brazo base declarado con los recuentos **leidos** del artefacto de #28.
+
+    #98: los recuentos del brazo de coste declarado son regenerables (el arreglo mueve el lado
+    largo), asi que no se fijan como literal: se comparan con el artefacto regenerado.
+    """
     artifact = json.loads(PIPELINE_ARTIFACT.read_text(encoding="utf-8"))
     base_arm = as_map(at(dominance_report.payload, "base_arm"))
     assert base_arm["name"] == "coste_declarado"
@@ -775,10 +779,12 @@ def test_a6_base_arm_counts_are_read_from_the_artifact(dominance_report: Dominan
     assert base_arm["reason"]
     counts = as_map(base_arm["counts"])
     expected = as_map(at(artifact, "arms", "coste_declarado"))
-    assert counts["traded"] == 31
-    assert counts["no_trade"] == 469
     assert counts["traded"] == expected["traded"]
     assert counts["no_trade"] == expected["no_trade"]
+    assert int(cast("int", counts["traded"])) > 0
+    assert int(cast("int", counts["traded"])) + int(cast("int", counts["no_trade"])) == int(
+        cast("int", expected["n_test"])
+    )
     others = as_map(base_arm["other_arms"])
     for name in ("oficial", "escenario"):
         other = as_map(others[name])
@@ -865,14 +871,21 @@ def test_a8_shift_subtracts_only_traded_sessions() -> None:
 
 @needs_store
 def test_a8_units_block_declares_the_conversion(dominance_report: DominanceReport) -> None:
-    """A8: el bloque `units` declara la conversion y el alcance del desplazamiento."""
+    """A8: el bloque `units` declara la conversion y el alcance del desplazamiento.
+
+    #98: `n_traded`/`n_no_trade` son recuentos regenerables del brazo de coste declarado; se
+    leen del artefacto de #28 regenerado, no se fijan como literal.
+    """
     units = as_map(at(dominance_report.payload, "scenario", "units"))
     assert units["bp_to_pct"] == 0.01
     assert units["conversion"] == "1 bp = 0,01 % del nocional"
     assert "sesion operada" in str(units["applied"])
     assert "se tocan" in str(units["applied"])
-    assert units["n_traded"] == 31
-    assert units["n_no_trade"] == 469
+    artifact = json.loads(PIPELINE_ARTIFACT.read_text(encoding="utf-8"))
+    expected = as_map(at(artifact, "arms", "coste_declarado"))
+    assert units["n_traded"] == expected["traded"]
+    assert units["n_no_trade"] == expected["no_trade"]
+    assert int(cast("int", units["n_traded"])) > 0
 
 
 # ─────────────────────────────────────────────────────────────────────────────

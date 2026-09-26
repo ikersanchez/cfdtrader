@@ -879,17 +879,31 @@ def test_a13_markdown_table_has_one_row_per_cell(report: gate_sweep.GateSweepRep
 
 
 @needs_store
-def test_a13_markdown_declares_the_short_finding(report: gate_sweep.GateSweepReport) -> None:
-    """A13: el ``.md`` declara que en ``s1`` todas las operaciones son ``short`` (``1 - p``)."""
+def test_a13_markdown_declares_the_direction_finding(report: gate_sweep.GateSweepReport) -> None:
+    """A13/#98: el `.md` declara la convencion nueva y `s1` **no** es 100 % corto.
+
+    La afirmacion vieja ("todas las operaciones son `short`" y que `_favourable_probability`
+    "deriva el tier sobre `1 - p`") desaparece: con el arreglo es falsa. Se comprueba como
+    **propiedad** (`long + short == traded`, `long > 0`, el `finding` sigue nombrando
+    `_favourable_probability` y `#98`), nunca repitiendo un recuento literal regenerable.
+    """
     markdown = render_markdown(report)
     assert "_favourable_probability" in markdown
-    assert "1 - p" in markdown
-    assert "todas las operaciones son `short`" in markdown
     assert "#98" in markdown
+    assert "todas las operaciones son `short`" not in markdown
+    assert "deriva el tier sobre" not in markdown
+    finding = as_map(report.payload["finding"])
+    assert as_str(finding["id"]) == "favourable_probability"
+    assert as_str(finding["issue"]) == "#98"
+    assert "decididor" in as_str(finding["statement"])
+    assert as_str(finding["cell"]) == REFERENCE_CELL
     s1 = cells_by_id(report.payload)[REFERENCE_CELL]
-    assert as_int(s1["traded"]) == 31
-    assert as_map(s1["direction_counts"]) == {"long": 0, "short": 31}
-    assert as_str(at(report.payload, "finding", "cell")) == REFERENCE_CELL
+    counts = as_map(s1["direction_counts"])
+    assert set(counts) == {"long", "short"}
+    assert as_int(counts["long"]) + as_int(counts["short"]) == as_int(s1["traded"])
+    assert as_int(counts["long"]) > 0
+    entries = as_objects(report.payload["does_not_do"])
+    assert any(as_str(entry["issue"]) == "#98" for entry in entries)
 
 
 @needs_store
