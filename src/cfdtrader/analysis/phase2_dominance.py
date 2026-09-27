@@ -46,9 +46,10 @@ Que **no** hace, y por tanto no puede inventar:
   ser ``fail`` o ``not_evaluable``, y ``pass``/``continue`` no se publican nunca (A12);
 - **no** sustituye el veredicto real sobre la base neta: eso es #88;
 - **no** arregla que la ``hit_rate`` de #28 sea por sesion y no por operacion (#92);
-- **no** publica la serie declarada por sesion en el artefacto de #28: mientras siga sin
-  publicarse (→ #94), este modulo **re-deriva** el pipeline de #28 con su API publica
-  (``analyse(..., write=False)``) y **solo lee** sus artefactos.
+- **no** consume la serie declarada por sesion que el artefacto de #28 **ya** publica
+  (``arms.<brazo>.declared_series``, desde #94): este modulo **re-deriva** el pipeline de #28 con
+  su API publica (``analyse(..., write=False)``) para re-medirla en vivo, y **solo lee** sus
+  artefactos.
 
 **Reloj prohibido** (A2): ninguna ruta consulta el reloj del sistema; el instante entra por
 ``--as-of``, obligatorio para escribir, que sale con codigo 2 y sin tocar disco cuando falta o no
@@ -258,8 +259,10 @@ REPORT_LIMITATIONS: Final[tuple[str, ...]] = (
     "**no** sustituye al de #88",
     "la `hit_rate` del artefacto de #28 es por **sesion** y no por operacion (#92): decide la "
     "mitad del Sharpe y la tasa de acierto se publica con esa salvedad",
-    "el artefacto de #28 **no** publica la serie declarada por sesion, asi que este informe "
-    "re-deriva el pipeline con su API publica (`write=False`): publicar esa serie es #94",
+    "el artefacto de #28 **ya** publica la serie declarada por sesion "
+    "(`arms.<brazo>.declared_series`, desde #94), pero este informe sigue re-derivando el "
+    "pipeline con su API publica (`write=False`) para re-medirla en vivo en vez de consumirla "
+    "en solo lectura (mejora opcional, sin tracker)",
 )
 
 #: Lo que este informe no hace, con la issue que lo cierra.
@@ -296,14 +299,6 @@ REPORT_DOES_NOT_DO: Final[tuple[dict[str, str], ...]] = (
             "operacion: solo se publica, y la decision va por el Sharpe"
         ),
     },
-    {
-        "id": "no_publica_la_serie_declarada",
-        "issue": "#94",
-        "statement": (
-            "no publica la serie declarada por sesion en el artefacto de #28: la re-deriva aqui, "
-            "en solo lectura, mientras #94 no la publique"
-        ),
-    },
 )
 
 #: Seguimientos declarados.
@@ -312,12 +307,6 @@ FOLLOW_UPS: Final[tuple[dict[str, str], ...]] = (
         "issue": "#88",
         "topic": "reemitir el veredicto con la base neta",
         "why": "es el unico veredicto que sustituye a este",
-    },
-    {
-        "issue": "#94",
-        "topic": "publicar la serie declarada por sesion en #28",
-        "why": "hoy este informe re-deriva el pipeline (minutos por corrida) porque el artefacto "
-        "no la publica",
     },
     {
         "issue": "#62",
@@ -774,9 +763,9 @@ def declared_series_of(run: BacktestRun) -> DeclaredSeries:
 def derive_declared_series(*, store: Store, reports_dir: Path, as_of: datetime) -> DeclaredSeries:
     """Re-deriva el pipeline de #28 con su API publica y devuelve la serie del brazo base (A3).
 
-    Se reejecuta el pipeline porque el artefacto de #28 **no** publica la serie por sesion
-    (→ #94). La corrida es ``write=False``: consume el almacen y los artefactos **en solo
-    lectura** y no deja ningun fichero nuevo.
+    Se reejecuta el pipeline para re-medir la serie en vivo aunque el artefacto de #28 **ya**
+    publique ``arms.<brazo>.declared_series`` (desde #94). La corrida es ``write=False``:
+    consume el almacen y los artefactos **en solo lectura** y no deja ningun fichero nuevo.
     """
     report = pipeline_report.analyse(store=store, reports_dir=reports_dir, as_of=as_of, write=False)
     arm = report.arm(ARM_COSTE_DECLARADO)
