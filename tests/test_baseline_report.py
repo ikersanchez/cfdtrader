@@ -15,10 +15,15 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import inspect
 import json
 import math
+import os
 import re
 import statistics
+import subprocess
+import sys
+import textwrap
 from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -48,12 +53,13 @@ from cfdtrader.analysis.experiment_log import (
     record_experiment,
     run_sha256,
 )
+from cfdtrader.analysis.model_comparison import FROZEN_BASELINE, FROZEN_TOLERANCE
 from cfdtrader.backtest.baselines import BASELINE_IDS
 from cfdtrader.backtest.engine import STATUS_TRADED, canonical_text
 from cfdtrader.backtest.metrics import LOG_LOSS_EPSILON, MetricsInputError, calculate_metrics
 from cfdtrader.backtest.splits import walk_forward_splits
 from cfdtrader.data.store import Store, WriteOutcome
-from cfdtrader.models.baseline import BASELINE_FEATURES, DECISION_THRESHOLD, SEED
+from cfdtrader.models.baseline import BASELINE_FEATURES, DECISION_THRESHOLD, HYPERPARAMETERS, SEED
 
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[1]
 REAL_DATA: Final[Path] = REPO_ROOT / "data"
@@ -748,3 +754,332 @@ def test_a15_a_run_without_trades_is_refused_instead_of_publishing_a_zero(
     assert feature_frame.FeatureFrame is not None
     assert SEED == 20260920
     assert isinstance(real_report.__class__ if False else BaselineReport, type)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #97 · la ruta **cruda** de #24 (C1-C15)
+# ─────────────────────────────────────────────────────────────────────────────
+#: Commit base del diff de la entrega de #97 (C15).
+BASE_COMMIT: Final[str] = "025d853"
+
+#: Ficheros que la entrega de #97 **puede** tocar (C15): se exige subset, nunca igualdad.
+WRITTEN: Final[tuple[str, ...]] = (
+    "src/cfdtrader/analysis/baseline_report.py",
+    "tests/test_baseline_report.py",
+    "tests/test_phase2_report.py",
+)
+
+#: Ficheros **congelados** por #97 (C15): el diff no puede tocarlos.
+FROZEN: Final[tuple[str, ...]] = (
+    "src/cfdtrader/backtest/baselines.py",
+    "src/cfdtrader/backtest/metrics.py",
+    "src/cfdtrader/models/baseline.py",
+    "src/cfdtrader/analysis/feature_frame.py",
+)
+
+#: Los **8** hiperparametros del estimador de #24 (C2); #25 anade las 3 de calibracion.
+RAW_HYPERPARAMETERS: Final[tuple[str, ...]] = (
+    "C",
+    "fit_intercept",
+    "l1_ratio",
+    "max_iter",
+    "penalty",
+    "random_state",
+    "solver",
+    "tol",
+)
+
+#: El `sharpe_per_session` pre-#80 que el refresco tiene que abandonar (C6).
+PRE_80_SHARPE: Final[float] = -0.613089140059124
+
+#: Identidad de **configuracion** del experimento crudo (C4): el unico literal de identidad.
+RAW_RUN_SHA256: Final[str] = "408fead50095abb0c154dc73f2f44fb03222fe65bb907a5cc0fb7e01723899c9"
+
+
+@pytest.fixture(scope="session")
+def raw_report(tmp_path_factory: pytest.TempPathFactory) -> BaselineReport:
+    """La corrida **cruda** de #24 completa, una vez por sesion, en un directorio temporal."""
+    root = tmp_path_factory.mktemp("baseline_report_raw")
+    return analyse(
+        store=Store(REAL_DATA),
+        reports_dir=root / "reports",
+        runs_root=root / "runs",
+        as_of=NOW,
+        write=True,
+        raw=True,
+    )
+
+
+def _rows_by_strategy(report: BaselineReport) -> dict[str, dict[str, object]]:
+    """Las siete filas de la tabla comparativa indexadas por `strategy` (C7)."""
+    return {str(row["strategy"]): row for row in _rows(report)}
+
+
+@needs_store
+def test_c1_the_raw_route_is_opt_in_and_the_default_stays_the_25_schema(
+    real_report: BaselineReport, raw_report: BaselineReport, tmp_path: Path
+) -> None:
+    """C1: `raw` es keyword-only y por defecto apagado; la CLI tiene `--raw` equivalente.
+
+    Sin la bandera el payload sigue siendo el de #25 (`task == "#25"` y bloque `calibration`
+    presente); con ella, el de #24. Se comprueba en la funcion y en la CLI.
+    """
+    parameter = inspect.signature(analyse).parameters["raw"]
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameter.default is False
+
+    assert real_report.payload["task"] == "#25"
+    assert "calibration" in real_report.payload
+    assert raw_report.payload["task"] == "#24"
+    assert "calibration" not in raw_report.payload
+
+    directory = tmp_path / "cli"
+    verbosity = ["--data-root", str(REAL_DATA), "--reports-dir", str(directory / "reports")]
+    assert (
+        main([*verbosity, "--runs-root", str(directory / "runs"), "--as-of", NOW.isoformat()]) == 0
+    )
+    published = json.loads(
+        (directory / "reports" / f"{REPORT_PREFIX}_{TARGET_DATE}.json").read_text(encoding="utf-8")
+    )
+    assert published["task"] == "#25"
+    assert "calibration" in published
+    flagged = tmp_path / "cli_raw"
+    assert (
+        main(
+            [
+                "--data-root",
+                str(REAL_DATA),
+                "--reports-dir",
+                str(flagged / "reports"),
+                "--runs-root",
+                str(flagged / "runs"),
+                "--as-of",
+                NOW.isoformat(),
+                "--raw",
+            ]
+        )
+        == 0
+    )
+    crude = json.loads(
+        (flagged / "reports" / f"{REPORT_PREFIX}_{TARGET_DATE}.json").read_text(encoding="utf-8")
+    )
+    assert crude["task"] == "#24"
+    assert "calibration" not in crude
+
+
+@needs_store
+def test_c2_the_raw_payload_publishes_the_24_schema(raw_report: BaselineReport) -> None:
+    """C2: `task == "#24"`, **sin** `calibration` en la raiz y los 8 hiperparametros."""
+    payload = raw_report.payload
+    published = cast("dict[str, object]", payload["hyperparameters"])
+    assert payload["task"] == "#24"
+    assert "calibration" not in payload
+    assert sorted(published) == [
+        "C",
+        "fit_intercept",
+        "l1_ratio",
+        "max_iter",
+        "penalty",
+        "random_state",
+        "solver",
+        "tol",
+    ]
+    assert tuple(sorted(published)) == RAW_HYPERPARAMETERS
+    assert published == dict(HYPERPARAMETERS)
+    assert tuple(RAW_HYPERPARAMETERS) == tuple(sorted(HYPERPARAMETERS))
+    folds = cast("list[dict[str, object]]", payload["folds"])
+    assert len(folds) == 10
+    assert all("calibration" not in fold for fold in folds)
+
+
+@needs_store
+def test_c3_the_raw_blocks_lose_the_calibrated_vereda(raw_report: BaselineReport) -> None:
+    """C3: sin `before`/`after`/`delta`/`headline`/`saturation` y sin `decision.n_traded_raw`."""
+    probability = _block(raw_report, "probability_metrics")
+    assert not {"before", "after", "delta", "headline", "saturation"} & set(probability)
+    assert set(probability) == {
+        "n_test",
+        "n_positives",
+        "brier_score",
+        "log_loss",
+        "calibration",
+        "references",
+        "versus_references",
+        "note",
+    }
+    curve = cast("dict[str, object]", probability["calibration"])
+    assert set(curve) == {"bins", "calibrated", "method", "curve", "note"}
+    assert curve["calibrated"] is False
+    assert curve["method"] == "none"
+    assert len(cast("list[object]", curve["curve"])) == CALIBRATION_BINS
+    decision = _block(raw_report, "decision")
+    assert "n_traded_raw" not in decision
+    assert set(decision) == {
+        "threshold",
+        "rule",
+        "n_traded",
+        "n_no_trade",
+        "n_skipped",
+        "trade_rate",
+        "decider_reads",
+    }
+
+
+@needs_store
+def test_c7_the_raw_rows_drop_the_hundred_x_offset(raw_report: BaselineReport) -> None:
+    """C7: 356 operadas y la suma declarada congelada, sin el desplazamiento 100x."""
+    rows = _rows_by_strategy(raw_report)
+    model_row = rows[VARIANT_ID]
+    assert model_row["traded"] == 356
+    declared = cast("float", cast("dict[str, object]", model_row["pnl_declared_pct"])["sum"])
+    gross = cast("float", cast("dict[str, object]", model_row["gross_pct"])["sum"])
+    assert abs(declared - FROZEN_BASELINE["raw"]["pnl_declared_sum"]) <= FROZEN_TOLERANCE
+    # El coste declarado es una **fraccion** del nocional (0.000042), no 0.0042: el residuo es de
+    # redondeo (~1e-16), nunca el antiguo `1.4952 == 356 x 0.0042`.
+    residual = declared - (gross - 356 * 0.000042)
+    assert abs(residual) <= FROZEN_TOLERANCE
+    assert abs(residual) < 1e-12
+
+    calibrated = cast(
+        "dict[str, object]",
+        json.loads(
+            (REAL_DATA / "derived" / "reports" / "baseline_2026-09-22.json").read_text(
+                encoding="utf-8"
+            )
+        ),
+    )
+    calibrated_rows = {
+        str(row["strategy"]): row
+        for row in cast(
+            "list[dict[str, object]]", cast("dict[str, object]", calibrated["comparison"])["rows"]
+        )
+    }
+    always_long = rows["always_long"]
+    assert always_long["traded"] == 500
+    assert (
+        abs(
+            cast("float", cast("dict[str, object]", always_long["pnl_declared_pct"])["sum"])
+            - cast(
+                "float",
+                cast("dict[str, object]", calibrated_rows["always_long"]["pnl_declared_pct"])[
+                    "sum"
+                ],
+            )
+        )
+        <= FROZEN_TOLERANCE
+    )
+
+
+def _raw_child(hash_seed: str, base: Path) -> dict[str, str]:
+    """Corre el CLI crudo en un proceso fresco con esa semilla de `hash` (C8)."""
+    environment = {**os.environ, "PYTHONHASHSEED": hash_seed}
+    completed = subprocess.run(  # noqa: S603 - el ejecutable es el interprete de la sesion
+        [sys.executable, "-c", RAW_CHILD, str(base)],
+        cwd=REPO_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return cast("dict[str, str]", json.loads(completed.stdout.strip().splitlines()[-1]))
+
+
+RAW_CHILD: Final[str] = textwrap.dedent(
+    """
+    import hashlib, json, sys
+    from cfdtrader.analysis.baseline_report import main
+
+    base = sys.argv[1]
+    code = main([
+        "--data-root", "data",
+        "--reports-dir", base + "/reports",
+        "--runs-root", base + "/runs",
+        "--as-of", "2026-09-20T22:00:00Z",
+        "--raw",
+    ])
+    assert code == 0, code
+    stem = base + "/reports/baseline_2026-09-20"
+    with open(stem + ".json", "rb") as handle:
+        document = handle.read()
+    with open(stem + ".md", "rb") as handle:
+        markdown = handle.read()
+    print(json.dumps({
+        "json": hashlib.sha256(document).hexdigest(),
+        "markdown": hashlib.sha256(markdown).hexdigest(),
+    }))
+    """
+)
+
+
+@needs_store
+def test_c8_the_raw_report_is_self_consistent_and_deterministic(
+    raw_report: BaselineReport, tmp_path: Path
+) -> None:
+    """C8: el digest del crudo tiene formato, es autoconsistente y no depende del proceso."""
+    assert re.fullmatch(r"sha256:[0-9a-f]{64}", raw_report.report_sha256)
+    body = raw_report.report_sha256.removeprefix("sha256:")
+    canonical = hashlib.sha256(canonical_text(raw_report.payload).encode("utf-8")).hexdigest()
+    assert canonical == body
+    assert "report_sha256" not in raw_report.payload
+
+    base = tmp_path / "procesos"
+    results = [_raw_child(seed, base) for seed in ("0", "1", "random")]
+    assert results[0] == results[1] == results[2]
+    assert len(results[0]["json"]) == 64
+    assert len(results[0]["markdown"]) == 64
+
+
+def test_c4_c5_c6_the_regenerated_raw_run_keeps_identity_and_moves_the_sharpe() -> None:
+    """C4/C5/C6: el registro refrescado conserva `run_sha256`/`model_sha256` y mueve el Sharpe."""
+    directory = REPO_ROOT / "runs" / RAW_RUN_SHA256
+    if not directory.is_dir():
+        pytest.skip("el registro del repositorio no esta en el arbol")
+    config = cast("dict[str, object]", json.loads((directory / CONFIG_FILE).read_text("utf-8")))
+    assert config["run_sha256"] == RAW_RUN_SHA256
+    assert (
+        hashlib.sha256(
+            canonical_text(cast("Mapping[str, object]", config["config"])).encode("utf-8")
+        ).hexdigest()
+        == RAW_RUN_SHA256
+    )
+
+    model = cast("dict[str, object]", json.loads((directory / MODEL_FILE).read_text("utf-8")))
+    payload = cast("dict[str, object]", model["model"])
+    assert (
+        hashlib.sha256(canonical_text(payload).encode("utf-8")).hexdigest() == model["model_sha256"]
+    )
+    folds = cast("list[dict[str, object]]", payload["folds"])
+    assert folds and all("calibration" not in fold for fold in folds)
+    assert tuple(sorted(cast("dict[str, object]", payload["hyperparameters"]))) == (
+        RAW_HYPERPARAMETERS
+    )
+
+    result = cast(
+        "dict[str, object]",
+        cast("dict[str, object]", json.loads((directory / RESULT_FILE).read_text("utf-8")))[
+            "result"
+        ],
+    )
+    assert result["n_observations"] == 356
+    assert result["sharpe_per_session"] != PRE_80_SHARPE
+
+
+def test_c15_the_diff_is_a_written_subset_and_never_touches_the_frozen_files() -> None:
+    """C15: guardia de diff SUBSET + DISJUNTO contra el commit base declarado.
+
+    `WRITTEN` tiene que estar **contenido** en el diff (nunca igualdad contra un commit fijo) y
+    el diff no puede tocar ni un fichero congelado ni `analysis/__init__.py` (invariante de
+    `tests/test_gate_sweep.py`): la ruta cruda no necesita ningun export nuevo.
+    """
+    completed = subprocess.run(  # noqa: S603 - `git` es el ejecutable del proyecto
+        ["git", "diff", "--name-only", f"{BASE_COMMIT}..HEAD"],  # noqa: S607 - `git` del PATH
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    changed = {line.strip() for line in completed.stdout.splitlines() if line.strip()}
+    missing = sorted(set(WRITTEN) - changed)
+    assert not missing, f"la entrega no esta en el diff: {missing}"
+    assert changed.isdisjoint(FROZEN), f"toca ficheros congelados: {sorted(changed & set(FROZEN))}"
+    assert "src/cfdtrader/analysis/__init__.py" not in changed

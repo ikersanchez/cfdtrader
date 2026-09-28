@@ -191,6 +191,37 @@ MODEL_HASH_FORMAT: Final[str] = (
     "las predicciones sin `pickle`"
 )
 
+#: Identidad publicada del informe: el **crudo** de #24 o el calibrado de #25 (C1/C2).
+RAW_TASK: Final[str] = "#24"
+
+#: La variante calibrada de #25, la que decide con `p_cal`.
+CALIBRATED_TASK: Final[str] = "#25"
+
+#: La regla del decider en cada ruta: la cruda decide con `p` y la calibrada con `p_cal`.
+DECISION_RULE: Final[str] = "`Direction.LONG` si `p_cal >= 0,5`; `Direction.NOTHING` si no (A7/A11)"
+
+RAW_DECISION_RULE: Final[str] = "`Direction.LONG` si `p >= 0,5`; `Direction.NOTHING` si no (A11)"
+
+#: Nota de la curva de fiabilidad del crudo de #24: se publica **sin** calibrar.
+RAW_CURVE_NOTE: Final[str] = (
+    'la curva se publica **sin** calibrar (`calibrated: false`, `method: "none"`): calibrar '
+    "(Platt/Isotonica) es #25 y aqui no se toca"
+)
+
+#: Nota del bloque de probabilidad crudo: tres cifras sobre las **mismas** sesiones de test.
+RAW_PROBABILITY_NOTE: Final[str] = (
+    "las tres cifras se calculan sobre las mismas sesiones de *test*: el modelo, la tasa base "
+    "del train del fold y `always_long` (A9). Son metricas de **probabilidad**, no de "
+    "rentabilidad: la comparacion en el espacio de coste declarado esta en `comparison`"
+)
+
+#: Nota de las cuatro comparaciones del crudo: medida, nunca afirmada.
+RAW_VERSUS_NOTE: Final[str] = (
+    "**medido**, no afirmado: son las cuatro comparaciones anteriores calculadas sobre las "
+    "mismas 500 sesiones. Un `false` se publica tal cual —el modelo baseline no tiene por que "
+    "batir su referencia— y no se maquilla ni se cambia el umbral para que bata (A11)"
+)
+
 #: Motivo publicado cuando las metricas netas no se pueden calcular (A10).
 NET_METRICS_REASON: Final[str] = (
     "`pnl_net_pct` es `null` en todas las operaciones: el supuesto de #64 no se puede cobrar sin "
@@ -300,6 +331,35 @@ FOLLOW_UPS: Final[tuple[dict[str, str], ...]] = (
     },
 )
 
+# ── La prosa del **crudo** de #24 (C2/C3): no puede afirmar que calibra ────────────────
+#: Lo que **no** hace el crudo: en vez de declarar que calibra, declara que no (A5 de #24).
+RAW_REPORT_DOES_NOT_DO: Final[tuple[dict[str, str], ...]] = (
+    {
+        "id": "no_calibra",
+        "issue": "#25",
+        "statement": (
+            "no calibra las probabilidades: publica la curva sin calibrar (`calibrated: false`, "
+            '`method: "none"`) y la calibracion es #25'
+        ),
+    },
+    *(item for item in REPORT_DOES_NOT_DO if item["id"] != "calibra_en_el_train"),
+)
+
+#: Seguimientos del crudo: el de calibracion apunta a #25, no a #26.
+RAW_FOLLOW_UPS: Final[tuple[dict[str, str], ...]] = (
+    FOLLOW_UPS[0],
+    FOLLOW_UPS[1],
+    {
+        "issue": "#25",
+        "topic": "calibrar las probabilidades",
+        "why": (
+            "la curva publicada es la **sin** calibrar; el Brier y el log-loss son de la "
+            "probabilidad cruda"
+        ),
+    },
+    *FOLLOW_UPS[3:],
+)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Errores tipados
@@ -347,6 +407,33 @@ def _report_digest(payload: Mapping[str, object]) -> str:
 def model_sha256(model: BaselineModel) -> str:
     """``model_sha256``: sha256 del payload del modelo (coeficientes, intercepto y escalado)."""
     return _digest(model.to_payload())
+
+
+def _without_calibration(payload: Mapping[str, object]) -> dict[str, object]:
+    """El payload del modelo **sin** el bloque `calibration` de cada fold (convencion #24/#25).
+
+    El `model.json` que trae `calibration` por fold es el **calibrado**; el que no lo trae es el
+    **crudo**, y esa ausencia es lo que lee la reconstruccion de #26 (``"calibration" in
+    folds[0]``). Precedente: ``model_comparison._without_calibration``.
+    """
+    folds = cast("list[object]", payload["folds"])
+    return {
+        **payload,
+        "folds": [
+            {
+                key: value
+                for key, value in cast("Mapping[str, object]", item).items()
+                if key != "calibration"
+            }
+            for item in folds
+        ],
+    }
+
+
+def _model_payload(model: BaselineModel, *, raw: bool) -> dict[str, object]:
+    """El payload del modelo **publicado**: con el bloque `calibration` por fold o sin el."""
+    payload = model.to_payload()
+    return _without_calibration(payload) if raw else payload
 
 
 def _date_text(value: date | None) -> str | None:
@@ -586,6 +673,65 @@ def _calibration_per_fold(folds: Sequence[FoldFit]) -> list[dict[str, object]]:
     ]
 
 
+def _raw_probability_block(
+    *,
+    probabilities: Sequence[float],
+    outcomes: Sequence[int],
+    references: Sequence[float],
+) -> dict[str, object]:
+    """El bloque de probabilidad del **crudo** de #24: una sola vereda y su curva sin calibrar.
+
+    Es el esquema que publicaba #24 antes de #25: no hay `before`/`after`/`delta`/
+    `headline`/`saturation` (eso nace con la calibracion) y el sub-bloque
+    `calibration.curve` se conserva, declarado como **no** calibrado. Las cifras son las mismas
+    funciones de #15, sobre la probabilidad cruda.
+    """
+    base_rate_brier = brier_score(references, outcomes)
+    base_rate_loss = log_loss(references, outcomes)
+    always_brier = brier_score([1.0] * len(outcomes), outcomes)
+    always_loss = log_loss([1.0] * len(outcomes), outcomes)
+    brier = brier_score(probabilities, outcomes)
+    loss = log_loss(probabilities, outcomes)
+    return {
+        "n_test": len(probabilities),
+        "n_positives": int(sum(outcomes)),
+        "brier_score": brier,
+        "log_loss": loss,
+        "calibration": {
+            "bins": CALIBRATION_BINS,
+            "calibrated": False,
+            "method": METHOD_NONE,
+            "curve": [
+                dataclasses.asdict(item)
+                for item in calibration_curve(probabilities, outcomes, n_bins=CALIBRATION_BINS)
+            ],
+            "note": RAW_CURVE_NOTE,
+        },
+        "references": {
+            "base_rate": {
+                "rule": "tasa base del **train** de cada fold, aplicada a las sesiones de su test",
+                "brier_score": base_rate_brier,
+                "log_loss": base_rate_loss,
+                "mean_probability": sum(references) / len(references),
+            },
+            "always_long": {
+                "rule": "probabilidad declarada 1,0 en las **mismas** sesiones de test (A9)",
+                "brier_score": always_brier,
+                "log_loss": always_loss,
+                "mean_probability": 1.0,
+            },
+        },
+        "versus_references": {
+            "beats_base_rate_brier": brier < base_rate_brier,
+            "beats_base_rate_log_loss": loss < base_rate_loss,
+            "beats_always_long_brier": brier < always_brier,
+            "beats_always_long_log_loss": loss < always_loss,
+            "note": RAW_VERSUS_NOTE,
+        },
+        "note": RAW_PROBABILITY_NOTE,
+    }
+
+
 def _probability_block(
     *,
     raw: Sequence[float],
@@ -803,9 +949,16 @@ def _probability_series(
     return raw_series, calibrated_series, outcomes, references
 
 
-def _fold_tables(model: BaselineModel) -> list[dict[str, object]]:
-    """Los folds como JSON puro: escalado y coeficientes **por fold** (A7, A12)."""
-    return [fold.to_payload() for fold in model.folds]
+def _fold_tables(model: BaselineModel, *, raw: bool = False) -> list[dict[str, object]]:
+    """Los folds como JSON puro: escalado y coeficientes **por fold** (A7, A12).
+
+    En la ruta cruda el payload va **sin** el bloque `calibration` por fold: es lo que #24
+    publicaba y lo que la reconstruccion de #26 lee como variante cruda.
+    """
+    payload = _model_payload(model, raw=raw)
+    return [
+        dict(cast("Mapping[str, object]", item)) for item in cast("list[object]", payload["folds"])
+    ]
 
 
 def _universe_block(universe: backtest_report.Universe, frame: FeatureFrame) -> dict[str, object]:
@@ -1103,15 +1256,26 @@ def _payload(
     declared_cost: Mapping[str, object],
     previous: Mapping[str, object] | None = None,
     previous_name: str | None = None,
+    raw_mode: bool = False,
 ) -> dict[str, object]:
-    """El payload canonico del informe: tipos JSON puros y determinista (A8, A13)."""
+    """El payload canonico del informe: tipos JSON puros y determinista (A8, A13).
+
+    ``raw_mode`` publica el esquema **crudo** de #24 (opt-in): `task == "#24"`, sin el bloque
+    `calibration` de la raiz, con los 8 hiperparametros del estimador, sin la comparacion
+    cruda-frente-a-calibrada y sin `decision.n_traded_raw`. La ruta por defecto sigue siendo la
+    de #25.
+    """
     raw_series, calibrated_series, outcomes, references = probability_series
-    probability_block = _probability_block(
-        raw=raw_series,
-        calibrated=calibrated_series,
-        outcomes=outcomes,
-        references=references,
-        folds=model.folds,
+    probability_block = (
+        _raw_probability_block(probabilities=raw_series, outcomes=outcomes, references=references)
+        if raw_mode
+        else _probability_block(
+            raw=raw_series,
+            calibrated=calibrated_series,
+            outcomes=outcomes,
+            references=references,
+            folds=model.folds,
+        )
     )
     comparison = _comparison_block(
         model_run=model_run,
@@ -1120,9 +1284,9 @@ def _payload(
         plan=plan,
         probability_block=probability_block,
     )
-    raw: dict[str, object] = {
+    payload: dict[str, object] = {
         "analysis": "cfdtrader.analysis.baseline_report",
-        "task": "#25",
+        "task": RAW_TASK if raw_mode else CALIBRATED_TASK,
         "variant_id": VARIANT_ID,
         "generated_at": as_of.isoformat(),
         "hash_format": REPORT_HASH_FORMAT,
@@ -1159,26 +1323,22 @@ def _payload(
             "`tol` son cotas declaradas: la convergencia se publica por fold"
         ),
         "seed": model.seed,
-        "calibration": {
-            "constants": dict(CALIBRATION_HYPERPARAMETERS),
-            "rule": CALIBRATION_RULE,
-            "where": (
-                "la cola purgada del *train* de cada fold (`cfdtrader.models.calibration`, #25); "
-                "el *test* no entra ni en el estimador ni en el calibrador"
-            ),
-            "decides": (
-                "la decision usa la probabilidad **calibrada** (`p_cal >= 0,5`); la cruda se "
-                "publica en `probability_metrics.before` (A7)"
-            ),
-            "none_reason": CALIBRATION_NONE_REASON,
-        },
-        "folds": _fold_tables(model),
+        **({} if raw_mode else {"calibration": _calibration_block()}),
+        "folds": _fold_tables(model, raw=raw_mode),
         "probability_metrics": probability_block,
         "decision": {
             "threshold": DECISION_THRESHOLD,
-            "rule": "`Direction.LONG` si `p_cal >= 0,5`; `Direction.NOTHING` si no (A7/A11)",
+            "rule": RAW_DECISION_RULE if raw_mode else DECISION_RULE,
             "n_traded": model_run.traded,
-            "n_traded_raw": cast("dict[str, object]", probability_block["before"])["n_traded"],
+            **(
+                {}
+                if raw_mode
+                else {
+                    "n_traded_raw": cast("dict[str, object]", probability_block["before"])[
+                        "n_traded"
+                    ]
+                }
+            ),
             "n_no_trade": model_run.no_trade,
             "n_skipped": model_run.skipped,
             "trade_rate": model_run.traded / len(calibrated_series) if calibrated_series else None,
@@ -1204,13 +1364,32 @@ def _payload(
         },
         "limits": _limits_block(),
         "features_limitations": list(FEATURES_LIMITATIONS),
-        "limitations": list(LIMITATIONS),
-        "does_not_do": [dict(item) for item in REPORT_DOES_NOT_DO],
-        "follow_ups": [dict(item) for item in FOLLOW_UPS],
+        "limitations": list(RAW_LIMITATIONS if raw_mode else LIMITATIONS),
+        "does_not_do": [
+            dict(item) for item in (RAW_REPORT_DOES_NOT_DO if raw_mode else REPORT_DOES_NOT_DO)
+        ],
+        "follow_ups": [dict(item) for item in (RAW_FOLLOW_UPS if raw_mode else FOLLOW_UPS)],
     }
     if previous is not None and previous_name is not None:
-        raw["regeneration"] = _regeneration_block(previous, comparison, name=previous_name)
-    return raw
+        payload["regeneration"] = _regeneration_block(previous, comparison, name=previous_name)
+    return payload
+
+
+def _calibration_block() -> dict[str, object]:
+    """El bloque `calibration` de la raiz: constante y decision del calibrador de #25."""
+    return {
+        "constants": dict(CALIBRATION_HYPERPARAMETERS),
+        "rule": CALIBRATION_RULE,
+        "where": (
+            "la cola purgada del *train* de cada fold (`cfdtrader.models.calibration`, #25); "
+            "el *test* no entra ni en el estimador ni en el calibrador"
+        ),
+        "decides": (
+            "la decision usa la probabilidad **calibrada** (`p_cal >= 0,5`); la cruda se "
+            "publica en `probability_metrics.before` (A7)"
+        ),
+        "none_reason": CALIBRATION_NONE_REASON,
+    }
 
 
 #: Limites declarados del informe.
@@ -1227,6 +1406,14 @@ LIMITATIONS: Final[tuple[str, ...]] = (
     "cierre de la sesion (#27)",
     "`sessions_to_opex` se queda fuera por sus 17 nulos de cola (#79), y `pendiente_2s10s` y su "
     "`_chg_5` por dependencia lineal exacta",
+)
+
+#: Limites del **crudo** de #24: la segunda sustituye a la de #25, que afirma lo contrario.
+RAW_LIMITATIONS: Final[tuple[str, ...]] = (
+    LIMITATIONS[0],
+    "las probabilidades **no** estan calibradas: Brier y log-loss se publican sobre la "
+    "probabilidad cruda (#25)",
+    *LIMITATIONS[2:],
 )
 
 
@@ -1247,7 +1434,13 @@ def _number(value: object, *, digits: int = 6) -> str:
 
 
 def render_markdown(report: BaselineReport) -> str:
-    """El informe en Markdown, determinista y sin cifras que no esten en el payload."""
+    """El informe en Markdown, determinista y sin cifras que no esten en el payload.
+
+    La ruta **cruda** de #24 tiene su propia prosa: no publica la comparacion
+    cruda-frente-a-calibrada ni la curva calibrada, que no existen sin calibrador.
+    """
+    if report.payload.get("task") == RAW_TASK:
+        return _render_markdown_raw(report)
     payload = report.payload
     universe = cast("dict[str, object]", payload["universe"])
     target = cast("dict[str, object]", payload["target"])
@@ -1501,19 +1694,236 @@ def render_markdown(report: BaselineReport) -> str:
     return "\n".join(lines)
 
 
+def _render_markdown_raw(report: BaselineReport) -> str:
+    """El informe del **crudo** de #24 en Markdown: misma disciplina, sin calibrador.
+
+    No publica la comparacion cruda-frente-a-calibrada ni la curva calibrada (no existen sin
+    calibrador) y ninguna cifra que no este en el payload: la prosa sale del mismo diccionario
+    que se hashea, asi que dos corridas con el mismo `as_of` dan el mismo texto.
+    """
+    payload = report.payload
+    universe = cast("dict[str, object]", payload["universe"])
+    target = cast("dict[str, object]", payload["target"])
+    features = cast("dict[str, object]", payload["features"])
+    vs_sample = cast("dict[str, object]", payload["features_vs_sample"])
+    design = cast("dict[str, object]", payload["design"])
+    plan = cast("dict[str, object]", payload["plan"])
+    probability = cast("dict[str, object]", payload["probability_metrics"])
+    curve_block = cast("dict[str, object]", probability["calibration"])
+    references = cast("dict[str, object]", probability["references"])
+    base_rate = cast("dict[str, object]", references["base_rate"])
+    always_long = cast("dict[str, object]", references["always_long"])
+    versus = cast("dict[str, object]", probability["versus_references"])
+    decision = cast("dict[str, object]", payload["decision"])
+    cost = cast("dict[str, object]", payload["declared_cost"])
+    registry = cast("dict[str, object]", payload["registry"])
+    comparison = cast("dict[str, object]", payload["comparison"])
+    rows = cast("list[dict[str, object]]", comparison["rows"])
+    net = cast("dict[str, object]", payload["net_metrics"])
+    folds = cast("list[dict[str, object]]", payload["folds"])
+
+    lines: list[str] = [
+        f"# Modelo baseline con *purged CV* (crudo de #24) — `{universe['series_id']}`",
+        "",
+        f"Variante `{payload['variant_id']}` (logistica elastic net **sin** calibrador). "
+        f"Generado el `{payload['generated_at']}` (**declarado**, no leido del reloj). "
+        f"`report_sha256 = {report.report_sha256}`.",
+        "",
+        f"**No es una validacion.** `gate = {payload['gate']}`, "
+        f"`phase1_ready = {payload['phase1_ready']}`.",
+        "",
+        "## Universo y objetivo",
+        "",
+        f"- Sesiones: **{universe['n_sessions']}**, `{universe['first_session']}` → "
+        f"`{universe['last_session']}`; nulos en las 10 features: "
+        f"**{universe['n_nulls_in_features']}**.",
+        f"- Sesiones con media sesion (`is_half_day`): {universe['n_half_days']}.",
+        f"- Objetivo: `{target['rule']}` ⇒ **{target['n_positives']}** positivos de "
+        f"{target['n_sessions']} ({_number(target['positive_rate'])}), direccion "
+        f"`{target['direction']}`.",
+        "",
+        "## Features frente al tamano muestral",
+        "",
+        f"- `n_sessions = {vs_sample['n_sessions']}`,"
+        f" `n_features = {vs_sample['n_features']}`,"
+        f" `n_parameters = {vs_sample['n_parameters']}`,"
+        f" `n_positives = {vs_sample['n_positives']}`,"
+        f" `positives_per_feature = {_number(vs_sample['positives_per_feature'])}`.",
+        f"- `{vs_sample['plan_reference']}`.",
+        f"- Features: {', '.join(f'`{name}`' for name in cast('list[str]', features['names']))}.",
+        "",
+        "## Corrimiento de disponibilidad (A2)",
+        "",
+        f"- `design_lag_sessions = {design['design_lag_sessions']}`, "
+        f"`n_shifted_rows = {design['n_shifted_rows']}`, "
+        f"`n_nulls_in_design = {design['n_nulls_in_design']}`.",
+        f"- `matrix_sha256 = {design['matrix_sha256']}` "
+        f"({design['matrix_sessions']} sesiones × {design['matrix_columns']} columnas).",
+        f"- {design['rule']}",
+        "",
+        "## Plan de folds (importado de #69)",
+        "",
+        f"- `plan_sha256 = {plan['plan_sha256']}`",
+        f"- `n_splits = {plan['n_splits']}`, `test_size = {plan['test_size']}`, "
+        f"`embargo_sessions = {plan['embargo_sessions']}`, "
+        f"`max_train_size = {plan['max_train_size']}`",
+        f"- Sesiones de *test*: **{plan['n_test']}**; fuera de todo *test*: "
+        f"**{plan['not_in_any_test']}**.",
+        "",
+        "## Hiperparametros (fijos a priori, los 8 de #24)",
+        "",
+        "```json",
+        __import__("json").dumps(payload["hyperparameters"], ensure_ascii=False, sort_keys=True),
+        "```",
+        "",
+        f"- {payload['hyperparameters_note']}",
+        "",
+        "## Folds ajustados",
+        "",
+        "| fold | train | test | positivos train | tasa base | iter | convergido | intercepto |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for fold in folds:
+        lines.append(
+            f"| {fold['index']} | {fold['n_train']} ({fold['train_first_session']} → "
+            f"{fold['train_last_session']}) | {fold['n_test']} | {fold['train_positives']} | "
+            f"{_number(fold['train_base_rate'])} | {fold['n_iter']} | {fold['converged']} | "
+            f"{_number(fold['intercept'])} |"
+        )
+    lines.extend(
+        [
+            "",
+            "- El escalado (`mean`, `scale`) y los coeficientes de **cada** fold viajan al "
+            "informe y a `model.json` **sin** el bloque `calibration`: es lo que publicaba #24 y "
+            "lo que la reconstruccion de #26 lee como variante cruda.",
+            "",
+            "## Metricas de probabilidad (cruda, sin calibrar)",
+            "",
+            f"- Sesiones de test: **{probability['n_test']}** "
+            f"({probability['n_positives']} positivos).",
+            f"- `brier_score = {_number(probability['brier_score'])}`, "
+            f"`log_loss = {_number(probability['log_loss'])}`.",
+            f"- Curva de fiabilidad con **{curve_block['bins']}** bins: "
+            f"`calibrated = {curve_block['calibrated']}`, `method = {curve_block['method']}`. "
+            f"{curve_block['note']}",
+            f"- Referencia `base_rate` (tasa base del train de cada fold): "
+            f"`brier_score = {_number(base_rate['brier_score'])}`, "
+            f"`log_loss = {_number(base_rate['log_loss'])}`.",
+            f"- Referencia `always_long` (`p = 1,0`): "
+            f"`brier_score = {_number(always_long['brier_score'])}`, "
+            f"`log_loss = {_number(always_long['log_loss'])}`.",
+            f"- La probabilidad cruda **bate** al `base_rate`: en Brier "
+            f"`{versus['beats_base_rate_brier']}`, en log-loss "
+            f"`{versus['beats_base_rate_log_loss']}`; y a `always_long`: en Brier "
+            f"`{versus['beats_always_long_brier']}`, en log-loss "
+            f"`{versus['beats_always_long_log_loss']}`. {versus['note']}",
+            "",
+        ]
+    )
+    lines.extend(
+        f"- Bin [{_number(row['lower'])}, {_number(row['upper'])}): "
+        f"p = {_number(row['predicted_probability'])}, "
+        f"observado = {_number(row['observed_frequency'])}, n = {row['count']}"
+        for row in cast("list[dict[str, object]]", curve_block["curve"])
+    )
+    lines.extend(
+        [
+            "",
+            "## Decision declarada (A11)",
+            "",
+            f"- `DECISION_THRESHOLD = {decision['threshold']}`; {decision['rule']}",
+            f"- Operadas: **{decision['n_traded']}** de {probability['n_test']} "
+            f"(`no_trade = {decision['n_no_trade']}`, `skipped = {decision['n_skipped']}`, "
+            f"tasa = {_number(decision['trade_rate'])}).",
+            "",
+            "## Coste declarado y rechazo de las metricas netas (A10)",
+            "",
+            f"- `basis = {cost['basis']}`, `is_validation = {cost['is_validation']}`; serie = "
+            f"`pnl_declared_pct` de las **{cost['n_traded']}** sesiones operadas.",
+            f"- `mean = {_number(cost['mean'])}`, `median = {_number(cost['median'])}`, "
+            f"`sum = {_number(cost['sum'])}`.",
+            f"- `sharpe_ratio(annualization=1) = {_number(cost['sharpe_ratio'])}`, "
+            f"`sortino_ratio(annualization=1) = {_number(cost['sortino_ratio'])}`.",
+            f"- Metricas netas: `{net['state']}` — {net['reason']}",
+            "",
+            "## Registro",
+            "",
+            f"- `run_sha256 = {registry['run_sha256']}` en `{registry['runs_directory']}`.",
+            f"- `model_sha256 = {registry['model_sha256']}` en `{registry['model_file']}`.",
+            f"- Entradas del registro: {registry['registry_entries']}.",
+            "",
+            "## Comparacion contra los baselines (misma muestra)",
+            "",
+            f"Nocional plano declarado: **{comparison['notional_usd']} USD**. "
+            f"`n_inputs = {comparison['n_inputs']}`, `n_test = {comparison['n_test']}`, "
+            f"`plan_sha256 = {comparison['plan_sha256']}` en las siete filas.",
+            "",
+            "| fila | fuente | n_test | operadas | no_trade | skipped | media | mediana | suma | "
+            "Brier | log-loss |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for row in rows:
+        summary = cast("dict[str, object]", row["pnl_declared_pct"])
+        lines.append(
+            f"| `{row['strategy']}` | {row['source']} | {row['n_test']} | {row['traded']} | "
+            f"{row['no_trade']} | {row['skipped']} | {_number(summary['mean'])} | "
+            f"{_number(summary['median'])} | {_number(summary['sum'])} | "
+            f"{_number(row.get('brier_score'))} | {_number(row.get('log_loss'))} |"
+        )
+    lines.extend(["", f"- {comparison['note']}", ""])
+    regeneration = payload.get("regeneration")
+    if isinstance(regeneration, dict):
+        lines.extend(
+            regeneration_delta.render_declared_section(
+                cast("Mapping[str, object]", regeneration),
+                intro=(
+                    "Este informe se ha **regenerado** y declara, fila a fila, la suma declarada "
+                    "previa, la nueva y el delta por operacion."
+                ),
+            )
+        )
+    lines.extend(["", "## Limitaciones", ""])
+    lines.extend(f"- {item}" for item in cast("list[str]", payload["limitations"]))
+    lines.append("")
+    lines.extend(f"- {item}" for item in cast("list[str]", payload["features_limitations"]))
+    lines.extend(["", "## Que no hace este modulo", ""])
+    lines.extend(
+        f"- **{item['issue']}** · `{item['id']}`: {item['statement']}"
+        for item in cast("list[dict[str, str]]", payload["does_not_do"])
+    )
+    lines.extend(["", "## Seguimientos", ""])
+    lines.extend(
+        f"- **{item['issue']}** · {item['topic']}: {item['why']}"
+        for item in cast("list[dict[str, str]]", payload["follow_ups"])
+    )
+    lines.append("")
+    return "\n".join(lines)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Ejecucion (A13)
 # ─────────────────────────────────────────────────────────────────────────────
-def _configuration(store: Store, *, frame: FeatureFrame, plan: SplitPlan) -> ExperimentConfig:
+def _configuration(
+    store: Store,
+    *,
+    frame: FeatureFrame,
+    plan: SplitPlan,
+    hyperparameters: Mapping[str, object] | None = None,
+) -> ExperimentConfig:
     """La configuracion registrada de la variante: features, hiperparametros, semilla y fuente.
 
-    Los hiperparametros registrados incluyen las **tres** constantes de calibracion (A9):
-    cambiarlas cambia el `run_sha256` del experimento, como cualquier otra decision declarada.
+    La ruta calibrada registra las **tres** constantes de calibracion junto a los 8 del
+    estimador (A9): cambiarlas cambia el `run_sha256`, como cualquier otra decision declarada.
+    La ruta **cruda** registra solo los 8 de #24: es la configuracion que hashea al
+    `run_sha256` declarado del experimento crudo.
     """
     return ExperimentConfig(
         variant_id=VARIANT_ID,
         features=BASELINE_FEATURES,
-        hyperparameters=dict(REGISTERED_HYPERPARAMETERS),
+        hyperparameters=dict(
+            REGISTERED_HYPERPARAMETERS if hyperparameters is None else hyperparameters
+        ),
         seed=SEED,
         series_id=backtest_report.SERIES_ID,
         window={
@@ -1554,6 +1964,7 @@ def analyse(
     as_of: datetime,
     write: bool = True,
     previous_artifact: Path | None = None,
+    raw: bool = False,
 ) -> BaselineReport:
     """Entrena, evalua, registra y (por defecto) escribe el informe del baseline (A13).
 
@@ -1561,6 +1972,10 @@ def analyse(
     reloj. ``write=False`` no escribe **nada** (ni el informe ni la carpeta del registro).
     ``previous_artifact`` es la ruta del informe anterior: cuando se declara, el payload publica
     el bloque `regeneration` con la diferencia medida fila a fila (#90).
+
+    ``raw`` es la bandera **opt-in** (keyword-only, apagada por defecto) de la ruta cruda de
+    #24: sin calibrador, con el esquema de #24 y con la configuracion de los 8 hiperparametros.
+    Sin ella el informe es el de #25, con la probabilidad calibrada como la que decide.
     """
     moment = _as_utc(as_of)
     previous = regeneration_delta.load_previous(previous_artifact)
@@ -1571,15 +1986,17 @@ def analyse(
     frame = _analyse_feature_frame(store)
     _require_alignment(universe, frame)
     plan = backtest_report.build_split_plan(universe.inputs, params=backtest_report.PHASE1_PLAN)
+    hyperparameters: Mapping[str, object] = HYPERPARAMETERS if raw else REGISTERED_HYPERPARAMETERS
     model = fit_baseline(
         frame.design,
         splits=split_assignments(plan),
-        hyperparameters=REGISTERED_HYPERPARAMETERS,
+        hyperparameters=hyperparameters,
         label_horizon=_label_horizon(plan),
     )
     predicted = probabilities(model, frame.design.frame)
-    calibrated = calibrated_probabilities(model, frame.design.frame)
-    inputs = _scored_inputs(universe.inputs, calibrated)
+    # La cruda decide con la probabilidad **cruda**; la calibrada, con la calibrada (A7/A11).
+    decided = predicted if raw else calibrated_probabilities(model, frame.design.frame)
+    inputs = _scored_inputs(universe.inputs, decided)
 
     model_cost = declared_cost_model()
     slippage: SlippageParameter = backtest_report.declared_slippage_assumption()
@@ -1605,7 +2022,7 @@ def analyse(
         )
 
     probability_series = _probability_series(frame, run, model, predicted)
-    config = _configuration(store, frame=frame, plan=plan)
+    config = _configuration(store, frame=frame, plan=plan, hyperparameters=hyperparameters)
     result = ExperimentResult(
         sharpe_per_session=sharpe_ratio(
             [
@@ -1621,11 +2038,15 @@ def analyse(
     record = record_experiment(
         runs_root=runs_root, config=config, result=result, as_of=moment, write=write
     )
-    model_digest = model_sha256(model)
+    model_payload = _model_payload(model, raw=raw)
+    model_digest = _digest(model_payload)
     registry = load_registry(record.directory.parent, extra=(record,))
     model_path = record.directory / MODEL_FILE
     outcome = (
-        _write_immutable(model_path, _model_text(record=record, model=model, digest=model_digest))
+        _write_immutable(
+            model_path,
+            _model_text(record=record, payload=model_payload, digest=model_digest),
+        )
         if write
         else WriteOutcome.UNCHANGED
     )
@@ -1646,6 +2067,7 @@ def analyse(
         declared_cost=declared_cost,
         previous=previous,
         previous_name=previous_name,
+        raw_mode=raw,
     )
     report = BaselineReport(
         as_of=moment,
@@ -1665,7 +2087,7 @@ def analyse(
         config=config,
         result=result,
         probabilities=predicted,
-        calibrated=calibrated,
+        calibrated=decided,
     )
     if write:
         json_path, markdown_path = report.write(reports_dir)
@@ -1673,14 +2095,19 @@ def analyse(
     return report
 
 
-def _model_text(*, record: ExperimentRecord, model: BaselineModel, digest: str) -> str:
-    """El ``model.json``: cuarto artefacto del registro, JSON puro y sin `pickle` (A12)."""
+def _model_text(*, record: ExperimentRecord, payload: Mapping[str, object], digest: str) -> str:
+    """El ``model.json``: cuarto artefacto del registro, JSON puro y sin `pickle` (A12).
+
+    ``payload`` es el payload **publicado** del modelo: el calibrado trae el bloque
+    `calibration` por fold y el crudo de #24 no lo trae, que es como la reconstruccion de #26
+    distingue una variante de la otra.
+    """
     return _json_text(
         {
             "run_sha256": record.run_sha256,
             "model_sha256": digest,
             "hash_format": MODEL_HASH_FORMAT,
-            "model": model.to_payload(),
+            "model": dict(payload),
             "note": (
                 "coeficientes, intercepto y escalado **por fold**, en JSON: `load_registry` de #16 "
                 "solo lee `config.json` y `result.json`, asi que este cuarto fichero no altera el "
@@ -1747,6 +2174,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             "suma declarada fila a fila (#90)"
         ),
     )
+    parser.add_argument(
+        "--raw",
+        action="store_true",
+        help=(
+            "emite el **crudo** de #24 (opt-in): sin calibrador, con el esquema de #24 y la "
+            "configuracion de los 8 hiperparametros. Sin la bandera el informe es el de #25"
+        ),
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -1771,6 +2206,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             as_of=moment,
             write=True,
             previous_artifact=cast("Path | None", args.previous_artifact),
+            raw=bool(args.raw),
         )
     except (
         BaselineReportError,

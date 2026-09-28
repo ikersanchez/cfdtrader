@@ -776,8 +776,11 @@ def test_a13_pbo_and_dsr_are_copied(real_report: phase2_report.Phase2Report) -> 
     # #90: el PBO de #26 se **copia** del `model_comparison` regenerado. Al corregir el motor
     # (#80) el PBO pasa de `not_detected` (0.0476) a `detected` (0.6627) y su mitad de la puerta
     # de `pass` a `fail`; el `dsr` sigue `fail`/`not_significant` y la agregada sigue `fail`.
-    # El `sr_variance` del DSR lo da el registro (`registry.sr_variance`), que aun mezcla el
-    # `sharpe_per_session` pre-#80 de `runs/408fead` (fuera de alcance -> #97).
+    # El `sr_variance` del DSR lo da el registro (`registry.sr_variance`): #97 ya refresco el
+    # `sharpe_per_session` de `runs/408fead` a la serie del motor actual, asi que la varianza
+    # publicada es la de los cuatro `runs/*/result.json` vigentes y **no** mezcla el valor pre-#80.
+    # El PBO no se mueve con ese refresco (su matriz se recalcula desde `runs/<hash>/model.json`)
+    # y el veredicto sigue `not_significant`, con la mitad del DSR en `fail`.
     criteria = cast("list[Mapping[str, object]]", real_report.payload["criteria"])
     pbo = _row_of(criteria, phase2_report.ROW_PBO)
     assert pbo["state"] == "fail"
