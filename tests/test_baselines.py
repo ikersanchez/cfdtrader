@@ -385,9 +385,9 @@ def outcome_rows(result: BacktestRun) -> list[tuple[object, ...]]:
             outcome.exit_px,
             outcome.exit_reason,
             outcome.notional_usd,
-            outcome.gross_pct,
-            outcome.pnl_declared_pct,
-            outcome.pnl_net_pct,
+            outcome.gross,
+            outcome.pnl_declared,
+            outcome.pnl_net,
         )
         for outcome in outcomes(result)
     ]
@@ -676,10 +676,10 @@ def test_a10_assumed_slippage_leaves_the_net_pnl_null() -> None:
             assert outcome.cost is not None
             assert outcome.cost.c_total_pct is None
             assert outcome.cost.c_total_usd is None
-            assert outcome.pnl_net_pct is None, "nunca se rellena con 0"
+            assert outcome.pnl_net is None, "nunca se rellena con 0"
             assert outcome.pnl_net_reason
             assert "null" in outcome.pnl_net_reason
-            assert outcome.pnl_declared_pct is not None
+            assert outcome.pnl_declared is not None
     # ``slippage`` y ``cost_model`` son keyword-only y sin valor por defecto.
     for function in (run_baseline, run_random_matched):
         signature = inspect.signature(function)

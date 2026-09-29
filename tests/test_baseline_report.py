@@ -212,12 +212,12 @@ def _raw_test_sessions(report: BaselineReport) -> list[float]:
 
 
 def _traded_outcomes(report: BaselineReport) -> list[tuple[date, float]]:
-    """``(sesion, pnl_declared_pct)`` de las operaciones, en orden de sesion (A10)."""
+    """``(sesion, pnl_declared)`` de las operaciones, en orden de sesion (A10)."""
     return [
-        (session.session, session.pnl_declared_pct)
+        (session.session, session.pnl_declared)
         for fold in report.run.folds
         for session in fold.sessions
-        if session.status == STATUS_TRADED and session.pnl_declared_pct is not None
+        if session.status == STATUS_TRADED and session.pnl_declared is not None
     ]
 
 
@@ -493,7 +493,7 @@ def test_a10_declared_cost_is_published_and_net_metrics_are_refused(
     with pytest.raises(MetricsInputError):
         calculate_metrics(real_report.run)
     assert all(
-        session.pnl_net_pct is None
+        session.pnl_net is None
         for fold in real_report.run.folds
         for session in fold.sessions
         if session.status == STATUS_TRADED
@@ -772,7 +772,6 @@ WRITTEN: Final[tuple[str, ...]] = (
 #: Ficheros **congelados** por #97 (C15): el diff no puede tocarlos.
 FROZEN: Final[tuple[str, ...]] = (
     "src/cfdtrader/backtest/baselines.py",
-    "src/cfdtrader/backtest/metrics.py",
     "src/cfdtrader/models/baseline.py",
     "src/cfdtrader/analysis/feature_frame.py",
 )

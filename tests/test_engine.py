@@ -572,8 +572,8 @@ def test_a5_mutating_close_high_low_changes_only_the_pnl() -> None:
         (outcome.status, outcome.entry_px, outcome.reason, outcome.exit_reason)
         for outcome in outcomes(after)
     ]
-    assert [outcome.gross_pct for outcome in outcomes(before)] != [
-        outcome.gross_pct for outcome in outcomes(after)
+    assert [outcome.gross for outcome in outcomes(before)] != [
+        outcome.gross for outcome in outcomes(after)
     ]
     # ni el `entry_px` ni el `exit_px` de la sesion 0 dependen de `close_px`
     assert outcomes(before)[0].entry_px == outcomes(after)[0].entry_px
@@ -614,7 +614,7 @@ def test_a6_no_outcome_crosses_the_overnight_gap() -> None:
             if outcome.decision is not None and outcome.decision.direction is Direction.LONG
             else None
         )
-        assert outcome.gross_pct == pytest.approx(cast("float", expected))
+        assert outcome.gross == pytest.approx(cast("float", expected))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -789,7 +789,7 @@ def test_a14_nothing_pays_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     assert spy.calls == []
     assert result.traded == 0
     assert all(outcome.cost is None for outcome in outcomes(result))
-    assert all(outcome.pnl_declared_pct is None for outcome in outcomes(result))
+    assert all(outcome.pnl_declared is None for outcome in outcomes(result))
 
 
 def test_a15_one_cost_call_per_operation_with_the_declared_arguments(
@@ -838,12 +838,12 @@ def test_a16_the_cost_is_identical_in_both_legs() -> None:
         assert cost.spread_entry_usd == cost.spread_exit_usd == Decimal("0.21")
         assert cost.spread_pct == Decimal("0.0042")
         assert outcome.exit_reason == "session_close"
-        assert outcome.gross_pct == pytest.approx(0.0)
+        assert outcome.gross == pytest.approx(0.0)
         # #80: la unidad del motor es la **fraccion** del nocional. El coste declarado
         # (`c_declared_pct` = 0.0042 %) se resta convertido con `c_fraction_of_notional`
         # (0.000042), nunca 100x.
-        assert outcome.pnl_declared_pct == pytest.approx(-0.000042, abs=1e-12)
-        assert outcome.pnl_declared_pct == pytest.approx(-float(cost.c_fraction_of_notional))
+        assert outcome.pnl_declared == pytest.approx(-0.000042, abs=1e-12)
+        assert outcome.pnl_declared == pytest.approx(-float(cost.c_fraction_of_notional))
         expected = cost_breakdown(
             model=DECLARED,
             slippage=ASSUMED,
@@ -901,14 +901,14 @@ def test_a18_the_three_slippage_states_are_not_merged() -> None:
     cost = outcome.cost
     assert cost is not None
     assert cost.c_total_pct is not None
-    assert outcome.pnl_net_pct is not None
+    assert outcome.pnl_net is not None
     # #80: el total tambien se convierte a fraccion antes de restarlo (`gross - total/100`);
     # `c_total_pct` = 0.0062 % (0.0042 declarado + 0.002 medido) -> 0.000062 en fraccion.
     assert float(cost.c_total_pct) == pytest.approx(0.0062)
-    assert outcome.pnl_net_pct == pytest.approx(
-        cast("float", outcome.gross_pct) - float(cost.c_total_pct) / 100
+    assert outcome.pnl_net == pytest.approx(
+        cast("float", outcome.gross) - float(cost.c_total_pct) / 100
     )
-    assert outcome.pnl_net_pct == pytest.approx(cast("float", outcome.gross_pct) - 0.000062)
+    assert outcome.pnl_net == pytest.approx(cast("float", outcome.gross) - 0.000062)
     assert outcome.pnl_net_reason is None
     assert block(result.report, "slippage")["state"] == MeasureState.MEASURED.value
 
@@ -916,8 +916,8 @@ def test_a18_the_three_slippage_states_are_not_merged() -> None:
     assumed_cost = assumed_outcome.cost
     assert assumed_cost is not None
     assert assumed_cost.c_total_pct is None
-    assert assumed_outcome.pnl_net_pct is None
-    assert assumed_outcome.pnl_net_pct != 0
+    assert assumed_outcome.pnl_net is None
+    assert assumed_outcome.pnl_net != 0
     assert assumed_outcome.pnl_net_reason
     assert "assumed" in assumed_outcome.pnl_net_reason
     assumed_block = block(assumed_result.report, "slippage")
@@ -926,13 +926,13 @@ def test_a18_the_three_slippage_states_are_not_merged() -> None:
     illustrative = block(assumed_block, "illustrative_equivalence")
     assert illustrative["label"] == "illustrative"
     assert illustrative["decision"] is False
-    assert illustrative["feeds_pnl_net_pct"] is False
+    assert illustrative["feeds_pnl_net"] is False
     assert illustrative["equivalent_pct_of_notional"] == "0.2"
     assert illustrative["equivalent_bp_of_notional"] == "20"
 
     unmeasured = SlippageParameter.unmeasured(reason="no hay medicion ni supuesto declarado")
     unmeasured_result, unmeasured_outcome = _traded_slippage(unmeasured)
-    assert unmeasured_outcome.pnl_net_pct is None
+    assert unmeasured_outcome.pnl_net is None
     assert unmeasured_outcome.pnl_net_reason
     assert block(unmeasured_result.report, "slippage")["state"] == MeasureState.UNMEASURED.value
 
@@ -1410,7 +1410,7 @@ def test_a32_the_report_publishes_its_limitations() -> None:
         "no son una validacion de la estrategia",
         "declarados y no medidos",
         "supuesto pesimista declarado",
-        "pnl_net_pct",
+        "pnl_net",
         "corte de financiacion sigue sin verificar",
         "proxies",
         "respaldo diario",
@@ -1458,7 +1458,7 @@ def test_a34_the_suite_covers_every_criterion() -> None:
 
 
 def test_a35_core_is_about_two_hundred_lines() -> None:
-    core = ("_resolve_exit", "_gross_pct", "_intraday_path", "_evaluate_session", "_run_folds")
+    core = ("_resolve_exit", "_gross_return", "_intraday_path", "_evaluate_session", "_run_folds")
     total = 0
     found: set[str] = set()
     for node in ast.walk(ast.parse(SOURCE)):

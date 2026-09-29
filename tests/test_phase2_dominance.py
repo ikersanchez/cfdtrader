@@ -137,7 +137,6 @@ WRITTEN: Final[frozenset[str]] = frozenset(
 FROZEN: Final[frozenset[str]] = frozenset(
     {
         "src/cfdtrader/backtest/baselines.py",
-        "src/cfdtrader/backtest/metrics.py",
         "src/cfdtrader/models/baseline.py",
         "src/cfdtrader/analysis/feature_frame.py",
     }
@@ -752,13 +751,19 @@ def test_a5_labelling_and_no_net_metrics(dominance_report: DominanceReport) -> N
 
 
 def test_a5_ast_does_not_touch_the_net_pnl() -> None:
-    """A5: el modulo no lee ni escribe el P&L neto del motor ni publica `computed`."""
-    assert "pnl_net_pct" not in SOURCE
-    assert "pnl_declared_pct" not in SOURCE
+    """A5: el modulo no lee ni escribe el P&L neto del motor ni publica `computed`.
+
+    #91: los nombres viejos (`pnl_net_pct`/`pnl_declared_pct`) pasan a
+    `pnl_net`/`pnl_declared`. La comprobacion de subcadena sigue siendo valida aqui porque
+    el modulo migrado no menciona `pnl_net` en ningun sitio (ni siquiera como prefijo de
+    `pnl_net_reason`, que no aparece); el AST lo refuerza sobre los atributos.
+    """
+    assert "pnl_net" not in SOURCE
+    assert "pnl_declared" not in SOURCE
     assert '"state": "computed"' not in SOURCE
     for node in ast.walk(TREE):
         if isinstance(node, ast.Attribute):
-            assert node.attr not in {"pnl_net_pct", "pnl_declared_pct"}
+            assert node.attr not in {"pnl_net", "pnl_declared"}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1229,7 +1234,7 @@ def _git_lines(git: str, arguments: Sequence[str]) -> set[str]:
 def _outcome(
     status: str,
     *,
-    gross_pct: float | None,
+    gross: float | None,
     cost_pct: str,
     session: date = date(2026, 9, 1),
 ) -> object:
@@ -1237,7 +1242,7 @@ def _outcome(
     return SimpleNamespace(
         status=status,
         session=session,
-        gross_pct=gross_pct,
+        gross=gross,
         cost=None if cost_pct == "none" else SimpleNamespace(c_declared_pct=Decimal(cost_pct)),
     )
 
@@ -1251,10 +1256,10 @@ def test_edge_declared_series_reconstructs_the_three_statuses() -> None:
     """La serie declarada: `0` exacto en `no_trade`, fuera los `skipped` y el coste en `%`."""
     run = _run(
         [
-            _outcome(STATUS_TRADED, gross_pct=0.01, cost_pct="0.0042"),
-            _outcome(STATUS_NO_TRADE, gross_pct=None, cost_pct="none"),
-            _outcome(STATUS_SKIPPED, gross_pct=None, cost_pct="none"),
-            _outcome(STATUS_TRADED, gross_pct=-0.005, cost_pct="0.0042"),
+            _outcome(STATUS_TRADED, gross=0.01, cost_pct="0.0042"),
+            _outcome(STATUS_NO_TRADE, gross=None, cost_pct="none"),
+            _outcome(STATUS_SKIPPED, gross=None, cost_pct="none"),
+            _outcome(STATUS_TRADED, gross=-0.005, cost_pct="0.0042"),
         ]
     )
     series = declared_series_of(run)
@@ -1269,7 +1274,7 @@ def test_edge_declared_series_reconstructs_the_three_statuses() -> None:
 
 def test_edge_declared_series_without_pnl_is_a_typed_error() -> None:
     """Una operacion sin P&L declarado no se rellena: error tipado."""
-    run = _run([_outcome(STATUS_TRADED, gross_pct=None, cost_pct="0.0042")])
+    run = _run([_outcome(STATUS_TRADED, gross=None, cost_pct="0.0042")])
     with pytest.raises(Phase2DominanceError):
         declared_series_of(run)
 

@@ -791,7 +791,7 @@ def test_a13_half_b_always_long_not_evaluable(real_report: phase1_report.Phase1R
     outcome = next(item for item in real_report.rerun.outcomes if item.baseline == HALF_ALWAYS_LONG)
     with pytest.raises(MetricsInputError) as raised:
         calculate_metrics(outcome.run)
-    assert "pnl_net_pct" in str(raised.value)
+    assert "pnl_net" in str(raised.value)
     assert _block(real_report, "net_metrics")["state"] == "not_computable"
 
 
@@ -1624,7 +1624,7 @@ def test_a11_lookahead_detects_a_violation(
         runs = original_runs(cast("Any", args[0]), **cast("Any", kwargs))
         first = runs[1]  # `always_long`: la fila que la auditoria compara
         fold = first.run.folds[0]
-        altered = replace(fold.sessions[0], pnl_declared_pct=123.0)
+        altered = replace(fold.sessions[0], pnl_declared=123.0)
         trimmed = replace(fold, sessions=(altered, *fold.sessions[1:]))
         run = replace(first.run, folds=(trimmed, *first.run.folds[1:]))
         return (runs[0], replace(first, run=run), *runs[2:])

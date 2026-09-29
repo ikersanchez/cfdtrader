@@ -131,7 +131,6 @@ WRITTEN: Final[frozenset[str]] = frozenset(
 #: ``FROZEN``: este modulo no los toca, pero la entrega transversal de #80 si (#80 A6).
 FROZEN: Final[tuple[str, ...]] = (
     "src/cfdtrader/backtest/baselines.py",
-    "src/cfdtrader/backtest/metrics.py",
     "src/cfdtrader/models/baseline.py",
     "src/cfdtrader/analysis/feature_frame.py",
 )
@@ -266,8 +265,8 @@ def declared_series(run: BacktestRun) -> tuple[float, ...]:
         if outcome.status == STATUS_NO_TRADE:
             values.append(0.0)
             continue
-        assert outcome.gross_pct is not None and outcome.cost is not None
-        values.append(100.0 * outcome.gross_pct - float(outcome.cost.c_declared_pct))
+        assert outcome.gross is not None and outcome.cost is not None
+        values.append(100.0 * outcome.gross - float(outcome.cost.c_declared_pct))
     return tuple(values)
 
 
@@ -1014,7 +1013,7 @@ def test_a7_liston_c_is_the_reference_and_not_a_baseline(real_report: PipelineRe
 
 @needs_store
 def test_a7_series_is_derived_in_coherent_units(real_report: PipelineReport) -> None:
-    """A10: la serie de la tabla sale de `100 x gross_pct - c_declared_pct`, no del motor."""
+    """A10: la serie de la tabla sale de `100 x gross - c_declared_pct`, no del motor."""
     row = real_report.row("always_long")
     run = next(
         outcome.run for outcome in real_report.baselines if outcome.baseline == "always_long"
@@ -1023,8 +1022,8 @@ def test_a7_series_is_derived_in_coherent_units(real_report: PipelineReport) -> 
     assert list(row.series_pct) == pytest.approx(declared)
     mixed: list[float] = []
     for outcome in sessions_of(run):
-        assert outcome.gross_pct is not None and outcome.cost is not None
-        mixed.append(outcome.gross_pct - float(outcome.cost.c_declared_pct))
+        assert outcome.gross is not None and outcome.cost is not None
+        mixed.append(outcome.gross - float(outcome.cost.c_declared_pct))
     assert mixed[0] != pytest.approx(declared[0])
 
 
@@ -1136,7 +1135,7 @@ def test_a10_ast_does_not_read_the_engine_declared_pnl() -> None:
     """A10: el AST del modulo no lee el atributo del P&L declarado del motor."""
     for node in ast.walk(TREE):
         if isinstance(node, ast.Attribute):
-            assert node.attr != "pnl_declared_pct"
+            assert node.attr != "pnl_declared"
 
 
 @needs_store
@@ -1151,7 +1150,7 @@ def test_a10_the_defect_narrative_is_gone(real_report: PipelineReport) -> None:
     # El AST sigue sin leer el P&L declarado del motor: la derivacion propia no cambia.
     for node in ast.walk(TREE):
         if isinstance(node, ast.Attribute):
-            assert node.attr != "pnl_declared_pct"
+            assert node.attr != "pnl_declared"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1559,7 +1558,7 @@ def _outcome(
     *,
     session: date,
     status: str,
-    gross_pct: float | None = None,
+    gross: float | None = None,
     cost: CostBreakdown | None = None,
 ) -> SessionOutcome:
     """Una `SessionOutcome` de *test* con lo minimo que leen las guardas de series."""
@@ -1579,9 +1578,9 @@ def _outcome(
         exit_reason=None,
         exit_bar_index=None,
         notional_usd=None,
-        gross_pct=gross_pct,
-        pnl_declared_pct=None,
-        pnl_net_pct=None,
+        gross=gross,
+        pnl_declared=None,
+        pnl_net=None,
         pnl_net_reason=None,
         cost=cost,
     )
@@ -1875,7 +1874,7 @@ def test_a14_guard_declared_return_and_series_skip() -> None:
     cost = declared_cost_breakdown()
     with pytest.raises(PipelineReportError, match="retorno declarado"):
         _declared_return_pct(_outcome(session=SESSION, status=STATUS_TRADED))
-    traded = _outcome(session=SESSION, status=STATUS_TRADED, gross_pct=0.01, cost=cost)
+    traded = _outcome(session=SESSION, status=STATUS_TRADED, gross=0.01, cost=cost)
     skipped = _outcome(session=NEXT_SESSION, status=STATUS_SKIPPED)
     expected = 100.0 * 0.01 - float(cost.c_declared_pct)
     assert _declared_return_pct(traded) == pytest.approx(expected)
@@ -2148,8 +2147,8 @@ def test_a92_per_trade_is_null_and_never_zero_without_trades(real_report: Pipeli
 def test_a92_per_trade_denominators_on_a_synthetic_run() -> None:
     """Criterio 9(a) de #92: `traded + no_trade` y `traded`; una `skipped` de mas no los mueve."""
     cost = declared_cost_breakdown()
-    win = _outcome(session=date(2026, 9, 1), status=STATUS_TRADED, gross_pct=0.01, cost=cost)
-    loss = _outcome(session=date(2026, 9, 2), status=STATUS_TRADED, gross_pct=-0.01, cost=cost)
+    win = _outcome(session=date(2026, 9, 1), status=STATUS_TRADED, gross=0.01, cost=cost)
+    loss = _outcome(session=date(2026, 9, 2), status=STATUS_TRADED, gross=-0.01, cost=cost)
     flat = _outcome(session=date(2026, 9, 3), status=STATUS_NO_TRADE)
     skip = _outcome(session=date(2026, 9, 4), status=STATUS_SKIPPED)
     run = _run(folded=(win, loss, flat), traded=2, no_trade=1)
@@ -2168,11 +2167,9 @@ def test_a92_per_trade_zero_return_is_not_a_win() -> None:
     """Criterio 9(b) de #92: un retorno declarado exactamente `0.0` no cuenta como ganador."""
     cost = declared_cost_breakdown()
     flat_return = float(cost.c_declared_pct) / 100.0
-    win = _outcome(session=date(2026, 9, 1), status=STATUS_TRADED, gross_pct=0.01, cost=cost)
-    zero = _outcome(
-        session=date(2026, 9, 2), status=STATUS_TRADED, gross_pct=flat_return, cost=cost
-    )
-    loss = _outcome(session=date(2026, 9, 3), status=STATUS_TRADED, gross_pct=-0.01, cost=cost)
+    win = _outcome(session=date(2026, 9, 1), status=STATUS_TRADED, gross=0.01, cost=cost)
+    zero = _outcome(session=date(2026, 9, 2), status=STATUS_TRADED, gross=flat_return, cost=cost)
+    loss = _outcome(session=date(2026, 9, 3), status=STATUS_TRADED, gross=-0.01, cost=cost)
     assert _declared_return_pct(zero) == 0.0
     run = _run(folded=(win, zero, loss), traded=3, no_trade=0)
     block = _synthetic_metrics(run)["hit_rate_per_trade"]
@@ -2355,8 +2352,8 @@ def test_t28d_declared_series_is_the_metric_series(real_report: PipelineReport) 
             if outcome.status == STATUS_NO_TRADE:
                 assert value == 0.0
             else:
-                assert outcome.gross_pct is not None and outcome.cost is not None
-                assert value == 100.0 * outcome.gross_pct - float(outcome.cost.c_declared_pct)
+                assert outcome.gross is not None and outcome.cost is not None
+                assert value == 100.0 * outcome.gross - float(outcome.cost.c_declared_pct)
 
 
 @needs_store
@@ -2375,8 +2372,8 @@ def test_t28d_declared_series_is_aligned_to_test_sessions(real_report: PipelineR
             if outcome.status == STATUS_NO_TRADE:
                 assert series[position] == 0.0
             elif outcome.status == STATUS_TRADED:
-                assert outcome.gross_pct is not None and outcome.cost is not None
-                assert series[position] == 100.0 * outcome.gross_pct - float(
+                assert outcome.gross is not None and outcome.cost is not None
+                assert series[position] == 100.0 * outcome.gross - float(
                     outcome.cost.c_declared_pct
                 )
         for position, value in enumerate(series):
@@ -2452,7 +2449,7 @@ def test_t28d_all_zero_arms_publish_the_null_series(real_report: PipelineReport)
 def test_t28d_skipped_is_dropped_not_a_zero() -> None:
     """Criterio 9: la `skipped` se descarta (``n == n_test - skipped``) y el digest es estable."""
     cost = declared_cost_breakdown()
-    traded = _outcome(session=date(2026, 9, 1), status=STATUS_TRADED, gross_pct=0.01, cost=cost)
+    traded = _outcome(session=date(2026, 9, 1), status=STATUS_TRADED, gross=0.01, cost=cost)
     flat = _outcome(session=date(2026, 9, 2), status=STATUS_NO_TRADE)
     skip = _outcome(session=date(2026, 9, 3), status=STATUS_SKIPPED)
     run = _run(folded=(traded, flat, skip), traded=1, no_trade=1, skipped=1)
@@ -2467,12 +2464,12 @@ def test_t28d_skipped_is_dropped_not_a_zero() -> None:
 
 
 def test_t28d_null_cost_is_a_typed_error() -> None:
-    """Criterio 10: sin `gross_pct` o sin `CostBreakdown` la derivacion **lanza**."""
+    """Criterio 10: sin `gross` o sin `CostBreakdown` la derivacion **lanza**."""
     cost = declared_cost_breakdown()
-    without_gross = _outcome(session=SESSION, status=STATUS_TRADED, gross_pct=None, cost=cost)
+    without_gross = _outcome(session=SESSION, status=STATUS_TRADED, gross=None, cost=cost)
     with pytest.raises(PipelineReportError, match="retorno declarado"):
         _declared_series_payload(_series_of_run(_run(folded=(without_gross,), traded=1)))
-    without_cost = _outcome(session=SESSION, status=STATUS_TRADED, gross_pct=0.01, cost=None)
+    without_cost = _outcome(session=SESSION, status=STATUS_TRADED, gross=0.01, cost=None)
     with pytest.raises(PipelineReportError, match="retorno declarado"):
         _series_of_run(_run(folded=(without_cost,), traded=1))
 

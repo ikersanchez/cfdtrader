@@ -990,7 +990,7 @@ def test_a19_pnl_net_is_null_everywhere(real_report: BacktestReport) -> None:
     traded = _traded(real_report)
     assert traded
     for session in traded:
-        assert session.pnl_net_pct is None
+        assert session.pnl_net is None
         assert session.pnl_net_reason
     for row in _rows(real_report):
         assert row["pnl_net_pct_null_trades"] == row["traded"]
@@ -1073,7 +1073,7 @@ def test_a21_net_metrics_are_not_computable(real_report: BacktestReport) -> None
     assert run.traded == 500
     with pytest.raises(MetricsInputError) as error:
         calculate_metrics(run)
-    assert "pnl_net_pct" in str(error.value)
+    assert "pnl_net" in str(error.value)
 
     assert not (FORBIDDEN_METRIC_KEYS & _keys(real_report.payload))
 

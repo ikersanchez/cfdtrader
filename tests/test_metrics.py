@@ -130,8 +130,8 @@ def _outcome(
     session: date,
     *,
     status: str = "traded",
-    pnl_net_pct: float | None = 1.0,
-    pnl_declared_pct: float | None = 5.0,
+    pnl_net: float | None = 1.0,
+    pnl_declared: float | None = 5.0,
     probability: float | None = None,
     cost: CostBreakdown | None = None,
 ) -> SessionOutcome:
@@ -160,9 +160,9 @@ def _outcome(
         exit_reason=None,
         exit_bar_index=None,
         notional_usd=None,
-        gross_pct=None,
-        pnl_declared_pct=pnl_declared_pct,
-        pnl_net_pct=pnl_net_pct,
+        gross=None,
+        pnl_declared=pnl_declared,
+        pnl_net=pnl_net,
         pnl_net_reason=None,
         cost=cost,
     )
@@ -182,19 +182,19 @@ def _sessions(count: int, *, start: date = date(2026, 1, 5)) -> list[date]:
 def _series(*pnls: float, start: date = date(2026, 1, 5)) -> tuple[SessionOutcome, ...]:
     """Una serie de sesiones operadas con esos P&L netos, en sesiones consecutivas."""
     days = _sessions(len(pnls), start=start)
-    return tuple(_outcome(day, pnl_net_pct=pnl) for day, pnl in zip(days, pnls, strict=True))
+    return tuple(_outcome(day, pnl_net=pnl) for day, pnl in zip(days, pnls, strict=True))
 
 
 def _golden_outcomes() -> tuple[SessionOutcome, ...]:
     """La serie congelada de A30: seis operadas, una ``no_trade`` y una ``skipped``."""
     golden = tuple(
-        _outcome(date(2026, 1, day), pnl_net_pct=pnl)
+        _outcome(date(2026, 1, day), pnl_net=pnl)
         for day, pnl in zip(GOLDEN_DAYS, GOLDEN_PNLS, strict=True)
     )
     return (
         *golden,
-        _outcome(date(2026, 1, GOLDEN_NO_TRADE_DAY), status="no_trade", pnl_net_pct=None),
-        _outcome(date(2026, 1, GOLDEN_SKIPPED_DAY), status="skipped", pnl_net_pct=None),
+        _outcome(date(2026, 1, GOLDEN_NO_TRADE_DAY), status="no_trade", pnl_net=None),
+        _outcome(date(2026, 1, GOLDEN_SKIPPED_DAY), status="skipped", pnl_net=None),
     )
 
 
@@ -345,9 +345,7 @@ def _run(
 def _big_outcomes() -> tuple[SessionOutcome, ...]:
     """La serie de riesgo de 3.192 sesiones que piden A29 y A33 (se construye una vez)."""
     days = _sessions(BIG_SESSIONS)
-    return tuple(
-        _outcome(day, pnl_net_pct=((index % 7) - 3) * 0.1) for index, day in enumerate(days)
-    )
+    return tuple(_outcome(day, pnl_net=((index % 7) - 3) * 0.1) for index, day in enumerate(days))
 
 
 def test_a1_catalog_is_published_without_misleading_names() -> None:
@@ -397,11 +395,11 @@ def test_a1_catalog_is_published_without_misleading_names() -> None:
 
 def test_a2_drawdown_duration_counts_risk_sessions() -> None:
     outcomes = (
-        _outcome(date(2026, 1, 5), pnl_net_pct=-10.0),
-        _outcome(date(2026, 1, 6), status="skipped", pnl_net_pct=None),
-        _outcome(date(2026, 1, 7), status="skipped", pnl_net_pct=None),
-        _outcome(date(2026, 1, 8), pnl_net_pct=-10.0),
-        _outcome(date(2026, 1, 9), pnl_net_pct=30.0),
+        _outcome(date(2026, 1, 5), pnl_net=-10.0),
+        _outcome(date(2026, 1, 6), status="skipped", pnl_net=None),
+        _outcome(date(2026, 1, 7), status="skipped", pnl_net=None),
+        _outcome(date(2026, 1, 8), pnl_net=-10.0),
+        _outcome(date(2026, 1, 9), pnl_net=30.0),
     )
     metrics = calculate_metrics(outcomes, n_bootstrap=50)
 
@@ -414,10 +412,10 @@ def test_a2_drawdown_duration_counts_risk_sessions() -> None:
 
 def test_a3_count_and_length_identities() -> None:
     outcomes = (
-        _outcome(date(2026, 1, 5), pnl_net_pct=2.0),
-        _outcome(date(2026, 1, 6), status="no_trade", pnl_net_pct=None),
-        _outcome(date(2026, 1, 7), status="skipped", pnl_net_pct=None),
-        _outcome(date(2026, 1, 8), pnl_net_pct=-1.0),
+        _outcome(date(2026, 1, 5), pnl_net=2.0),
+        _outcome(date(2026, 1, 6), status="no_trade", pnl_net=None),
+        _outcome(date(2026, 1, 7), status="skipped", pnl_net=None),
+        _outcome(date(2026, 1, 8), pnl_net=-1.0),
     )
     metrics = calculate_metrics(outcomes, n_bootstrap=50)
 
@@ -512,7 +510,7 @@ def test_a10_profit_factor_is_never_infinite() -> None:
     gains_only = calculate_metrics(_series(1.0, 2.0), n_bootstrap=50)
     balanced = calculate_metrics(_series(1.0, -2.0), n_bootstrap=50)
     no_trades = calculate_metrics(
-        (_outcome(date(2026, 1, 5), status="no_trade", pnl_net_pct=None),), n_bootstrap=50
+        (_outcome(date(2026, 1, 5), status="no_trade", pnl_net=None),), n_bootstrap=50
     )
 
     assert gains_only.profit_factor is None
@@ -547,8 +545,8 @@ def test_a11_empty_calibration_bins_publish_none() -> None:
 
     declared = calculate_metrics(
         (
-            _outcome(date(2026, 1, 5), pnl_net_pct=2.0, probability=0.6),
-            _outcome(date(2026, 1, 6), pnl_net_pct=-1.0, probability=0.4),
+            _outcome(date(2026, 1, 5), pnl_net=2.0, probability=0.6),
+            _outcome(date(2026, 1, 6), pnl_net=-1.0, probability=0.4),
         ),
         n_bootstrap=50,
         n_calibration_bins=2,
@@ -564,14 +562,14 @@ def test_a11_empty_calibration_bins_publish_none() -> None:
 def test_a12_no_published_float_is_inf_or_nan() -> None:
     scenarios = (
         calculate_metrics(_series(1.0, 2.0), n_bootstrap=50),
-        calculate_metrics((_outcome(date(2026, 1, 5), pnl_net_pct=2.0),), n_bootstrap=50),
+        calculate_metrics((_outcome(date(2026, 1, 5), pnl_net=2.0),), n_bootstrap=50),
         calculate_metrics(
-            (_outcome(date(2026, 1, 5), pnl_net_pct=2.0, probability=0.1),), n_bootstrap=50
+            (_outcome(date(2026, 1, 5), pnl_net=2.0, probability=0.1),), n_bootstrap=50
         ),
         calculate_metrics(
             (
-                _outcome(date(2026, 1, 5), status="no_trade", pnl_net_pct=None),
-                _outcome(date(2026, 1, 6), status="no_trade", pnl_net_pct=None),
+                _outcome(date(2026, 1, 5), status="no_trade", pnl_net=None),
+                _outcome(date(2026, 1, 6), status="no_trade", pnl_net=None),
             ),
             n_bootstrap=50,
         ),
@@ -673,8 +671,8 @@ def test_a14_inadmissible_inputs_raise_metrics_input_error() -> None:
     assert degenerate.lower <= degenerate.upper
 
     mixed = (
-        _outcome(date(2026, 1, 5), pnl_net_pct=1.0, probability=0.6),
-        _outcome(date(2026, 1, 6), pnl_net_pct=-1.0),
+        _outcome(date(2026, 1, 5), pnl_net=1.0, probability=0.6),
+        _outcome(date(2026, 1, 6), pnl_net=-1.0),
     )
     with pytest.raises(MetricsInputError, match="declarar probability"):
         calculate_metrics(mixed, n_bootstrap=50)
@@ -721,8 +719,8 @@ def test_a15_empty_and_all_skipped_series() -> None:
         calculate_metrics(())
 
     all_skipped = (
-        _outcome(date(2026, 1, 5), status="skipped", pnl_net_pct=None),
-        _outcome(date(2026, 1, 6), status="skipped", pnl_net_pct=None),
+        _outcome(date(2026, 1, 5), status="skipped", pnl_net=None),
+        _outcome(date(2026, 1, 6), status="skipped", pnl_net=None),
     )
     with pytest.raises(MetricsInputError, match="se necesita al menos un retorno"):
         calculate_metrics(all_skipped, n_bootstrap=50)
@@ -730,7 +728,7 @@ def test_a15_empty_and_all_skipped_series() -> None:
 
 def test_a16_all_no_trade() -> None:
     outcomes = tuple(
-        _outcome(date(2026, 1, day), status="no_trade", pnl_net_pct=None) for day in (5, 6, 7)
+        _outcome(date(2026, 1, day), status="no_trade", pnl_net=None) for day in (5, 6, 7)
     )
     metrics = calculate_metrics(outcomes, n_bootstrap=100)
 
@@ -762,8 +760,8 @@ def test_a16_all_no_trade() -> None:
 
 def test_a17_no_trade_is_not_a_trade() -> None:
     outcomes = (
-        _outcome(date(2026, 1, 5), pnl_net_pct=2.0),
-        _outcome(date(2026, 1, 6), status="no_trade", pnl_net_pct=None),
+        _outcome(date(2026, 1, 5), pnl_net=2.0),
+        _outcome(date(2026, 1, 6), status="no_trade", pnl_net=None),
     )
     metrics = calculate_metrics(outcomes, n_bootstrap=50)
 
@@ -792,7 +790,7 @@ def test_a18_constant_returns() -> None:
 
 
 def test_a19_single_trade() -> None:
-    metrics = calculate_metrics((_outcome(date(2026, 1, 5), pnl_net_pct=2.0),), n_bootstrap=100)
+    metrics = calculate_metrics((_outcome(date(2026, 1, 5), pnl_net=2.0),), n_bootstrap=100)
 
     assert metrics.n_trades == 1
     assert metrics.hit_rate == 1.0
@@ -804,12 +802,10 @@ def test_a19_single_trade() -> None:
 
 
 def test_a20_turnover_needs_a_span() -> None:
-    one_session = calculate_metrics((_outcome(date(2026, 1, 5), pnl_net_pct=1.0),), n_bootstrap=50)
+    one_session = calculate_metrics((_outcome(date(2026, 1, 5), pnl_net=1.0),), n_bootstrap=50)
     short_span = calculate_metrics(_series(1.0, 1.0), n_bootstrap=50)
     wide_days = (date(2026, 1, 5), date(2026, 1, 20), date(2026, 2, 4))
-    wide = calculate_metrics(
-        tuple(_outcome(day, pnl_net_pct=1.0) for day in wide_days), n_bootstrap=50
-    )
+    wide = calculate_metrics(tuple(_outcome(day, pnl_net=1.0) for day in wide_days), n_bootstrap=50)
 
     assert one_session.trades_per_year is None
     assert one_session.session_span_days == 0
@@ -822,7 +818,7 @@ def test_a20_turnover_needs_a_span() -> None:
 
 
 def test_a21_unknown_status_is_an_error() -> None:
-    weird = _outcome(date(2026, 1, 5), status="weird", pnl_net_pct=1.0)
+    weird = _outcome(date(2026, 1, 5), status="weird", pnl_net=1.0)
     with pytest.raises(MetricsInputError) as error:
         calculate_metrics((weird,), n_bootstrap=50)
 
@@ -831,17 +827,17 @@ def test_a21_unknown_status_is_an_error() -> None:
 
 
 def test_a22_null_net_pnl_is_an_error_by_both_routes() -> None:
-    declared_only = (_outcome(date(2026, 1, 5), pnl_net_pct=None, pnl_declared_pct=5.0),)
-    with pytest.raises(MetricsInputError, match="pnl_net_pct es null") as error:
+    declared_only = (_outcome(date(2026, 1, 5), pnl_net=None, pnl_declared=5.0),)
+    with pytest.raises(MetricsInputError, match="pnl_net es null") as error:
         calculate_metrics(declared_only, n_bootstrap=50)
     assert "2026-01-05" in str(error.value)
 
     days = _sessions(12)
     assumed_run = _run(days, slippage=declared_slippage_assumption())
-    with pytest.raises(MetricsInputError, match="pnl_net_pct es null"):
+    with pytest.raises(MetricsInputError, match="pnl_net es null"):
         calculate_metrics(assumed_run, n_bootstrap=50)
 
-    assert "pnl_declared_pct" not in _code_only()
+    assert "pnl_declared" not in _code_only()
 
 
 def test_a23_slippage_assumption_leaves_net_metrics_null() -> None:
@@ -852,7 +848,7 @@ def test_a23_slippage_assumption_leaves_net_metrics_null() -> None:
     days = _sessions(12)
     traded_run = _run(days, slippage=assumption)
     assert traded_run.traded == 12
-    with pytest.raises(MetricsInputError, match="pnl_net_pct es null"):
+    with pytest.raises(MetricsInputError, match="pnl_net es null"):
         calculate_metrics(traded_run, n_bootstrap=50)
 
     flat_run = _run(days, slippage=assumption, decider=_nothing_decider())
@@ -905,7 +901,7 @@ def test_a25_total_cost_is_exact_decimal() -> None:
     assert cost.c_total_pct == Decimal("0.0024")
 
     outcomes = tuple(
-        _outcome(date(2026, 1, day), pnl_net_pct=1.0, cost=_short_round_trip_cost())
+        _outcome(date(2026, 1, day), pnl_net=1.0, cost=_short_round_trip_cost())
         for day in (5, 6, 7)
     )
     metrics = calculate_metrics(outcomes, n_bootstrap=50)
@@ -914,9 +910,9 @@ def test_a25_total_cost_is_exact_decimal() -> None:
     assert metrics.total_cost_pct == pytest.approx(0.0072)
 
     partial = (
-        _outcome(date(2026, 1, 5), pnl_net_pct=1.0, cost=_short_round_trip_cost()),
-        _outcome(date(2026, 1, 6), pnl_net_pct=1.0, cost=None),
-        _outcome(date(2026, 1, 7), pnl_net_pct=1.0, cost=_short_round_trip_cost()),
+        _outcome(date(2026, 1, 5), pnl_net=1.0, cost=_short_round_trip_cost()),
+        _outcome(date(2026, 1, 6), pnl_net=1.0, cost=None),
+        _outcome(date(2026, 1, 7), pnl_net=1.0, cost=_short_round_trip_cost()),
     )
     metrics_partial = calculate_metrics(partial, n_bootstrap=50)
     assert metrics_partial.total_cost_usd is None
@@ -930,7 +926,7 @@ def test_a25_total_cost_is_exact_decimal() -> None:
     )
     assert unmeasured.c_total_pct is None
     metrics_unmeasured = calculate_metrics(
-        (_outcome(date(2026, 1, 5), pnl_net_pct=1.0, cost=unmeasured),), n_bootstrap=50
+        (_outcome(date(2026, 1, 5), pnl_net=1.0, cost=unmeasured),), n_bootstrap=50
     )
     assert metrics_unmeasured.total_cost_usd is None
     assert metrics_unmeasured.total_cost_pct is None
@@ -1030,7 +1026,7 @@ _GOLDEN_PROBE = textwrap.dedent(
     GOLDEN_DAYS = (5, 6, 7, 8, 9, 12)
 
 
-    def outcome(day, status, pnl_net_pct):
+    def outcome(day, status, pnl_net):
         decision = None
         if status == "traded":
             decision = Decision(
@@ -1054,9 +1050,9 @@ _GOLDEN_PROBE = textwrap.dedent(
             exit_reason=None,
             exit_bar_index=None,
             notional_usd=None,
-            gross_pct=None,
-            pnl_declared_pct=5.0,
-            pnl_net_pct=pnl_net_pct,
+            gross=None,
+            pnl_declared=5.0,
+            pnl_net=pnl_net,
             pnl_net_reason=None,
             cost=None,
         )

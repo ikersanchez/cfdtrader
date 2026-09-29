@@ -89,7 +89,6 @@ WRITTEN: Final[frozenset[str]] = frozenset(
 )
 FROZEN: Final[tuple[str, ...]] = (
     "src/cfdtrader/backtest/baselines.py",
-    "src/cfdtrader/backtest/metrics.py",
     "src/cfdtrader/models/baseline.py",
     "src/cfdtrader/analysis/feature_frame.py",
 )
@@ -724,9 +723,9 @@ def test_a8_direction_counts_needs_a_decision() -> None:
         exit_reason=None,
         exit_bar_index=None,
         notional_usd=None,
-        gross_pct=None,
-        pnl_declared_pct=None,
-        pnl_net_pct=None,
+        gross=None,
+        pnl_declared=None,
+        pnl_net=None,
         pnl_net_reason=None,
         cost=None,
     )
