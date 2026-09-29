@@ -641,8 +641,8 @@ def _run_variant(
                 )
             probabilities_ordered.append(probability)
             outcomes.append(labels[session.session])
-            traded = session.status == STATUS_TRADED and session.pnl_declared_pct is not None
-            series.append(float(cast("float", session.pnl_declared_pct)) if traded else 0.0)
+            traded = session.status == STATUS_TRADED and session.pnl_declared is not None
+            series.append(float(cast("float", session.pnl_declared)) if traded else 0.0)
     return run, tuple(series), tuple(probabilities_ordered), tuple(outcomes)
 
 
@@ -658,10 +658,10 @@ def _variant_from_run(
     """Mide la variante con la aritmetica de #15 sobre las mismas 500 sesiones (A12)."""
     run, series, decided, outcomes = measured
     declared = [
-        float(session.pnl_declared_pct)
+        float(session.pnl_declared)
         for fold in run.folds
         for session in fold.sessions
-        if session.status == STATUS_TRADED and session.pnl_declared_pct is not None
+        if session.status == STATUS_TRADED and session.pnl_declared is not None
     ]
     return Variant(
         run_sha256=run_sha256,
@@ -1117,7 +1117,7 @@ def _unit_bug_block(variant: Variant | None) -> dict[str, object]:
     """Las unidades del P&L declarado del motor, **arregladas y medidas** aqui (A12).
 
     #80 declaro la unidad del motor: la **fraccion** del nocional. El motor resta
-    `c_fraction_of_notional` (`c_declared_pct / 100`) a `gross_pct`, los dos en fraccion, asi que
+    `c_fraction_of_notional` (`c_declared_pct / 100`) a `gross`, los dos en fraccion, asi que
     el termino restado es el correcto. La constante por operacion se **mide** aqui
     (``gross - declared``) y se compara con `c_declared_pct / 100`: hoy coinciden y su diferencia
     es 0.
@@ -1127,7 +1127,7 @@ def _unit_bug_block(variant: Variant | None) -> dict[str, object]:
             session
             for fold in variant.run.folds
             for session in fold.sessions
-            if session.status == STATUS_TRADED and session.gross_pct is not None
+            if session.status == STATUS_TRADED and session.gross is not None
         ]
         if variant is not None
         else []
@@ -1135,10 +1135,10 @@ def _unit_bug_block(variant: Variant | None) -> dict[str, object]:
     differences: list[float] = []
     correct: list[float] = []
     for session in traded:
-        declared = session.pnl_declared_pct
+        declared = session.pnl_declared
         if declared is None:
             continue
-        differences.append(float(cast("float", session.gross_pct)) - float(declared))
+        differences.append(float(cast("float", session.gross)) - float(declared))
         if session.cost is not None:
             correct.append(float(session.cost.c_fraction_of_notional))
     observed = math.fsum(differences) / len(differences) if differences else None
@@ -1158,14 +1158,14 @@ def _unit_bug_block(variant: Variant | None) -> dict[str, object]:
             "c_fraction_of_notional": "0.000042 (fraccion, la unidad del motor)",
             "identity": "c_declared_pct / 100 = 0.0042 / 100 = 0.000042 (fraccion correcta)",
         },
-        "unit": "fraccion del nocional (`exit/entry - 1`), la unidad de `gross_pct` y de `R`",
+        "unit": "fraccion del nocional (`exit/entry - 1`), la unidad de `gross` y de `R`",
         "statement": (
-            "`backtest/engine.py` publica `pnl_declared_pct = gross_pct - c_fraction_of_notional`, "
-            "con `gross_pct = close / open - 1` y `c_fraction_of_notional = c_declared_pct / 100` "
+            "`backtest/engine.py` publica `pnl_declared = gross - c_fraction_of_notional`, "
+            "con `gross = close / open - 1` y `c_fraction_of_notional = c_declared_pct / 100` "
             "(**fraccion**): la unidad la declara #80 y el motor resta el termino correcto"
         ),
         "affects": (
-            "la media y la suma de `pnl_declared_pct` de **todas** las filas que operan y, con "
+            "la media y la suma de `pnl_declared` de **todas** las filas que operan y, con "
             "ellas, el Sharpe: ahora usan el coste declarado en la unidad correcta"
         ),
         "does_not_affect": (

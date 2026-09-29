@@ -85,14 +85,15 @@ medición real del *slippage* (#62), el *gap* a través del *stop* y el diferenc
 Unidades
 --------
 
-``gross_pct``, ``pnl_declared_pct`` y ``pnl_net_pct`` son **fracciones del nocional**
+``gross``, ``pnl_declared`` y ``pnl_net`` son **fracciones del nocional**
 (``exit/entry - 1``), no puntos porcentuales: es la misma unidad que ``R``. El coste declarado
 llega de #11 en **puntos porcentuales** (``c_declared_pct``: ``0,0042`` son ``0,0042 %``) y se
 convierte a fracción con la **única fuente con nombre** ``c_fraction_of_notional`` de
 ``backtest.costs`` (``c_declared_pct / 100``), que el motor cita en vez de repetir la
 división. Quien publica en puntos porcentuales multiplica por 100 **en su propio consumidor**;
-la unidad del motor no cambia para contentar a un consumidor. El sufijo ``_pct`` de estos
-campos se conserva: renombrarlos es #91.
+la unidad del motor no cambia para contentar a un consumidor. Los tres campos del P&L del
+motor llevan el nombre de su unidad (la fracción del nocional) desde #91: el sufijo ``_pct``
+queda reservado para los puntos porcentuales (por ejemplo ``c_declared_pct``).
 
 Convención de tipos y aritmética
 --------------------------------
@@ -267,7 +268,7 @@ ENGINE_DOES_NOT_DO: Final[tuple[dict[str, str], ...]] = (
         "issue": "#60",
         "statement": (
             "no decide los umbrales ni el tamano de R: los consume; por eso el slippage "
-            "supuesto no se puede cobrar y pnl_net_pct queda en None"
+            "supuesto no se puede cobrar y pnl_net queda en None"
         ),
     },
     {
@@ -442,7 +443,7 @@ LIMITATIONS: Final[tuple[str, ...]] = (
     "diferencial real y la hora de corte.",
     "**El *slippage* es un supuesto pesimista declarado** (#64), **no** una medicion: "
     "mientras no se mida (#62) y `R` no este decidido (#60), `c_total_pct` es `null` y "
-    "`pnl_net_pct` tambien. Su equivalente ilustrativo, si se publica, va etiquetado "
+    "`pnl_net` tambien. Su equivalente ilustrativo, si se publica, va etiquetado "
     "`illustrative` con `decision: false` y **nunca** alimenta el P&L.",
     "**El corte de financiacion sigue sin verificar** (#8/#59) y asumir una hora de corte "
     "fija esta prohibido: el motor no lo deduce de ningun *timestamp*.",
@@ -570,7 +571,7 @@ class SessionOutcome:
 
     ``status`` es ``traded``, ``no_trade`` o ``skipped``. ``reason`` es el motivo del gate
     (nunca se descarta en silencio) y ``skip_reason`` solo lo usa ``skipped``. ``cost`` es
-    el ``CostBreakdown`` de #11 **tal cual** (por identidad) y ``pnl_net_pct`` es ``None``
+    el ``CostBreakdown`` de #11 **tal cual** (por identidad) y ``pnl_net`` es ``None``
     mientras el *slippage* no sea medido, con el motivo en ``pnl_net_reason``.
     """
 
@@ -589,9 +590,9 @@ class SessionOutcome:
     exit_reason: str | None
     exit_bar_index: int | None
     notional_usd: Decimal | None
-    gross_pct: float | None
-    pnl_declared_pct: float | None
-    pnl_net_pct: float | None
+    gross: float | None
+    pnl_declared: float | None
+    pnl_net: float | None
     pnl_net_reason: str | None
     cost: CostBreakdown | None
 
@@ -746,7 +747,7 @@ def _resolve_exit(
     return None if close_px is None else (close_px, EXIT_SESSION_CLOSE, None)
 
 
-def _gross_pct(*, entry_px: float, exit_px: float, direction: Direction) -> float:
+def _gross_return(*, entry_px: float, exit_px: float, direction: Direction) -> float:
     """P&L bruto simulado de la sesion: ``open`` -> salida, sin *overnight* ni *gap*."""
     factor = 1.0 if direction is Direction.LONG else -1.0
     return (exit_px / entry_px - 1.0) * factor
@@ -839,7 +840,7 @@ def _evaluate_session(
             gap_px=gap_px,
         )
     exit_px, exit_reason, exit_bar_index = resolved
-    gross_pct = _gross_pct(entry_px=open_px, exit_px=exit_px, direction=decision.direction)
+    gross = _gross_return(entry_px=open_px, exit_px=exit_px, direction=decision.direction)
     cost = cost_breakdown(
         model=cost_model,
         slippage=slippage,
@@ -851,8 +852,8 @@ def _evaluate_session(
     )
     # La unidad del motor es la **fraccion** del nocional (ver «Unidades» arriba): el coste de
     # #11 llega en % del nocional y se convierte con la unica fuente con nombre de ``costs``.
-    pnl_declared_pct = gross_pct - float(cost.c_fraction_of_notional)
-    pnl_net_pct = None if cost.c_total_pct is None else gross_pct - float(cost.c_total_pct) / 100
+    pnl_declared = gross - float(cost.c_fraction_of_notional)
+    pnl_net = None if cost.c_total_pct is None else gross - float(cost.c_total_pct) / 100
     return _outcome(
         index=index,
         fold_index=fold_index,
@@ -866,9 +867,9 @@ def _evaluate_session(
         exit_reason=exit_reason,
         exit_bar_index=exit_bar_index,
         notional_usd=notional,
-        gross_pct=gross_pct,
-        pnl_declared_pct=pnl_declared_pct,
-        pnl_net_pct=pnl_net_pct,
+        gross=gross,
+        pnl_declared=pnl_declared,
+        pnl_net=pnl_net,
         pnl_net_reason=_net_reason(cost),
         cost=cost,
     )
@@ -1008,12 +1009,12 @@ def _count(sessions: tuple[SessionOutcome, ...], status: str) -> int:
 
 
 def _net_reason(cost: CostBreakdown) -> str | None:
-    """El motivo por el que ``pnl_net_pct`` es ``None`` (A18): nunca se sustituye por ``0``."""
+    """El motivo por el que ``pnl_net`` es ``None`` (A18): nunca se sustituye por ``0``."""
     if cost.c_total_pct is not None:
         return None
     return (
         f"slippage.state = '{cost.slippage.state.value}': sin un % del nocional que cobrar, "
-        f"c_total_pct es null y pnl_net_pct tambien (nunca 0). Motivo declarado: "
+        f"c_total_pct es null y pnl_net tambien (nunca 0). Motivo declarado: "
         f"{cost.slippage.reason}"
     )
 
@@ -1036,9 +1037,9 @@ def _outcome(
     exit_reason: str | None = None,
     exit_bar_index: int | None = None,
     notional_usd: Decimal | None = None,
-    gross_pct: float | None = None,
-    pnl_declared_pct: float | None = None,
-    pnl_net_pct: float | None = None,
+    gross: float | None = None,
+    pnl_declared: float | None = None,
+    pnl_net: float | None = None,
     pnl_net_reason: str | None = None,
     cost: CostBreakdown | None = None,
 ) -> SessionOutcome:
@@ -1060,9 +1061,9 @@ def _outcome(
         exit_reason=exit_reason,
         exit_bar_index=exit_bar_index,
         notional_usd=notional_usd,
-        gross_pct=gross_pct,
-        pnl_declared_pct=pnl_declared_pct,
-        pnl_net_pct=pnl_net_pct,
+        gross=gross,
+        pnl_declared=pnl_declared,
+        pnl_net=pnl_net,
         pnl_net_reason=pnl_net_reason,
         cost=cost,
     )
@@ -1146,7 +1147,7 @@ def _illustrative_block(pct_of_r: Decimal) -> dict[str, object]:
         "r_illustrative_pct": _decimal_text(_ILLUSTRATIVE_R_PCT),
         "equivalent_pct_of_notional": _compact_decimal_text(pct),
         "equivalent_bp_of_notional": _compact_decimal_text(pct * Decimal(100)),
-        "feeds_pnl_net_pct": False,
+        "feeds_pnl_net": False,
     }
 
 
@@ -1214,9 +1215,9 @@ def _session_block(outcome: SessionOutcome) -> dict[str, object]:
         "exit_px": outcome.exit_px,
         "exit_reason": outcome.exit_reason,
         "exit_bar_index": outcome.exit_bar_index,
-        "gross_pct": outcome.gross_pct,
-        "pnl_declared_pct": outcome.pnl_declared_pct,
-        "pnl_net_pct": outcome.pnl_net_pct,
+        "gross": outcome.gross,
+        "pnl_declared": outcome.pnl_declared,
+        "pnl_net": outcome.pnl_net,
         "pnl_net_reason": outcome.pnl_net_reason,
         "cost": None if outcome.cost is None else _cost_block(outcome.cost),
     }

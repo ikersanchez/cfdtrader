@@ -1008,10 +1008,10 @@ def net_metrics_rejection(*, rerun: backtest_report.BacktestReport) -> dict[str,
             "where": "cfdtrader.backtest.metrics.calculate_metrics",
             "error": type(error).__name__,
             "message": str(error),
-            "mentions_pnl_net_pct": "pnl_net_pct" in str(error),
+            "mentions_pnl_net_pct": "pnl_net" in str(error),
             "note": (
                 "el rechazo se **mide** ejecutando la agregacion de #15 sobre la corrida real: "
-                "mientras `pnl_net_pct` sea `null` no hay metrica neta que publicar (A13, A31)"
+                "mientras `pnl_net` sea `null` no hay metrica neta que publicar (A13, A31)"
             ),
         }
     except Exception as error:  # se declara, no se traga

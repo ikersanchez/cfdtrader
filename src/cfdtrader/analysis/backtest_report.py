@@ -974,11 +974,9 @@ def _baseline_row(outcome: BaselineOutcome, *, n_inputs: int) -> dict[str, objec
     sessions = [session for fold in run.folds for session in fold.sessions]
     traded = [session for session in sessions if session.status == STATUS_TRADED]
     evaluated = len(sessions)
-    declared = [
-        session.pnl_declared_pct for session in traded if session.pnl_declared_pct is not None
-    ]
-    gross = [session.gross_pct for session in traded if session.gross_pct is not None]
-    net_null = sum(1 for session in traded if session.pnl_net_pct is None)
+    declared = [session.pnl_declared for session in traded if session.pnl_declared is not None]
+    gross = [session.gross for session in traded if session.gross is not None]
+    net_null = sum(1 for session in traded if session.pnl_net is None)
     return {
         "baseline": outcome.baseline,
         "n_sessions": evaluated,

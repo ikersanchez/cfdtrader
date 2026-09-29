@@ -2,15 +2,21 @@
 
 The walk-forward engine (#13) deliberately returns one :class:`SessionOutcome` per test
 session.  This module is the aggregation boundary: it consumes those outcomes and never
-substitutes ``pnl_declared_pct`` for ``pnl_net_pct``.  A result with an unmeasured net
+substitutes ``pnl_declared`` for ``pnl_net``.  A result with an unmeasured net
 cost is therefore rejected instead of being presented as a cost-free performance number.
 
 Returns passed to the standalone metric functions are decimal returns (``0.01`` means one
-percent).  The engine stores percentages, so :func:`calculate_metrics` performs that
-conversion once, at this boundary.  Units are declared and tested (A4): ``returns`` and
-``equity`` are decimals, every ``*_pct`` field is in percentage points,
-``max_drawdown_pct`` is a positive loss magnitude, and Sharpe, Sortino, beta, payoff and
-profit factor are dimensionless.
+percent).  The engine stores **fractions of notional** (``gross``, ``pnl_declared`` and
+``pnl_net``; the ``Unidades`` section of ``backtest/engine.py`` is the single declaration),
+so :func:`calculate_metrics` performs that conversion once, at this boundary.
+
+**Declared latent defect (#101):** :func:`_net_return` still divides the engine's net
+fraction by ``100``, as if the engine stored percentage points.  The conversion is kept
+here untouched — the frozen goldens of this module pin the current arithmetic — and is
+reconciled in #101; no other place in this module repeats it.  Units are declared and
+tested (A4): ``returns`` and ``equity`` are decimals, every ``*_pct`` field is in
+percentage points, ``max_drawdown_pct`` is a positive loss magnitude, and Sharpe, Sortino,
+beta, payoff and profit factor are dimensionless.
 
 Contracts this module fixes, because #15 found them ambiguous:
 
@@ -32,8 +38,8 @@ Contracts this module fixes, because #15 found them ambiguous:
 
 Costs: with the *slippage* the engine produces today (the declared pessimistic assumption
 of #64: ``state = "assumed"``) ``c_total_pct`` is ``null``, so every traded session has
-``pnl_net_pct`` ``null`` and :func:`calculate_metrics` raises :class:`MetricsInputError`
-instead of publishing a net metric built on ``pnl_declared_pct``.  That is the correct
+``pnl_net`` ``null`` and :func:`calculate_metrics` raises :class:`MetricsInputError`
+instead of publishing a net metric built on ``pnl_declared``.  That is the correct
 behaviour until the execution *slippage* is measured (**#62**) and the size of ``R`` is
 decided (**#60**): substituting either of them here is forbidden.
 
@@ -639,11 +645,11 @@ def _require_known_status(outcome: SessionOutcome) -> str:
 
 def _net_return(outcome: SessionOutcome) -> float:
     """The net decimal return of one traded session, or a hard error (A22)."""
-    value = outcome.pnl_net_pct
+    value = outcome.pnl_net
     if value is None:
         raise MetricsInputError(
-            f"{outcome.session.isoformat()}: pnl_net_pct es null; no se puede publicar "
-            "una métrica neta usando pnl_declared_pct (null != 0)"
+            f"{outcome.session.isoformat()}: pnl_net es null; no se puede publicar "
+            "una métrica neta usando pnl_declared (null != 0)"
         )
     return value / 100.0
 
@@ -696,7 +702,7 @@ def _probability_metrics(
             continue
         answered += 1
         declared.append(probability)
-        observed.append(outcome.pnl_net_pct is not None and outcome.pnl_net_pct > 0.0)
+        observed.append(outcome.pnl_net is not None and outcome.pnl_net > 0.0)
     if not declared:
         return None, None, ()
     if answered != len(traded):
@@ -775,7 +781,7 @@ def calculate_metrics(
 
     A ``no_trade`` session contributes a zero decimal return to the risk series; a
     ``skipped`` session is excluded from it.  A traded session without a measured
-    ``pnl_net_pct`` is a hard error, preserving the project's ``null != 0`` rule: with the
+    ``pnl_net`` is a hard error, preserving the project's ``null != 0`` rule: with the
     *slippage* assumption of #64 the whole run is rejected instead of being read as
     cost-free (A22, A23).
 

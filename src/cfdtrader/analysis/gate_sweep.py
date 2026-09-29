@@ -234,7 +234,7 @@ INERT_PARAMETERS: Final[tuple[dict[str, str], ...]] = (
     {
         "field": "risk_per_trade_pct",
         "reason": (
-            "solo dimensiona el nocional (`capital x riesgo / stop`) y `gross_pct = exit/entry - "
+            "solo dimensiona el nocional (`capital x riesgo / stop`) y `gross = exit/entry - "
             "1` es independiente del tamano: el control `inv_risk2` lo demuestra con el mismo "
             "`series_sha256` que `s1`"
         ),

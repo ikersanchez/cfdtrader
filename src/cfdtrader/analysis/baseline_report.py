@@ -857,16 +857,16 @@ def _probability_block(
 def _declared_cost_block(outcomes: Sequence[SessionOutcome]) -> dict[str, object]:
     """La serie de coste declarado y sus metricas elementales de #15 (A10).
 
-    La serie es ``pnl_declared_pct`` de las sesiones ``traded``, en orden de sesion. Sin
+    La serie es ``pnl_declared`` de las sesiones ``traded``, en orden de sesion. Sin
     operaciones no hay metrica que publicar: los valores son ``null`` con su motivo, **nunca**
     ``0``.
     """
     traded = [item for item in outcomes if item.status == STATUS_TRADED]
-    series = [item.pnl_declared_pct for item in traded if item.pnl_declared_pct is not None]
+    series = [item.pnl_declared for item in traded if item.pnl_declared is not None]
     block: dict[str, object] = {
         "basis": "declared_cost",
         "is_validation": False,
-        "units": "tanto por uno del nocional (pnl_declared_pct)",
+        "units": "tanto por uno del nocional (pnl_declared)",
         "n_traded": len(traded),
         "n_observations": len(series),
         "net_metrics": {
@@ -2026,10 +2026,10 @@ def analyse(
     result = ExperimentResult(
         sharpe_per_session=sharpe_ratio(
             [
-                session.pnl_declared_pct
+                session.pnl_declared
                 for fold in run.folds
                 for session in fold.sessions
-                if session.status == STATUS_TRADED and session.pnl_declared_pct is not None
+                if session.status == STATUS_TRADED and session.pnl_declared is not None
             ],
             annualization=1,
         ),

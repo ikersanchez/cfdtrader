@@ -735,7 +735,7 @@ def compute_dominance(
 def declared_series_of(run: BacktestRun) -> DeclaredSeries:
     """La serie declarada de una corrida del motor, en ``%`` y por sesion de *test* (A8).
 
-    ``100 x gross_pct - c_declared_pct``: ``gross_pct`` llega como **fraccion** (la unidad que
+    ``100 x gross - c_declared_pct``: ``gross`` llega como **fraccion** (la unidad que
     declara #80) y ``c_declared_pct`` en **%**. El modulo **no** lee el P&L declarado del motor:
     lo re-deriva aqui, igual que #28. Las sesiones sin operacion entran como ``0`` exacto y las
     saltadas no entran.
@@ -750,12 +750,12 @@ def declared_series_of(run: BacktestRun) -> DeclaredSeries:
                 values.append(0.0)
                 traded.append(False)
                 continue
-            if outcome.gross_pct is None or outcome.cost is None:
+            if outcome.gross is None or outcome.cost is None:
                 raise Phase2DominanceError(
-                    f"{outcome.session.isoformat()}: una operacion sin `gross_pct` o sin "
+                    f"{outcome.session.isoformat()}: una operacion sin `gross` o sin "
                     "`CostBreakdown` no tiene retorno declarado que reconstruir (A8)"
                 )
-            values.append(100.0 * outcome.gross_pct - float(outcome.cost.c_declared_pct))
+            values.append(100.0 * outcome.gross - float(outcome.cost.c_declared_pct))
             traded.append(outcome.status == STATUS_TRADED)
     return DeclaredSeries(values_pct=tuple(values), traded=tuple(traded))
 

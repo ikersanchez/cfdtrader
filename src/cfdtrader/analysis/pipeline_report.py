@@ -12,7 +12,7 @@ del plan oficial. Aqui se cablean **sin duplicar** nada:
 - el gate de #27 se evalua **tal cual** (``evaluate_gate`` con las 19 entradas declaradas) y la
   conversion a ``Decision`` la hace ``to_engine_decision`` (el ``open`` de la subasta, #64);
 - las metricas son los **helpers exportados** de #15: ``calculate_metrics`` **lanza** con
-  ``pnl_net_pct = null``, que es el 100 % de los casos mientras el *slippage* siga supuesto.
+  ``pnl_net = null``, que es el 100 % de los casos mientras el *slippage* siga supuesto.
 
 Tres brazos declarados (A4-A6):
 
@@ -1132,17 +1132,17 @@ def _sessions_of_run(run: BacktestRun) -> tuple[SessionOutcome, ...]:
 def _declared_return_pct(outcome: SessionOutcome) -> float:
     """El retorno de coste declarado, en **unidades coherentes** y dentro del informe (A10).
 
-    ``100 x gross_pct - c_declared_pct``: ``gross_pct`` llega como **fraccion** (la unidad que
+    ``100 x gross - c_declared_pct``: ``gross`` llega como **fraccion** (la unidad que
     declara #80) y ``c_declared_pct`` en **%**, asi que el producto por 100 los pone en la misma
     unidad. El informe **no** lee el P&L declarado del motor: lo re-deriva aqui, en %.
     """
     cost = outcome.cost
-    if outcome.gross_pct is None or cost is None:
+    if outcome.gross is None or cost is None:
         raise PipelineReportError(
-            f"{outcome.session.isoformat()}: una operacion sin `gross_pct` o sin `CostBreakdown` "
+            f"{outcome.session.isoformat()}: una operacion sin `gross` o sin `CostBreakdown` "
             "no tiene retorno declarado que publicar (A10)"
         )
-    return 100.0 * outcome.gross_pct - float(cost.c_declared_pct)
+    return 100.0 * outcome.gross - float(cost.c_declared_pct)
 
 
 def _series_of_run(run: BacktestRun) -> tuple[float, ...]:
