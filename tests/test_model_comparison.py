@@ -893,10 +893,25 @@ def test_a12_the_four_rows_are_measured_here_with_the_declared_basis(
     assert comparison["basis"] == "declared_cost"
     assert comparison["is_validation"] is False
     rows = _rows(real_report)
-    assert [row["brier_score"] for row in rows] == list(MEASURED_BRIER)
+    # Lo congelado es el **conjunto** de cifras medidas; el **orden** de las filas es el del
+    # registro, que `load_registry` ordena por `run_sha256` (una identidad interna que se mueve
+    # cuando se mueve el contrato de features, #105). Se comprueba cada cosa por separado.
+    assert sorted(float(cast("float", row["brier_score"])) for row in rows) == sorted(
+        MEASURED_BRIER
+    )
+    identifiers = [str(row["run_sha256"]) for row in rows]
+    assert identifiers == sorted(identifiers), "las filas van en el orden del registro"
     reference = cast("dict[str, object]", comparison["reference"])
     assert reference["variant_id"] == BASELINE_VARIANT_ID
-    assert reference["run_sha256"] == real_report.evaluated[0].run_sha256
+    # La referencia es la lineal **cruda** de #24, no `evaluated[0]`: el orden del registro es
+    # `run_sha256` ascendente, una identidad interna que se mueve con el contrato de features
+    # (#105).
+    raw_baseline = next(
+        item
+        for item in real_report.evaluated
+        if item.variant_id == BASELINE_VARIANT_ID and not item.calibrated
+    )
+    assert reference["run_sha256"] == raw_baseline.run_sha256
     for row in rows:
         assert row["basis"] == "declared_cost"
         assert row["is_validation"] is False
@@ -933,7 +948,9 @@ def test_a12_the_unit_bug_is_fixed_and_measured(real_report: ModelComparisonRepo
     assert abs(float(cast("float", bug["observed_per_operation"])) - 0.000042) <= 1e-15
     assert abs(float(cast("float", bug["correct_term_per_operation"])) - 0.000042) <= 1e-15
     assert abs(float(cast("float", bug["difference_per_operation"]))) <= 1e-12
-    assert bug["n_operations"] == real_report.evaluated[0].n_traded
+    reference = cast("dict[str, object]", _block(real_report, "comparison")["reference"])
+    assert bug["observed_on"] == reference["run_sha256"]
+    assert bug["n_operations"] == reference["n_traded"]
     assert "c_fraction_of_notional" in str(bug["statement"])
     assert "c_fraction_of_notional" in str(bug["resolution"])
     # A8: la guardia de `git diff` se reduce al contrato nuevo. El motor (#80) **si** entra en
@@ -972,8 +989,12 @@ def test_a12_the_table_is_not_copied_from_the_frozen_reports(
         as_of=NOW,
         write=False,
     )
-    assert [row["brier_score"] for row in _rows(reports)] == list(MEASURED_BRIER)
-    assert [row["brier_score"] for row in _rows(real_report)] == list(MEASURED_BRIER)
+    assert sorted(float(cast("float", row["brier_score"])) for row in _rows(reports)) == sorted(
+        MEASURED_BRIER
+    )
+    assert sorted(float(cast("float", row["brier_score"])) for row in _rows(real_report)) == sorted(
+        MEASURED_BRIER
+    )
     source = _source(model_comparison)
     assert "baseline_2026" not in source
     # El informe **escribe** en el directorio de informes (`--reports-dir`, cuyo defecto es
