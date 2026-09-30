@@ -12,6 +12,7 @@ estructura; el run fija el resultado.
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
 from typing import Any, cast
 
@@ -21,6 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 PRE_COMMIT = REPO_ROOT / ".pre-commit-config.yaml"
 INTEGRITY = REPO_ROOT / "tests" / "test_integrity.py"
+PYPROJECT = REPO_ROOT / "pyproject.toml"
 
 #: Los cuatro jobs declarados por #85.
 JOB_LINT = "lint"
@@ -271,3 +273,29 @@ def test_a16_the_pre_push_stage_stays_fast() -> None:
     assert "-k" in entry and ("golden_matrix" in entry or "version_gate" in entry)
     assert "testpaths" not in entry
     assert "uv run pytest tests" not in entry.replace("tests/test_integrity.py", "")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A17 — el `tmp_path` de la suite sobrevive a un clon limpio
+# ─────────────────────────────────────────────────────────────────────────────
+def test_a17_the_basetemp_parent_exists_in_a_clean_clone() -> None:
+    """`--basetemp=.scratch/pytest` exige que `.scratch/` exista.
+
+    `.scratch/` está gitignorado, así que no viaja al clon: pytest hace
+    `mkdir(mode=0o700)` sin `parents=True` y toda la suite que usa `tmp_path` caía con
+    `FileNotFoundError` (385 errores en el clon limpio de #85). Lo crea
+    `tests/conftest.py` al importarse; esta guarda lo declara.
+    """
+    config = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    options = cast("dict[str, Any]", config["tool"]["pytest"]["ini_options"])
+    addopts = cast("list[str]", options["addopts"])
+    flags = [opt for opt in addopts if opt.startswith("--basetemp=")]
+    assert len(flags) == 1, f"se esperaba un unico --basetemp, hay: {addopts}"
+    basetemp = REPO_ROOT / flags[0].split("=", 1)[1]
+    assert basetemp.is_relative_to(REPO_ROOT), (
+        f"el --basetemp {basetemp} debe quedar dentro del workspace"
+    )
+    assert basetemp.parent.is_dir(), (
+        f"el padre de --basetemp ({basetemp.parent}) no existe: en un clon limpio "
+        "pytest falla con FileNotFoundError"
+    )
