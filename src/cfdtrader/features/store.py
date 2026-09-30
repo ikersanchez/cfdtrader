@@ -17,6 +17,18 @@ separadores minimos, ASCII) y se aplica ``sha256``. Consecuencia buscada: el
 **orden de insercion de un `dict` no cambia el hash**, y tocar cualquiera de los
 seis campos con sentido si.
 
+**Precision del digest de la matriz (#105).** Los ``float64`` de la matriz se
+**cuantizan** a :data:`DIGEST_SIGNIFICANT_DIGITS` cifras significativas antes de
+entrar en :func:`matrix_sha256`. Serializar el ``repr`` completo de un ``float64``
+hace que el digest cambie cuando cambia el **ultimo bit**, y el ultimo bit si cambia
+de una maquina a otra: las reducciones vectorizadas (``mean``, ``std``,
+``ewm_mean``) se evaluan en un orden distinto segun los kernels SIMD que elige la
+CPU, y dos hosts con el mismo Python, las mismas dependencias y los mismos datos
+producen digests distintos. El digest existe para detectar un cambio de **calculo**,
+no ruido de 1 ULP, asi que se redondea; un cambio real mueve las features muchos
+ordenes de magnitud mas que esa cifra. El par (spec, digests) sigue congelado: subir
+la constante es la unica forma de moverlo.
+
 **Dos valores, no uno** (`tech_stack.md` §12.9):
 
 - ``feature_spec_sha256`` — el digest de la spec **sin** ``as_of``. Identifica el
@@ -229,7 +241,14 @@ VOLATILITY_FEATURE_SET: Final[str] = "volatility_v1"
 
 #: Version declarada del **codigo de calculo** (A2). Arranca en 1 y **solo** sube
 #: cuando cambia el resultado de alguna feature; reformatear el modulo no cuenta.
-FEATURE_CODE_VERSION: Final[int] = 1
+#: Sube a 2 en #105: el digest de la matriz pasa a cuantizar los ``float`` (mismo
+#: calculo, distinto texto canonico), que es un cambio declarado del contrato.
+FEATURE_CODE_VERSION: Final[int] = 2
+
+#: Cifras significativas con las que un ``float`` entra en el digest de la matriz
+#: (#105). Absorbe el ruido de 1 ULP que cambia de una CPU a otra sin dejar pasar un
+#: cambio real de calculo, que mueve las features ordenes de magnitud mas.
+DIGEST_SIGNIFICANT_DIGITS: Final[int] = 12
 
 #: Sufijo de la columna normalizada que anade :func:`normalise_expanding`.
 NORMALISED_SUFFIX: Final[str] = "_z"
@@ -1360,10 +1379,25 @@ def matrix_sha256(matrix: pl.DataFrame) -> str:
 
 
 def _json_scalar(value: object) -> object:
-    """Valor de una celda en forma serializable: los instantes, en ISO 8601."""
+    """Valor de una celda en forma serializable: los instantes, en ISO 8601.
+
+    Los ``float`` pasan por :func:`_digest_number`: sin esa cuantizacion el digest
+    cambiaria con el ultimo bit (#105).
+    """
     if isinstance(value, datetime | date):
         return value.isoformat()
+    if isinstance(value, float):
+        return _digest_number(value)
     return value
+
+
+def _digest_number(value: float) -> float:
+    """Cuantiza un ``float`` a :data:`DIGEST_SIGNIFICANT_DIGITS` cifras significativas.
+
+    El ``"+​ 0.0"`` pliega el cero negativo (``-0.0``) sobre el positivo: si no, dos
+    hosts podrian diferir solo en el signo del cero.
+    """
+    return float(f"{value + 0.0:.{DIGEST_SIGNIFICANT_DIGITS}g}")
 
 
 def _require_finite(frame: pl.DataFrame, columns: list[str] | tuple[str, ...]) -> pl.DataFrame:

@@ -12,7 +12,7 @@
     "el par con una nota)."
   ],
   "generator": "tests/fixtures/features/context_golden_inputs.csv (300 sesiones, 19 series)",
-  "code_version": 1,
+  "code_version": 2,
   "feature_set": "context_v1",
   "parameters": {},
   "windows": {
@@ -123,8 +123,8 @@
     "sector_dispersion_1_z"
   ],
   "digest_format": "sha256:<hex>",
-  "feature_spec_sha256": "sha256:513ec8206aea00b5b99341d2c937b38ce41c473a1bfbc864a4fbd63947033614",
-  "matrix_sha256": "sha256:09a8b459e444a441bf0aea3a7f5c25e8dd61d00ba58d0c05ae43cb23dc818213",
+  "feature_spec_sha256": "sha256:930998111d669b56d40655a9eb2dba32c2b5f30a1b8042474fc65e9adc6acd42",
+  "matrix_sha256": "sha256:1b2f4d5ff14615ee99395ba673e8a03557734d171b5d417be87da77320a92624",
   "non_null": {
     "as_of": 0,
     "corr_dax_60": 61,

@@ -10,7 +10,7 @@
     "proposito (entonces sube FEATURE_CODE_VERSION y se actualiza el par con una nota)."
   ],
   "generator": "tests/fixtures/features/golden_inputs.csv (300 sesiones, reutilizado de #19)",
-  "code_version": 1,
+  "code_version": 2,
   "feature_set": "technical_v1",
   "parameters": {},
   "windows": {
@@ -50,8 +50,8 @@
     "features_version con ese prefijo y un hex desnudo de 64 caracteres dispara el",
     "hook detect-secrets (falso positivo de alta entropia). El test lo quita al comparar."
   ],
-  "feature_spec_sha256": "sha256:6e4d86aee66be928d860184e65d03f7de03da59fae58a87467b5acdc95b3b78b",
-  "matrix_sha256": "sha256:6dbe0a372a64534c07c52e8e44c104163a5f4c27159a40610f5cac9172c9650e",
+  "feature_spec_sha256": "sha256:712afeb4d0592bd26ccc6ac03a60fb742f10b5e4d270c87b24b0a053a98de1b7",
+  "matrix_sha256": "sha256:3730a78746e20b56ba23fc00cb133333f3af7191f0ef6604e5a390a538b5f8ef",
   "non_null": {
     "ret_1": 1,
     "ret_5": 5,

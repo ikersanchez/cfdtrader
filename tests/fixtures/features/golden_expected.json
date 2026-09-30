@@ -9,7 +9,7 @@
     "(entonces sube FEATURE_CODE_VERSION y se actualizan los dos pares con una nota)."
   ],
   "generator": "numpy.random.default_rng(20260920); np.busday_offset desde 2025-01-02",
-  "code_version": 1,
+  "code_version": 2,
   "feature_set": "volatility_v1",
   "parameters": {},
   "windows": {
@@ -27,8 +27,14 @@
     "vix_zscore": 250
   },
   "sources": [
-    ["raw.market_daily", "^GSPC"],
-    ["raw.market_daily", "^VIX"]
+    [
+      "raw.market_daily",
+      "^GSPC"
+    ],
+    [
+      "raw.market_daily",
+      "^VIX"
+    ]
   ],
   "sessions": 300,
   "feature_columns": [
@@ -51,8 +57,8 @@
     "features_version con ese prefijo y un hex desnudo de 64 caracteres dispara el",
     "hook detect-secrets (falso positivo de alta entropia). El test lo quita al comparar."
   ],
-  "feature_spec_sha256": "sha256:3c71eb69635589dc7ece74b662170b27104473c3b81f3f21434ac178d7dc539b",
-  "matrix_sha256": "sha256:5abdd54362feddfb816ffa2dc566d3039c0a94b597e1cef75e1b2e064d56b947",
+  "feature_spec_sha256": "sha256:63ac0027090d0b0c072c0ebfa434ee7aa6e5a26ab719dbac730b09a6bf1e6c61",
+  "matrix_sha256": "sha256:ff6a311e29a55e9e29c5ca53bc9be84699ac21286666e0f56f5dcc1e3134e44a",
   "non_null": {
     "true_range": 0,
     "atr_norm": 14,

@@ -10,7 +10,7 @@
     "actualizar este fichero). Nunca se regenera un golden 'para que pase'."
   ],
   "generator": "tests/fixtures/features/regime_golden_inputs.csv (800 sesiones reales con precios sinteticos: sha256(index) como ruido y recursion GARCH-like, sin RNG global)",
-  "code_version": 1,
+  "code_version": 2,
   "feature_set": "regime_v1",
   "parameters": {},
   "windows": {
@@ -46,8 +46,8 @@
     "features_version con ese prefijo y un hex desnudo de 64 caracteres dispara el",
     "hook detect-secrets (falso positivo de alta entropia). El test lo quita al comparar."
   ],
-  "feature_spec_sha256": "sha256:272d8125b9ec118d95ee27619982e6007283b885cb6dfb968e4373b0053e9a0d",
-  "matrix_sha256": "sha256:2f23fe4a2cfcfe621d67a75ee0ccf065f98e303f425fb13ddc3abfca602eaa2b",
+  "feature_spec_sha256": "sha256:465dd6f1ef4a59d598cfd752c1713e348ce180a1a728b6c14cc902e90dbb5346",
+  "matrix_sha256": "sha256:8d8d121f9c13c46ca403939345d58c732046127a042d95650b525049e40cd465",
   "non_null": {
     "rv_percentile": 251,
     "garch_forecast": 500,

@@ -279,7 +279,7 @@ def test_a1_a_bad_family_or_a_bad_window_is_a_typed_error(tmp_path: Path) -> Non
 # ─────────────────────────────────────────────────────────────────────────────
 def test_a2_the_frozen_19_contract_is_untouched() -> None:
     """Los dos digests de #19 y su ``code_version`` siguen clavados."""
-    assert store.FEATURE_CODE_VERSION == 1
+    assert store.FEATURE_CODE_VERSION == 2
     expected = dict(json.loads((FIXTURES / "golden_expected.json").read_text(encoding="utf-8")))
     assert (
         _prefixed(store.feature_spec_sha256(store.FeatureSpec())) == expected["feature_spec_sha256"]
