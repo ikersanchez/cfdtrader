@@ -37,6 +37,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Las guardias historicas de la suite hacen `git diff <commit>..HEAD` contra
+          # commits antiguos: el clon superficial por defecto no los tiene.
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
@@ -53,6 +57,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
@@ -67,6 +73,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
@@ -84,6 +92,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
@@ -91,18 +101,22 @@ jobs:
       - name: Instalar dependencias
         run: uv sync --locked
       # `tee` para poder medir el recuento; `pipefail` para no enmascarar el fallo
-      # de pytest detrás del código de salida de `tee`.
-      - name: Suite completa (sin data/; los tests del almacén se saltan)
+      # de pytest detras del codigo de salida de `tee`. El log va a
+      # `$RUNNER_TEMP`, **fuera** del arbol: dentro lo ensuciaria y las guardias de
+      # arbol limpio (`test_metrics.py::test_a35`, `test_gate_sweep.py::test_a15`,
+      # `test_phase2_dominance.py::test_a18`, ...) fallarian.
+      - name: Suite completa (sin data/; los tests del almacen se saltan)
         run: |
           set -o pipefail
-          uv run pytest -q 2>&1 | tee pytest.log
-      # Umbral de vacío: si la suite no ejecuta nada (todos los tests saltados por
-      # falta de `data/`), el job sería verde sin haber comprobado nada. En un clon
-      # limpio midió 1175 passed / 243 skipped (2026-09-30), así que el suelo de
-      # 1000 deja margen sin dejar pasar una suite vacía.
+          uv run pytest -q 2>&1 | tee "$RUNNER_TEMP/pytest.log"
+      # Umbral de vacio: si la suite no ejecuta nada (todos los tests saltados por
+      # falta de `data/`), el job seria verde sin haber comprobado nada. En un clon
+      # limpio midio 1175 passed / 243 skipped (2026-09-30), asi que el suelo de
+      # 1000 deja margen sin dejar pasar una suite vacia.
       - name: La suite no puede pasar en vacío
         run: |
-          passed=$(grep -oE '[0-9]+ passed' pytest.log | grep -oE '[0-9]+' | head -1)
+          log="$RUNNER_TEMP/pytest.log"
+          passed=$(grep -oE '[0-9]+ passed' "$log" | grep -oE '[0-9]+' | head -1)
           if [ "${passed:-0}" -lt 1000 ]; then
             echo "solo ${passed:-0} tests ejecutados: la suite pasaría en vacío" >&2
             exit 1
