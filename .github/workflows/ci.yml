@@ -91,23 +91,29 @@ jobs:
         if: always()
         run: |
           uv run python - <<'PY'
-          import math
+          import hashlib
           import sys
           from pathlib import Path
 
           sys.path.insert(0, "tests")
           from test_integrity import substrate
 
+          def short(text: str) -> str:
+              return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
           frame = substrate(Path(".scratch/diag105")).matrix.frame
           print("### shape", frame.height, frame.width)
+          print("### columns", short("|".join(frame.columns)))
+          sessions = [str(value) for value in frame.get_column("session").to_list()]
+          order = short("|".join(sessions))
+          print("### session_order", order, "SORTED" if sessions == sorted(sessions) else "UNSORTED")
+          rows = [short("|".join(repr(value) for value in row)) for row in frame.iter_rows()]
+          print("### rows_in_order", short("|".join(rows)))
           for column in sorted(frame.columns):
-              if column == "session":
-                  continue
-              values = [float(v) for v in frame.get_column(column).drop_nulls().to_list()]
-              if not values:
-                  print("COL", column, "EMPTY")
-                  continue
-              print("COL", column, repr(math.fsum(values)), repr(max(abs(v) for v in values)))
+              values = frame.get_column(column).to_list()
+              nulls = sum(1 for value in values if value is None)
+              texts = sorted(repr(value) for value in values if value is not None)
+              print("COLHASH", column, short("|".join(texts)), nulls)
           PY
 
   tests:
