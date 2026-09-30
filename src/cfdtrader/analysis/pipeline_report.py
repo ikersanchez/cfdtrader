@@ -316,8 +316,9 @@ DOES_NOT_DO: Final[tuple[dict[str, str], ...]] = (
         "id": "sensitivity_sweep",
         "issue": "#86",
         "statement": (
-            "declara **un** escenario (S1); el barrido de sensibilidad de los once parametros del "
-            "gate es #86"
+            "declara **un** escenario (S1), no barre los once parametros del gate: el barrido es "
+            "un artefacto aparte (`gate_sweep_2026-09-23.{json,md}`), entregado en #86 (cerrada, "
+            "sin seguimiento)"
         ),
     },
     {

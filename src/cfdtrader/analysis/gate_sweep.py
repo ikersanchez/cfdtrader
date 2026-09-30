@@ -790,7 +790,10 @@ def _payload(
             {
                 "issue": "#97",
                 "id": "stale_runs",
-                "statement": "no regenera `baseline_2026-09-20` ni `runs/408fead...`",
+                "statement": (
+                    "no regenera `baseline_2026-09-20` ni `runs/408fead...`: los regenero #97 "
+                    "(cerrada, sin seguimiento) y este barrido los lee tal cual"
+                ),
             },
         ],
     }
