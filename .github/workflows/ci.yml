@@ -1,0 +1,109 @@
+# CI del proyecto (#85, seguimiento de #17).
+#
+# Corre en un clon **limpio**: `data/` y `runs/` están gitignorados, así que en el
+# runner no existen. Esa es la razón de que la suite tenga que ser hermética: los
+# tests que miden el almacén real llevan su `skipif` declarado (`needs_store`) y se
+# saltan en vez de fallar. La etapa `tests` comprueba además que la suite **no pasa
+# en vacío** (ver `resources`/`Umbral de vacío`).
+#
+# La barrera local (`pre-commit`) se queda como está: la etapa `pre-push` sigue
+# ejecutando **solo** la puerta del golden de la matriz (segundos), no la suite
+# completa. Decisión de #85; el `tech_stack.md` §4.14 contempla la alternativa.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Una ejecución nueva sobre el mismo ref cancela la anterior: el runner es el
+# recurso escaso del tier gratuito.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # El `uv.lock` está commiteado y es la garantía de reproducibilidad
+  # (tech_stack.md §3.3, principio 5): en el runner nunca se re-resuelve.
+  UV_FROZEN: "1"
+
+jobs:
+  lint:
+    name: ruff (check + format)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Instalar dependencias
+        run: uv sync --locked
+      - name: ruff check
+        run: uv run ruff check .
+      - name: ruff format --check
+        run: uv run ruff format --check .
+
+  typecheck:
+    name: pyright
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Instalar dependencias
+        run: uv sync --locked
+      - name: pyright
+        run: uv run pyright
+
+  feature-golden:
+    name: Puerta del golden de features (#17)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Instalar dependencias
+        run: uv sync --locked
+      # Mismo selector que el hook local de `pre-push`: la puerta del golden de la
+      # matriz de las cinco familias y la de `FEATURE_CODE_VERSION`.
+      - name: Golden de la matriz + puerta de versión
+        run: uv run pytest tests/test_integrity.py -q -k "golden_matrix or version_gate"
+
+  tests:
+    name: pytest (clon limpio, sin data/)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Instalar dependencias
+        run: uv sync --locked
+      # `tee` para poder medir el recuento; `pipefail` para no enmascarar el fallo
+      # de pytest detrás del código de salida de `tee`.
+      - name: Suite completa (sin data/; los tests del almacén se saltan)
+        run: |
+          set -o pipefail
+          uv run pytest -q 2>&1 | tee pytest.log
+      # Umbral de vacío: si la suite no ejecuta nada (todos los tests saltados por
+      # falta de `data/`), el job sería verde sin haber comprobado nada. El suelo
+      # se fija muy por debajo del recuento real del clon limpio.
+      - name: La suite no puede pasar en vacío
+        run: |
+          passed=$(grep -oE '[0-9]+ passed' pytest.log | grep -oE '[0-9]+' | head -1)
+          if [ "${passed:-0}" -lt 1000 ]; then
+            echo "solo ${passed:-0} tests ejecutados: la suite pasaría en vacío" >&2
+            exit 1
+          fi
+          echo "${passed} tests ejecutados"
