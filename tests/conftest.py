@@ -28,6 +28,13 @@ REPOSITORY_DATA = REPO_ROOT / "data"
 #: Registro de experimentos del repositorio (gitignorado, `.gitignore` línea 55).
 REPOSITORY_RUNS = REPO_ROOT / "runs"
 
+# `pyproject.toml` fija `--basetemp=.scratch/pytest`, y pytest resuelve ese
+# directorio con `Path.mkdir(mode=0o700)` **sin** `parents=True`: el padre tiene que
+# existir ya. En un clon limpio `.scratch/` no existe (está gitignorado), así que
+# toda la suite que usa `tmp_path` fallaba con `FileNotFoundError` (#85). Se crea el
+# padre aquí, al importar el conftest, antes de que pytest toque el `basetemp`.
+(REPO_ROOT / ".scratch").mkdir(parents=True, exist_ok=True)
+
 
 def fingerprint(root: Path) -> dict[str, str]:
     """Ruta relativa → sha256 de cada fichero. Detecta altas, bajas y cambios."""
