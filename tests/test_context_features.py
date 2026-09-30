@@ -52,7 +52,7 @@ WINDOW = store.CONTEXT_CORRELATION_WINDOW
 MIN_SESSIONS = store.CONTEXT_MIN_SESSIONS
 
 #: El digest congelado de #19: la constante declarada **no** sube por unir familias.
-FROZEN_SPEC_19 = "sha256:3c71eb69635589dc7ece74b662170b27104473c3b81f3f21434ac178d7dc539b"
+FROZEN_SPEC_19 = "sha256:63ac0027090d0b0c072c0ebfa434ee7aa6e5a26ab719dbac730b09a6bf1e6c61"
 
 #: La tabla de la issue, literal: ventana y ``required_as_of`` de cada entrada.
 CATALOG_TABLE: dict[str, tuple[int | None, str]] = {
@@ -384,7 +384,7 @@ def test_a1_a_bad_family_or_a_bad_window_is_a_typed_error() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 def test_a2_the_frozen_19_contract_is_untouched(tmp_path: Path) -> None:
     """El digest congelado de #19, su ``code_version`` y una familia sin registrar."""
-    assert store.FEATURE_CODE_VERSION == 1
+    assert store.FEATURE_CODE_VERSION == 2
     assert _prefixed(store.feature_spec_sha256(store.FeatureSpec())) == FROZEN_SPEC_19
 
     golden = dict(json.loads((FIXTURES / "golden_expected.json").read_text(encoding="utf-8")))

@@ -15,7 +15,7 @@
     "publicacion de PCEPI del 2026-01-22 y las rachas del shutdown de 2025."
   ],
   "generator": "tests/fixtures/features/macro_golden_market.csv (300 sesiones) + tests/fixtures/features/macro_golden_series.csv (6 series macro, as_of >= 2024-01-01)",
-  "code_version": 1,
+  "code_version": 2,
   "feature_set": "macro_v1",
   "parameters": {},
   "windows": {
@@ -86,8 +86,8 @@
     "dxy_z"
   ],
   "digest_format": "sha256:<hex>",
-  "feature_spec_sha256": "sha256:8eb2384202edbfe26bcc04c87e3a807938515d5319839905d9cbd39263f50f28",
-  "matrix_sha256": "sha256:5bc764af23c4c945bdbfe545064b99e77c9ea4ccc3e6c5a3860385ea8b7721ee",
+  "feature_spec_sha256": "sha256:cf01b07c03201ceedfca83cd29ca62c8440e605d1790d603f45a48907fbbefda",
+  "matrix_sha256": "sha256:302e3734710153ebadd61fe8803eee06230a4a74f9626bf33e74ab0fac389353",
   "non_null": {
     "session": 0,
     "as_of": 0,

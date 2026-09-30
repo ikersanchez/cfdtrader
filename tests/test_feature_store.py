@@ -246,7 +246,7 @@ def test_a1_reordering_an_input_dict_changes_nothing() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 def test_a2_code_version_is_a_declared_constant(tmp_path: Path) -> None:
     """Reescribir el modulo no cambia el hash; subir la constante, si."""
-    assert store.FEATURE_CODE_VERSION == 1
+    assert store.FEATURE_CODE_VERSION == 2
     assert store.FeatureSpec().code_version == store.FEATURE_CODE_VERSION
 
     source = _source()
@@ -263,11 +263,11 @@ def test_a2_code_version_is_a_declared_constant(tmp_path: Path) -> None:
     assert rewritten.features_version(rewritten.FeatureSpec(), instant) == baseline
 
     bumped_source = source.replace(
-        "FEATURE_CODE_VERSION: Final[int] = 1", "FEATURE_CODE_VERSION: Final[int] = 2"
+        "FEATURE_CODE_VERSION: Final[int] = 2", "FEATURE_CODE_VERSION: Final[int] = 3"
     )
     bumped = _module_copy(tmp_path, "bumped", bumped_source)
     assert bumped.FEATURE_CODE_VERSION == store.FEATURE_CODE_VERSION + 1
-    assert bumped.FeatureSpec().code_version == 2
+    assert bumped.FeatureSpec().code_version == 3
     assert bumped.features_version(bumped.FeatureSpec(), instant) != baseline
 
 
@@ -322,6 +322,39 @@ def test_a4_a_silent_change_fails_and_a_bump_requires_updating_the_pair() -> Non
     # (c) si el digest cambia sin tocar la constante, el test falla
     assert _prefixed(store.matrix_sha256(matrix)) == expected["matrix_sha256"]
     assert _prefixed(store.matrix_sha256(matrix.drop("ret_sq"))) != expected["matrix_sha256"]
+
+
+def _first_valued_column(matrix: pl.DataFrame) -> str:
+    """Primera columna de feature con algun valor (las hay enteramente nulas)."""
+    for column in matrix.columns:
+        if column != "session" and matrix.get_column(column).null_count() < matrix.height:
+            return column
+    raise AssertionError("la matriz del golden no tiene ningun valor")
+
+
+def test_a4b_the_digest_ignores_one_ulp_and_detects_real_changes() -> None:
+    """#105: el digest no puede moverse por el ultimo bit, y si por un cambio de calculo.
+
+    Dos hosts con el mismo Python, las mismas dependencias y los **mismos datos** daban
+    digests distintos: las reducciones vectorizadas (``mean``/``std``/``ewm_mean``) se
+    evaluan en otro orden segun los kernels SIMD que elige la CPU, y el texto canonico
+    serializaba el ``repr`` completo de cada ``float64``. La cuantizacion a
+    :data:`store.DIGEST_SIGNIFICANT_DIGITS` absorbe ese ruido. Las dos mitades de la
+    guarda: **1 ULP no cambia el digest** y un cambio real **si**.
+    """
+    _, matrix = _golden()
+    baseline = store.matrix_sha256(matrix)
+
+    column = _first_valued_column(matrix)
+    values = matrix.get_column(column).to_list()
+    position = next(index for index, value in enumerate(values) if value is not None)
+    values[position] = math.nextafter(float(values[position]), math.inf)
+    nudged = matrix.with_columns(pl.Series(column, values, dtype=pl.Float64))
+
+    assert store.matrix_sha256(nudged) == baseline, "el digest se mueve con 1 ULP"
+
+    changed = matrix.with_columns((pl.col(column) * (1.0 + 1e-9)).alias(column))
+    assert store.matrix_sha256(changed) != baseline, "el digest no ve un cambio real"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

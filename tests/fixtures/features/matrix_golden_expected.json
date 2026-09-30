@@ -13,15 +13,15 @@
     "se regenera un golden 'para que pase'."
   ],
   "generator": "tests/fixtures/features/*.csv ensamblados con Store.append y cfdtrader.analysis.feature_frame.build_feature_matrix; para reproducirlo: json.dumps(tests.test_integrity.golden_payload(root), indent=2, ensure_ascii=False) sobre un root nuevo dentro del workspace",
-  "code_version": 1,
+  "code_version": 2,
   "feature_spec_sha256": {
-    "volatility_v1": "sha256:3c71eb69635589dc7ece74b662170b27104473c3b81f3f21434ac178d7dc539b",
-    "technical_v1": "sha256:6e4d86aee66be928d860184e65d03f7de03da59fae58a87467b5acdc95b3b78b",
-    "context_v1": "sha256:513ec8206aea00b5b99341d2c937b38ce41c473a1bfbc864a4fbd63947033614",
-    "macro_v1": "sha256:8eb2384202edbfe26bcc04c87e3a807938515d5319839905d9cbd39263f50f28",
-    "regime_v1": "sha256:272d8125b9ec118d95ee27619982e6007283b885cb6dfb968e4373b0053e9a0d"
+    "volatility_v1": "sha256:63ac0027090d0b0c072c0ebfa434ee7aa6e5a26ab719dbac730b09a6bf1e6c61",
+    "technical_v1": "sha256:712afeb4d0592bd26ccc6ac03a60fb742f10b5e4d270c87b24b0a053a98de1b7",
+    "context_v1": "sha256:930998111d669b56d40655a9eb2dba32c2b5f30a1b8042474fc65e9adc6acd42",
+    "macro_v1": "sha256:cf01b07c03201ceedfca83cd29ca62c8440e605d1790d603f45a48907fbbefda",
+    "regime_v1": "sha256:465dd6f1ef4a59d598cfd752c1713e348ce180a1a728b6c14cc902e90dbb5346"
   },
-  "matrix_sha256": "sha256:43ae0d6a26069dd4aee54123d88d797593dcde5a065466c2ee34b4d688350c3b",
+  "matrix_sha256": "sha256:0e015008b5405fd6e8c40ced0d08dd764d1a1215d925e29893f41c4c2e6db443",
   "feature_columns": [
     "session",
     "true_range",

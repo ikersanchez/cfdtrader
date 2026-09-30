@@ -58,16 +58,16 @@ DT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 #: Los digests congelados de las tres familias anteriores, tal y como los dejan
 #: #19, #20 y #21: unirlas a la cuarta no puede mover ninguno.
 FROZEN_19 = (
-    "sha256:3c71eb69635589dc7ece74b662170b27104473c3b81f3f21434ac178d7dc539b",
-    "sha256:5abdd54362feddfb816ffa2dc566d3039c0a94b597e1cef75e1b2e064d56b947",
+    "sha256:63ac0027090d0b0c072c0ebfa434ee7aa6e5a26ab719dbac730b09a6bf1e6c61",
+    "sha256:ff6a311e29a55e9e29c5ca53bc9be84699ac21286666e0f56f5dcc1e3134e44a",
 )
 FROZEN_20 = (
-    "sha256:6e4d86aee66be928d860184e65d03f7de03da59fae58a87467b5acdc95b3b78b",
-    "sha256:6dbe0a372a64534c07c52e8e44c104163a5f4c27159a40610f5cac9172c9650e",
+    "sha256:712afeb4d0592bd26ccc6ac03a60fb742f10b5e4d270c87b24b0a053a98de1b7",
+    "sha256:3730a78746e20b56ba23fc00cb133333f3af7191f0ef6604e5a390a538b5f8ef",
 )
 FROZEN_21 = (
-    "sha256:513ec8206aea00b5b99341d2c937b38ce41c473a1bfbc864a4fbd63947033614",
-    "sha256:09a8b459e444a441bf0aea3a7f5c25e8dd61d00ba58d0c05ae43cb23dc818213",
+    "sha256:930998111d669b56d40655a9eb2dba32c2b5f30a1b8042474fc65e9adc6acd42",
+    "sha256:1b2f4d5ff14615ee99395ba673e8a03557734d171b5d417be87da77320a92624",
 )
 
 #: La tabla de la issue, literal: ventana y ``required_as_of`` de cada entrada.
@@ -597,7 +597,7 @@ def test_a2_the_registry_declares_the_fourth_family() -> None:
         )
         == spec
     )
-    assert store.FEATURE_CODE_VERSION == 1
+    assert store.FEATURE_CODE_VERSION == 2
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1322,7 +1322,7 @@ def test_a13_the_previous_goldens_are_intact() -> None:
     assert _prefixed(store.feature_spec_sha256(spec_21)) == FROZEN_21[0]
     context_matrix_21 = context.context_matrix(_context_frames(), spec=spec_21)
     assert _prefixed(store.matrix_sha256(context_matrix_21)) == FROZEN_21[1]
-    assert store.FEATURE_CODE_VERSION == 1
+    assert store.FEATURE_CODE_VERSION == 2
 
 
 def _context_frames() -> dict[str, pl.DataFrame]:

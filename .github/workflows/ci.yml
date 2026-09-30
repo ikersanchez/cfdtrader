@@ -85,36 +85,6 @@ jobs:
       # matriz de las cinco familias y la de `FEATURE_CODE_VERSION`.
       - name: Golden de la matriz + puerta de versión
         run: uv run pytest tests/test_integrity.py -q -k "golden_matrix or version_gate"
-      # TEMPORAL (#105): mide la magnitud de la diferencia entre hosts para elegir la
-      # precision del digest. Se retira antes de fusionar.
-      - name: Diagnostico de precision 105
-        if: always()
-        run: |
-          uv run python - <<'PY'
-          import hashlib
-          import sys
-          from pathlib import Path
-
-          sys.path.insert(0, "tests")
-          from test_integrity import substrate
-
-          def short(text: str) -> str:
-              return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-
-          frame = substrate(Path(".scratch/diag105")).matrix.frame
-          print("### shape", frame.height, frame.width)
-          print("### columns", short("|".join(frame.columns)))
-          sessions = [str(value) for value in frame.get_column("session").to_list()]
-          order = short("|".join(sessions))
-          print("### session_order", order, "SORTED" if sessions == sorted(sessions) else "UNSORTED")
-          rows = [short("|".join(repr(value) for value in row)) for row in frame.iter_rows()]
-          print("### rows_in_order", short("|".join(rows)))
-          for column in sorted(frame.columns):
-              values = frame.get_column(column).to_list()
-              nulls = sum(1 for value in values if value is None)
-              texts = sorted(repr(value) for value in values if value is not None)
-              print("COLHASH", column, short("|".join(texts)), nulls)
-          PY
 
   tests:
     name: pytest (clon limpio, sin data/)

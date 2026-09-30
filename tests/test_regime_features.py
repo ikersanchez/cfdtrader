@@ -363,7 +363,7 @@ def test_a2_the_registry_declares_the_fifth_family() -> None:
         )
         == spec
     )
-    assert store.FEATURE_CODE_VERSION == 1
+    assert store.FEATURE_CODE_VERSION == 2
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -874,7 +874,7 @@ def test_a12_the_four_previous_goldens_are_untouched() -> None:
     for feature_set, path in files.items():
         expected = dict(json.loads((FIXTURES / path).read_text(encoding="utf-8")))
         assert expected["feature_set"] == feature_set
-        assert expected["code_version"] == store.FEATURE_CODE_VERSION == 1
+        assert expected["code_version"] == store.FEATURE_CODE_VERSION == 2
         assert (
             _prefixed(store.feature_spec_sha256(specs[feature_set]))
             == (expected["feature_spec_sha256"])
