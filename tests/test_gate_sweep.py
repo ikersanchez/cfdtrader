@@ -163,6 +163,13 @@ needs_store = pytest.mark.skipif(
     reason="el almacen real no esta en el arbol: los numeros de A4-A13 son los suyos",
 )
 
+
+def _skip_without_store() -> None:
+    """Salta si el almacen real no esta en el arbol: el CI corre sin `data/` (#85)."""
+    if not (REAL_DATA / "derived" / "labels").exists():
+        pytest.skip("el almacen real no esta en el arbol: el CI corre sin data/")
+
+
 #: Palabras que no pueden aparecer en el artefacto: ninguna cifra de base medida (criterio 6).
 FORBIDDEN_TOKENS: Final[tuple[str, ...]] = ("net", "neto", "neta", "pnl_net")
 
@@ -329,6 +336,7 @@ def _run_cli(directory: Path, hash_seed: str) -> CliRun:
 @pytest.fixture(scope="session")
 def report(tmp_path_factory: pytest.TempPathFactory) -> gate_sweep.GateSweepReport:
     """La corrida real completa, **una vez** por sesion, escribiendo bajo ``tmp_path``."""
+    _skip_without_store()
     root = tmp_path_factory.mktemp("gate_sweep")
     return analyse(store=Store(REAL_DATA), reports_dir=root, as_of=NOW, write=True)
 
