@@ -52,6 +52,17 @@ REAL_REPORTS: Final[Path] = REPO_ROOT / "data" / "derived" / "reports"
 PIPELINE_ARTIFACT: Final[Path] = REAL_REPORTS / "pipeline_backtest_2026-09-23.json"
 MODEL_ARTIFACT: Final[Path] = REAL_REPORTS / "model_comparison_2026-09-22.json"
 
+#: Predicado del clon limpio (CI): los informes publicados cuelgan de `data/`, que esta
+#: gitignorado. Sin ellos no hay nada que medir (#85).
+ARTIFACTS_IN_TREE: Final[bool] = PIPELINE_ARTIFACT.exists() and MODEL_ARTIFACT.exists()
+
+
+def _skip_without_artifacts() -> None:
+    """Salta test o fixture si los informes publicados no estan en el arbol (#85)."""
+    if not ARTIFACTS_IN_TREE:
+        pytest.skip("los informes publicados de #28/#26 no estan en el arbol")
+
+
 #: Instante declarado de las corridas que fijan el hash dorado (A4).
 NOW: Final[datetime] = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
 
@@ -269,6 +280,7 @@ def _run_module(*, reports_dir: Path, data_root: Path, as_of: str, seed: str | N
 @pytest.fixture()
 def reports(tmp_path: Path) -> Path:
     """Copia los artefactos reales de #28/#26 (solo lectura) dentro de `tmp_path`."""
+    _skip_without_artifacts()
     target = tmp_path / "derived" / "reports"
     target.mkdir(parents=True)
     for artifact in (PIPELINE_ARTIFACT, MODEL_ARTIFACT):
@@ -285,6 +297,7 @@ def table() -> phase2_report.KillTable:
 @pytest.fixture()
 def real_report(tmp_path_factory: pytest.TempPathFactory) -> phase2_report.Phase2Report:
     """El informe real (artefactos reales, `write=False`) para los criterios que lo leen."""
+    _skip_without_artifacts()
     root = tmp_path_factory.mktemp("phase2_real")
     target = root / "derived" / "reports"
     target.mkdir(parents=True)
@@ -297,6 +310,7 @@ def real_report(tmp_path_factory: pytest.TempPathFactory) -> phase2_report.Phase
 # A1 — API del modulo y CLI
 # ─────────────────────────────────────────────────────────────────────────────
 def test_a1_module_api_and_cli(tmp_path: Path) -> None:
+    _skip_without_artifacts()
     import inspect
 
     signature = inspect.signature(phase2_report.analyse)
@@ -447,6 +461,7 @@ def test_a5_provenance_and_read_only(real_report: phase2_report.Phase2Report) ->
 
 
 def test_a5_zero_and_ambiguous_are_typed_errors(tmp_path: Path) -> None:
+    _skip_without_artifacts()
     empty = tmp_path / "empty"
     empty.mkdir()
     with pytest.raises(MissingInputArtifactError):

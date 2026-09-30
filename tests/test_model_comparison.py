@@ -119,6 +119,12 @@ needs_store = pytest.mark.skipif(
 )
 
 
+def _skip_without_store() -> None:
+    """Salta si el almacen real no esta en el arbol: el CI corre sin `data/` (#85)."""
+    if not (REAL_DATA / "derived" / "labels").exists():
+        pytest.skip("el almacen real no esta en el arbol: el CI corre sin data/")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Utilidades
 # ─────────────────────────────────────────────────────────────────────────────
@@ -263,6 +269,7 @@ def _synthetic_series(
 @pytest.fixture(scope="session")
 def base_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """La raiz de trabajo de la suite: el registro con las dos entradas congeladas copiadas."""
+    _skip_without_store()
     root = tmp_path_factory.mktemp("model_comparison")
     _copy_frozen_runs(root / "runs")
     return root

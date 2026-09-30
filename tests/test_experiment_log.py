@@ -705,6 +705,8 @@ def test_a26_there_is_one_test_per_criterion() -> None:
 # A27 — guardia del runs/ del repositorio
 # ─────────────────────────────────────────────────────────────────────────────
 def test_a27_the_repository_runs_directory_is_guarded(tmp_path: Path) -> None:
+    if not REPOSITORY_RUNS.is_dir():
+        pytest.skip("el registro `runs/` no esta en el arbol: el CI corre sin el")
     conftest_source = (REPO_ROOT / "tests" / "conftest.py").read_text(encoding="utf-8")
     assert "_repository_runs_is_untouched" in conftest_source
     assert 'REPOSITORY_RUNS = REPO_ROOT / "runs"' in conftest_source

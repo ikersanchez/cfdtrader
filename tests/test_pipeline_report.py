@@ -168,6 +168,12 @@ needs_store = pytest.mark.skipif(
 )
 
 
+def _skip_without_store() -> None:
+    """Salta si el almacen real no esta en el arbol: el CI corre sin `data/` (#85)."""
+    if not (REAL_DATA / "derived" / "labels").exists():
+        pytest.skip("el almacen real no esta en el arbol: el CI corre sin data/")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Acceso tipado al payload publicado
 # ─────────────────────────────────────────────────────────────────────────────
@@ -334,6 +340,7 @@ def _patched_fast() -> Generator[None, None, None]:
 @pytest.fixture(scope="session")
 def real_report(tmp_path_factory: pytest.TempPathFactory) -> Generator[PipelineReport, None, None]:
     """La corrida real completa, **una vez** por sesion, escribiendo bajo ``tmp_path``."""
+    _skip_without_store()
     root = tmp_path_factory.mktemp("pipeline_report")
     yield analyse(store=Store(REAL_DATA), reports_dir=root, as_of=NOW, write=True)
 
@@ -1406,6 +1413,7 @@ def test_a14_cli_in_process_resolves_dirs_and_exits_zero(tmp_path: Path) -> None
     la tabla. Se usa `_patched_fast` (el doble deterministico de #15) para no repetir el remuestreo
     de la corrida de sesion; ninguna decision ni clave del payload cambia.
     """
+    _skip_without_store()
     reports = tmp_path / "informes"
     with _patched_fast():
         code = main(

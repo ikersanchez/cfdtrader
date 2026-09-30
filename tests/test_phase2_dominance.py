@@ -159,6 +159,16 @@ needs_store = pytest.mark.skipif(
     reason="el almacen real no esta en el arbol: los numeros de A1-A16 son los suyos",
 )
 
+#: Predicado del clon limpio (CI): los informes publicados cuelgan de `data/`, que esta
+#: gitignorado. Sin ellos no hay nada que medir (#85).
+ARTIFACTS_IN_TREE: Final[bool] = PIPELINE_ARTIFACT.exists() and MODEL_ARTIFACT.exists()
+
+
+def _skip_without_artifacts() -> None:
+    """Salta test o fixture si los informes publicados no estan en el arbol (#85)."""
+    if not ARTIFACTS_IN_TREE:
+        pytest.skip("los informes publicados de #28/#26 no estan en el arbol")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Doble barato del bootstrap de #15 (el mismo de `tests/test_pipeline_report.py`)
@@ -246,6 +256,7 @@ def _fingerprint(root: Path) -> dict[str, str]:
 
 def _copy_artifacts(directory: Path) -> Path:
     """Copia los artefactos reales de #28/#26 (solo lectura) dentro del `tmp_path`."""
+    _skip_without_artifacts()
     reports = directory / "derived" / "reports"
     reports.mkdir(parents=True, exist_ok=True)
     for artifact in (PIPELINE_ARTIFACT, MODEL_ARTIFACT):
@@ -317,6 +328,7 @@ def fresh_runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, CliRun]:
     Cada uno paga una reejecucion completa del pipeline de #28 (~2 minutos), asi que se lanzan a
     la vez: en serie la suite de este fichero pasaria de tres a cinco minutos.
     """
+    _skip_without_artifacts()
     root = tmp_path_factory.mktemp("dominance_fresh")
     with ThreadPoolExecutor(max_workers=2) as pool:
         zero = pool.submit(_run_cli, root / "seed0", "0")

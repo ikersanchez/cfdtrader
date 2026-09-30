@@ -1241,6 +1241,8 @@ def test_a27_raw_is_read_only_and_write_false_is_silent(
     tmp_path: Path, synthetic_root: Path, synthetic_report: BacktestReport
 ) -> None:
     """A27: `analyse(write=True)` no toca `raw` ni `derived.labels`, y `write=False` no escribe."""
+    if not (REAL_DATA / "raw" / "market_daily").is_dir():
+        pytest.skip("el almacén real no está en el árbol: los números de A27 no se miden")
     raw_before = _fingerprint(REAL_DATA / "raw")
     labels_before = _fingerprint(REAL_DATA / "derived" / "labels")
     reports = tmp_path / "reports"
