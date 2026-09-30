@@ -85,6 +85,30 @@ jobs:
       # matriz de las cinco familias y la de `FEATURE_CODE_VERSION`.
       - name: Golden de la matriz + puerta de versión
         run: uv run pytest tests/test_integrity.py -q -k "golden_matrix or version_gate"
+      # TEMPORAL (#105): mide la magnitud de la diferencia entre hosts para elegir la
+      # precision del digest. Se retira antes de fusionar.
+      - name: Diagnostico de precision 105
+        if: always()
+        run: |
+          uv run python - <<'PY'
+          import math
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, "tests")
+          from test_integrity import substrate
+
+          frame = substrate(Path(".scratch/diag105")).matrix.frame
+          print("### shape", frame.height, frame.width)
+          for column in sorted(frame.columns):
+              if column == "session":
+                  continue
+              values = [float(v) for v in frame.get_column(column).drop_nulls().to_list()]
+              if not values:
+                  print("COL", column, "EMPTY")
+                  continue
+              print("COL", column, repr(math.fsum(values)), repr(max(abs(v) for v in values)))
+          PY
 
   tests:
     name: pytest (clon limpio, sin data/)
