@@ -13,8 +13,10 @@ veredicto **robusto hacia abajo** sobre la **base declarada** del brazo ``coste_
   ``is_validation: false``, ``basis: declared_cost``) y **nunca** como metrica neta.
 
 La fila principal de ``plan.md`` §11.6 es un **o** (el IC de la tasa de acierto **o** el IC del
-Sharpe). Como la ``hit_rate`` del artefacto de #28 es por **sesion** y no por operacion (#92), la
-decision se sostiene en la **mitad del Sharpe**: la tasa de acierto se **publica**, no decide.
+Sharpe). Como la ``hit_rate`` del artefacto de #28 es por **sesion** y no por operacion (lo
+documenta #92, ya cerrada), la decision se sostiene en la **mitad del Sharpe**: la tasa de
+acierto se **publica**, no decide. #28 **ya** publica ademas la tasa por **operacion**
+(``hit_rate_per_trade``, desde la misma #92).
 
 Que **hace**:
 
@@ -45,7 +47,9 @@ Que **no** hace, y por tanto no puede inventar:
 - **no** convierte un ``not_evaluable`` en un aprobado: el veredicto por dominancia solo puede
   ser ``fail`` o ``not_evaluable``, y ``pass``/``continue`` no se publican nunca (A12);
 - **no** sustituye el veredicto real sobre la base neta: eso es #88;
-- **no** arregla que la ``hit_rate`` de #28 sea por sesion y no por operacion (#92);
+- **no** convierte la ``hit_rate`` **por sesion** del artefacto de #28 en una tasa por
+  operacion: decide con la de sesion (documentada en #92, cerrada) y #28 **ya** publica la de
+  operacion (``hit_rate_per_trade``, desde #92);
 - **no** consume la serie declarada por sesion que el artefacto de #28 **ya** publica
   (``arms.<brazo>.declared_series``, desde #94): este modulo **re-deriva** el pipeline de #28 con
   su API publica (``analyse(..., write=False)``) para re-medirla en vivo, y **solo lee** sus
@@ -195,11 +199,11 @@ DOMINANCE_RULE: Final[str] = (
     "cruza la fila principal, ningun escenario admisible la cruza"
 )
 
-#: Por que decide el Sharpe y no la tasa de acierto (A11 y #92).
+#: Por que decide el Sharpe y no la tasa de acierto (A11; #92, cerrada).
 SHARPE_HALF_RULE: Final[str] = (
     "la fila principal es un `o` (IC de la tasa de acierto **o** IC del Sharpe); como la "
-    "`hit_rate` del artefacto de #28 es por **sesion** y no por operacion (#92), la decision se "
-    "sostiene en la **mitad del Sharpe** y la tasa de acierto solo se **publica**"
+    "`hit_rate` del artefacto de #28 es por **sesion** y no por operacion (#92, cerrada), la "
+    "decision se sostiene en la **mitad del Sharpe** y la tasa de acierto solo se **publica**"
 )
 
 #: Regla por celda (A11), en una frase publicada.
@@ -257,8 +261,10 @@ REPORT_LIMITATIONS: Final[tuple[str, ...]] = (
     "la base declarada **no** es la base neta: el *slippage* supuesto no se puede cobrar sin `R` "
     "(#60) y sin medicion (#62), asi que este informe emite un veredicto por **dominancia** y "
     "**no** sustituye al de #88",
-    "la `hit_rate` del artefacto de #28 es por **sesion** y no por operacion (#92): decide la "
-    "mitad del Sharpe y la tasa de acierto se publica con esa salvedad",
+    "la tasa con la que se decide aqui es la `hit_rate` **por sesion** del artefacto de #28 "
+    "(documentada en #92, ya cerrada): #28 **ya** publica ademas `hit_rate_per_trade` (tasa por "
+    "**operacion**, desde #92), asi que la decision se sostiene en la **mitad del Sharpe** y la "
+    "tasa de acierto solo se **publica**",
     "el artefacto de #28 **ya** publica la serie declarada por sesion "
     "(`arms.<brazo>.declared_series`, desde #94), pero este informe sigue re-derivando el "
     "pipeline con su API publica (`write=False`) para re-medirla en vivo en vez de consumirla "
@@ -291,14 +297,6 @@ REPORT_DOES_NOT_DO: Final[tuple[dict[str, str], ...]] = (
             "se reemite"
         ),
     },
-    {
-        "id": "no_arregla_la_hit_rate_por_sesion",
-        "issue": "#92",
-        "statement": (
-            "no convierte la `hit_rate` por sesion del artefacto de #28 en una tasa por "
-            "operacion: solo se publica, y la decision va por el Sharpe"
-        ),
-    },
 )
 
 #: Seguimientos declarados.
@@ -317,11 +315,6 @@ FOLLOW_UPS: Final[tuple[dict[str, str], ...]] = (
         "issue": "#60",
         "topic": "decidir `R`",
         "why": "`R` decide `p*`; aqui se publica por escenarios y se usa el mas exigente",
-    },
-    {
-        "issue": "#92",
-        "topic": "tasa de acierto por operacion",
-        "why": "la `hit_rate` de #28 es por sesion, asi que la decision va por el Sharpe",
     },
 )
 
@@ -551,7 +544,8 @@ def _cell(
             **dict(hit),
             "p_star_fraction": format(p_star_fraction, "f"),
             "excludes_p_star_above": hit_excludes,
-            "role": "publicada, **no** decide: la `hit_rate` de #28 es por sesion (#92)",
+            "role": "publicada, **no** decide: la `hit_rate` de #28 es por sesion (#92, "
+            "cerrada); la decision va por la mitad del Sharpe",
         },
         "mean_return_pct": math.fsum(shifted) / len(shifted),
         "seed": {"hit_rate": seed_of("hit_rate"), "sharpe": seed_of("sharpe")},
