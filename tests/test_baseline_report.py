@@ -791,8 +791,30 @@ RAW_HYPERPARAMETERS: Final[tuple[str, ...]] = (
 #: El `sharpe_per_session` pre-#80 que el refresco tiene que abandonar (C6).
 PRE_80_SHARPE: Final[float] = -0.613089140059124
 
-#: Identidad de **configuracion** del experimento crudo (C4): el unico literal de identidad.
-RAW_RUN_SHA256: Final[str] = "408fead50095abb0c154dc73f2f44fb03222fe65bb907a5cc0fb7e01723899c9"
+
+#: Identidad de **configuracion** del experimento crudo (C4): la corrida se **localiza** en el
+#: registro y se comprueba su autoconsistencia, en vez de fijar su digest. La identidad de
+#: configuracion es un digest regenerable y se movio con `FEATURE_CODE_VERSION` (#105; la
+#: re-derivo #102), asi que un literal volveria a caducar.
+def _raw_run_directory() -> Path | None:
+    """La corrida **cruda** de #24 vigente: familia lineal, sin hiperparametros de calibracion."""
+    runs = REPO_ROOT / "runs"
+    if not runs.is_dir():
+        return None
+    for child in sorted(runs.iterdir()):
+        if not child.is_dir():
+            continue
+        document = cast(
+            "dict[str, object]",
+            json.loads((child / CONFIG_FILE).read_text(encoding="utf-8")),
+        )
+        config = cast("Mapping[str, object]", document["config"])
+        if config.get("variant_id") != VARIANT_ID:
+            continue
+        if set(cast("Mapping[str, object]", config["hyperparameters"])) != set(RAW_HYPERPARAMETERS):
+            continue
+        return child
+    return None
 
 
 @pytest.fixture(scope="session")
@@ -1030,16 +1052,17 @@ def test_c8_the_raw_report_is_self_consistent_and_deterministic(
 
 def test_c4_c5_c6_the_regenerated_raw_run_keeps_identity_and_moves_the_sharpe() -> None:
     """C4/C5/C6: el registro refrescado conserva `run_sha256`/`model_sha256` y mueve el Sharpe."""
-    directory = REPO_ROOT / "runs" / RAW_RUN_SHA256
-    if not directory.is_dir():
+    directory = _raw_run_directory()
+    if directory is None:
         pytest.skip("el registro del repositorio no esta en el arbol")
     config = cast("dict[str, object]", json.loads((directory / CONFIG_FILE).read_text("utf-8")))
-    assert config["run_sha256"] == RAW_RUN_SHA256
+    identity = directory.name
+    assert config["run_sha256"] == identity
     assert (
         hashlib.sha256(
             canonical_text(cast("Mapping[str, object]", config["config"])).encode("utf-8")
         ).hexdigest()
-        == RAW_RUN_SHA256
+        == identity
     )
 
     model = cast("dict[str, object]", json.loads((directory / MODEL_FILE).read_text("utf-8")))
