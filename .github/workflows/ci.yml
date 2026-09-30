@@ -97,8 +97,9 @@ jobs:
           set -o pipefail
           uv run pytest -q 2>&1 | tee pytest.log
       # Umbral de vacío: si la suite no ejecuta nada (todos los tests saltados por
-      # falta de `data/`), el job sería verde sin haber comprobado nada. El suelo
-      # se fija muy por debajo del recuento real del clon limpio.
+      # falta de `data/`), el job sería verde sin haber comprobado nada. En un clon
+      # limpio midió 1175 passed / 243 skipped (2026-09-30), así que el suelo de
+      # 1000 deja margen sin dejar pasar una suite vacía.
       - name: La suite no puede pasar en vacío
         run: |
           passed=$(grep -oE '[0-9]+ passed' pytest.log | grep -oE '[0-9]+' | head -1)
