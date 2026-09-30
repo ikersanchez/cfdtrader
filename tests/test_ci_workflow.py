@@ -141,10 +141,23 @@ def test_a5_every_job_runs_on_ubuntu_latest() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # A6 — todo job parte de un clon limpio
 # ─────────────────────────────────────────────────────────────────────────────
-def test_a6_every_job_checks_out_the_repository() -> None:
+def test_a6_every_job_checks_out_the_full_history() -> None:
+    """Las guardias historicas de la suite hacen `git diff <commit>..HEAD`.
+
+    `actions/checkout` clona con `fetch-depth: 1` por defecto: en un clon superficial
+    commits como `6aa582d`, `9cb5068` o `35d2592` no existen y las guardias fallan con
+    `fatal: ambiguous argument` (visto en la primera ejecucion real de #85).
+    """
     for name in JOBS:
-        uses = [str(step.get("uses", "")) for step in _steps(_job(name))]
-        assert any(u.startswith("actions/checkout@") for u in uses), name
+        checkouts = [
+            cast("dict[str, Any]", step.get("with", {}))
+            for step in _steps(_job(name))
+            if str(step.get("uses", "")).startswith("actions/checkout@")
+        ]
+        assert len(checkouts) == 1, f"el job {name!r} no hace checkout exactamente una vez"
+        assert checkouts[0].get("fetch-depth") == 0, (
+            f"el job {name!r} no trae el historial completo"
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -224,6 +237,11 @@ def test_a13_the_full_suite_runs_and_cannot_pass_vacuously() -> None:
     text = _run_text(job)
     assert "uv run pytest -q" in text
     assert "pipefail" in text, "sin pipefail, `| tee` enmascara el fallo de pytest"
+    assert 'tee "$RUNNER_TEMP/pytest.log"' in text, "el log tiene que ir fuera del arbol"
+    assert "tee pytest.log" not in text, (
+        "el log no puede escribirse dentro del arbol: lo ensucia y rompe las guardias "
+        "de arbol limpio (test_metrics.py::test_a35, test_gate_sweep.py::test_a15, ...)"
+    )
     floor = re.search(r"-lt\s+(\d+)", text)
     assert floor is not None, "el job de tests no declara el umbral de vacio"
     assert int(floor.group(1)) > 0, "un umbral de 0 no protege de nada"
