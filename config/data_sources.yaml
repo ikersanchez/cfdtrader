@@ -269,8 +269,12 @@ unavailable:
       No hay fuente pública gratuita del intradía histórico del SPX500:CFD ni de
       su bid/ask. Comprobado el 2026-09-17: Yahoo sirve el índice (^GSPC) y el
       futuro (ES=F) con yfinance, pero ninguno es el CFD; Stooq responde con un
-      challenge JavaScript, no CSV. Sustituirlo por ^GSPC o ES=F falsearía la
-      medición de coste y de tracking difference.
+      challenge JavaScript, no CSV. Ruta elegida (tarea #50): **proxy declarado**
+      — el etiquetado ordena las barreras con el intradía de ^GSPC a 5m y el
+      motor usa el open diario de ^GSPC como precio de entrada, declarados como
+      proxy del CFD (nunca una sustitución silenciosa ni una medición de su
+      tracking difference). La adquisición del dato real (cotización del propio
+      bróker) queda pendiente como acción del usuario en #107.
     checked_on: 2026-09-17
-    follow_up_issue: 50
+    follow_up_issue: 107
     documentation: "_docs/data_sources.md"

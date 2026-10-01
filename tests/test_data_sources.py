@@ -31,8 +31,13 @@ from cfdtrader.data.sources.http import CachedHttpClient
 from cfdtrader.data.sources.registry import cfd_substitutions, load_registry
 from cfdtrader.data.sources.stooq_adapter import StooqAdapter, stooq_symbols
 from cfdtrader.data.sources.yfinance_adapter import YFinanceAdapter
+from cfdtrader.models import labels
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+#: Documento normativo de fuentes (tarea #3) y su sección de la decisión (tarea #50).
+DOC_PATH = Path(__file__).resolve().parents[1] / "_docs" / "data_sources.md"
+ROUTE_SECTION_HEADER = "## Decisión de la fuente de intradía y bid/ask (tarea #50)"
 
 NOW = datetime(2024, 6, 10, 18, 0, tzinfo=UTC)
 
@@ -56,6 +61,17 @@ def _spec(series_id: str, dataset: str) -> SeriesSpec:
         if spec.series_id == series_id and spec.dataset == dataset:
             return spec
     raise AssertionError(f"{series_id!r} no está declarada en {dataset}")
+
+
+def _route_section() -> str:
+    """Texto de la sección de la decisión, de su cabecera al siguiente `## `."""
+    lines = DOC_PATH.read_text(encoding="utf-8").splitlines()
+    start = lines.index(ROUTE_SECTION_HEADER)
+    end = next(
+        (index for index in range(start + 1, len(lines)) if lines[index].startswith("## ")),
+        len(lines),
+    )
+    return "\n".join(lines[start:end])
 
 
 def _client(handler: Handler, *, cache_root: Path | None = None) -> CachedHttpClient:
@@ -191,11 +207,45 @@ def test_cfd_has_no_alias_to_index_or_future() -> None:
     assert cfd.status == "unavailable"
     assert cfd.bid_ask is False
     assert cfd.reason and cfd.checked_on == date(2026, 9, 17)
-    assert cfd.follow_up_issue == 50
+    assert cfd.follow_up_issue == 107
 
     # Si alguien introduce el alias, el guardián lo dice con nombre y apellido.
     broken = cfd_substitutions(registry, {"stooq": {**stooq_symbols(), "SPX500:CFD": "^spx"}})
     assert broken and "^spx" in broken[0]
+
+
+def test_the_route_decision_is_written_in_the_data_sources_doc() -> None:
+    """A1/A2: la ruta 3 (proxy declarado) y su pliego están escritos en el documento."""
+    section = _route_section()
+
+    for literal in (
+        "ruta 3",
+        "proxy declarado",
+        "#107",
+        "#10",
+        "#11",
+        "rodante",
+        "bid/ask",
+        "phase1_ready",
+        "timestamp",
+        "last",
+        "09:30",
+        "licencia",
+    ):
+        assert literal in section, f"falta {literal!r} en la sección de la decisión"
+
+
+def test_the_labelled_instrument_has_intraday_declared() -> None:
+    """A5: el instrumento etiquetado (y el no usado) están declarados en `market_intraday`."""
+    registry = load_registry()
+    intraday = {
+        spec.series_id: spec for spec in registry.series if spec.dataset == "market_intraday"
+    }
+
+    labelled = intraday[labels.SERIES_ID]
+    assert labelled.interval == labels.INTERVAL
+    assert labelled.history_window_limit_days is not None
+    assert labels.INTRADAY_UNUSED_SERIES in intraday
 
 
 def test_stooq_has_no_symbol_for_the_cfd() -> None:

@@ -128,7 +128,9 @@ HTTP 400   # falta api_key: la API responde, exige clave
 `SPX500:CFD` ni de su `bid`/`ask`.** No se sustituye por `^GSPC`, `ES=F` ni
 `SPY`: son instrumentos distintos (`_docs/plan.md` §3.1) y hacerlo falsearía la
 medición del diferencial, la financiación y el *tracking difference*, que es
-justo lo que la Fase 0 tiene que medir. Seguimiento en **#50**.
+justo lo que la Fase 0 tiene que medir. La adquisición del dato real se sigue en
+**#107** y la ruta elegida se declara en la sección «Decisión de la fuente de
+intradía y bid/ask (tarea #50)».
 
 Comprobado el **2026-09-17** con estos comandos y estos resultados:
 
@@ -156,6 +158,56 @@ tarea #8, no contra una fuente pública.
 - Tras la ejecución real **no hay ninguna fila con `series_id = 'SPX500:CFD'`** en
   `raw.market_daily` ni en `raw.market_intraday`, y ninguna fila de `^GSPC`,
   `ES=F` o `SPY` se etiqueta como CFD.
+
+## Decisión de la fuente de intradía y bid/ask (tarea #50)
+
+**Ruta elegida: ruta 3 — proxy declarado.** El proyecto **no** sustituye en
+silencio el `SPX500:CFD`: lo declara. El tramo intradía se ordena con el proxy
+`^GSPC` a 5 min de `raw.market_intraday` (ventana **rodante** del proveedor, ~60
+días) y el precio de entrada usa el `open` diario de `^GSPC` como **proxy
+declarado** del CFD. La procedencia viaja en los datos y en los informes
+(`models/labels.py::ENTRY_PRICE_PROXY_OF`, `analysis/backtest_report.py::PRICE_PROXY_OF`
+y `analysis/pipeline_report.py::renamed_series`), nunca como una sustitución
+muda. Es el estado de facto del código; aquí queda **decidido y escrito**.
+
+Esta decisión **no** cambia el estado de la Fase 1: `phase1_ready` sigue `false`
+con el bloqueo `cfd_source_missing`, porque el CFD real sigue sin fuente.
+
+### Límites del proxy
+
+- Ventana **rodante de ~60 días** para el 5 min (~7 días para el 1 min): **no hay
+  intradía de años**.
+- **Sin bid/ask**: el spread real del CFD sigue sin medirse (el registro declara
+  `bid_ask: false`).
+- **No es la cotización del CFD**: no sirve para medir el *tracking difference*
+  ni el coste real (§3.1).
+- **No desbloquea la Fase 1**: `phase1_ready` sigue `false` con el bloqueo
+  `cfd_source_missing`.
+
+### Pliego de adquisición (acción del usuario, #107)
+
+Las rutas **1 (contratar al bróker)** y **2 (exportar del bróker)** siguen
+abiertas: la adquisición del dato real es **acción del usuario** y se sigue en
+**#107**. Lo que se compraría es **fidelidad de ejecución**, no la economía del
+tramo `open→close` (que solo lleva el diferencial declarado).
+
+| Campo | Requisito |
+|---|---|
+| Instrumento | `SPX500:CFD` **cotizado por el propio bróker** (no el índice, ni el futuro, ni un ETF) |
+| Campos | `timestamp`, `bid`, `ask`, `last` |
+| Granularidad | 1 min (5 min aceptable) |
+| Cobertura | ≥ 5 años |
+| Zona horaria | UTC, con la sesión regular 09:30–16:00 ET |
+| Licencia | licencia y retención por escrito |
+
+**Regla de oro:** solo cuenta la cotización del propio bróker; ningún proxy
+externo se registra como cotización del CFD.
+
+### Seguimientos
+
+**#10 y #11 están cerradas** (y **#52** también): no hay trabajo abierto ahí. El
+único seguimiento abierto de la adquisición es **#107**. El proxy declarado **no**
+mide el *tracking difference* ni el spread real del CFD.
 
 ## `open` diario de `^GSPC` — limitación conocida y decisión de la fuente de apertura
 
