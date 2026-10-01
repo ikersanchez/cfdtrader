@@ -110,7 +110,7 @@ PUBLIC_FUNCTIONS = (
     "sortino_ratio",
 )
 
-GOLDEN_PNLS = (1.0, -0.5, 0.8, -0.3, 0.4, -0.2)
+GOLDEN_PNLS = (0.01, -0.005, 0.008, -0.003, 0.004, -0.002)
 GOLDEN_DAYS = (5, 6, 7, 8, 9, 12)
 GOLDEN_NO_TRADE_DAY = 13
 GOLDEN_SKIPPED_DAY = 14
@@ -130,7 +130,7 @@ def _outcome(
     session: date,
     *,
     status: str = "traded",
-    pnl_net: float | None = 1.0,
+    pnl_net: float | None = 0.01,
     pnl_declared: float | None = 5.0,
     probability: float | None = None,
     cost: CostBreakdown | None = None,
@@ -345,7 +345,7 @@ def _run(
 def _big_outcomes() -> tuple[SessionOutcome, ...]:
     """La serie de riesgo de 3.192 sesiones que piden A29 y A33 (se construye una vez)."""
     days = _sessions(BIG_SESSIONS)
-    return tuple(_outcome(day, pnl_net=((index % 7) - 3) * 0.1) for index, day in enumerate(days))
+    return tuple(_outcome(day, pnl_net=((index % 7) - 3) * 0.001) for index, day in enumerate(days))
 
 
 def test_a1_catalog_is_published_without_misleading_names() -> None:
@@ -395,11 +395,11 @@ def test_a1_catalog_is_published_without_misleading_names() -> None:
 
 def test_a2_drawdown_duration_counts_risk_sessions() -> None:
     outcomes = (
-        _outcome(date(2026, 1, 5), pnl_net=-10.0),
+        _outcome(date(2026, 1, 5), pnl_net=-0.1),
         _outcome(date(2026, 1, 6), status="skipped", pnl_net=None),
         _outcome(date(2026, 1, 7), status="skipped", pnl_net=None),
-        _outcome(date(2026, 1, 8), pnl_net=-10.0),
-        _outcome(date(2026, 1, 9), pnl_net=30.0),
+        _outcome(date(2026, 1, 8), pnl_net=-0.1),
+        _outcome(date(2026, 1, 9), pnl_net=0.3),
     )
     metrics = calculate_metrics(outcomes, n_bootstrap=50)
 
@@ -412,10 +412,10 @@ def test_a2_drawdown_duration_counts_risk_sessions() -> None:
 
 def test_a3_count_and_length_identities() -> None:
     outcomes = (
-        _outcome(date(2026, 1, 5), pnl_net=2.0),
+        _outcome(date(2026, 1, 5), pnl_net=0.02),
         _outcome(date(2026, 1, 6), status="no_trade", pnl_net=None),
         _outcome(date(2026, 1, 7), status="skipped", pnl_net=None),
-        _outcome(date(2026, 1, 8), pnl_net=-1.0),
+        _outcome(date(2026, 1, 8), pnl_net=-0.01),
     )
     metrics = calculate_metrics(outcomes, n_bootstrap=50)
 
@@ -435,7 +435,7 @@ def test_a4_units_convention_is_declared_and_checked() -> None:
     assert "positive loss magnitude" in docstring
     assert "dimensionless" in docstring
 
-    metrics = calculate_metrics(_series(1.0, -2.0), n_bootstrap=50)
+    metrics = calculate_metrics(_series(0.01, -0.02), n_bootstrap=50)
 
     assert metrics.returns == (0.01, -0.02)
     assert metrics.ev_per_trade_pct == pytest.approx(-0.5)
@@ -448,7 +448,7 @@ def test_a4_units_convention_is_declared_and_checked() -> None:
 def test_a5_alpha_is_jensens_alpha() -> None:
     benchmark = (0.01, -0.005, 0.02)
     metrics = calculate_metrics(
-        _series(2.0, -1.0, 4.0), n_bootstrap=100, benchmark_returns=benchmark
+        _series(0.02, -0.01, 0.04), n_bootstrap=100, benchmark_returns=benchmark
     )
 
     assert metrics.beta == 2.0
@@ -458,7 +458,7 @@ def test_a5_alpha_is_jensens_alpha() -> None:
 
 def test_a6_zero_variance_benchmark_leaves_beta_and_alpha_null() -> None:
     metrics = calculate_metrics(
-        _series(1.0, 1.0, 1.0), n_bootstrap=100, benchmark_returns=(0.005, 0.005, 0.005)
+        _series(0.01, 0.01, 0.01), n_bootstrap=100, benchmark_returns=(0.005, 0.005, 0.005)
     )
 
     assert metrics.beta is None
@@ -470,9 +470,9 @@ def test_a6_zero_variance_benchmark_leaves_beta_and_alpha_null() -> None:
 def test_a7_mean_excess_return_keeps_the_mean_difference() -> None:
     benchmark = (0.01, -0.005, 0.02)
     with_benchmark = calculate_metrics(
-        _series(2.0, -1.0, 4.0), n_bootstrap=100, benchmark_returns=benchmark
+        _series(0.02, -0.01, 0.04), n_bootstrap=100, benchmark_returns=benchmark
     )
-    without_benchmark = calculate_metrics(_series(2.0, -1.0, 4.0), n_bootstrap=100)
+    without_benchmark = calculate_metrics(_series(0.02, -0.01, 0.04), n_bootstrap=100)
 
     assert with_benchmark.mean_excess_return_pct == pytest.approx(0.8333333333333334)
     assert without_benchmark.mean_excess_return_pct is None
@@ -480,7 +480,7 @@ def test_a7_mean_excess_return_keeps_the_mean_difference() -> None:
 
 
 def test_a8_no_benchmark_means_no_zeros() -> None:
-    metrics = calculate_metrics(_series(1.0, -1.0), n_bootstrap=50)
+    metrics = calculate_metrics(_series(0.01, -0.01), n_bootstrap=50)
 
     assert metrics.benchmark_return_pct is None
     assert metrics.mean_excess_return_pct is None
@@ -491,9 +491,9 @@ def test_a8_no_benchmark_means_no_zeros() -> None:
 
 def test_a9_malformed_benchmark_is_a_typed_error() -> None:
     with pytest.raises(MetricsInputError, match="debe tener la misma longitud"):
-        calculate_metrics(_series(1.0, -1.0), n_bootstrap=50, benchmark_returns=(0.01,))
+        calculate_metrics(_series(0.01, -0.01), n_bootstrap=50, benchmark_returns=(0.01,))
     with pytest.raises(MetricsInputError, match="finitos"):
-        calculate_metrics(_series(1.0, -1.0), n_bootstrap=50, benchmark_returns=(0.01, math.nan))
+        calculate_metrics(_series(0.01, -0.01), n_bootstrap=50, benchmark_returns=(0.01, math.nan))
 
     docstring = _flatten(metrics_module.__doc__ or "")
     assert "already aligned session by session" in docstring
@@ -507,8 +507,8 @@ def test_a10_profit_factor_is_never_infinite() -> None:
     assert profit_factor((0.01, 0.02)) is None
     assert profit_factor((0.01, -0.02)) == pytest.approx(0.5)
 
-    gains_only = calculate_metrics(_series(1.0, 2.0), n_bootstrap=50)
-    balanced = calculate_metrics(_series(1.0, -2.0), n_bootstrap=50)
+    gains_only = calculate_metrics(_series(0.01, 0.02), n_bootstrap=50)
+    balanced = calculate_metrics(_series(0.01, -0.02), n_bootstrap=50)
     no_trades = calculate_metrics(
         (_outcome(date(2026, 1, 5), status="no_trade", pnl_net=None),), n_bootstrap=50
     )
@@ -545,8 +545,8 @@ def test_a11_empty_calibration_bins_publish_none() -> None:
 
     declared = calculate_metrics(
         (
-            _outcome(date(2026, 1, 5), pnl_net=2.0, probability=0.6),
-            _outcome(date(2026, 1, 6), pnl_net=-1.0, probability=0.4),
+            _outcome(date(2026, 1, 5), pnl_net=0.02, probability=0.6),
+            _outcome(date(2026, 1, 6), pnl_net=-0.01, probability=0.4),
         ),
         n_bootstrap=50,
         n_calibration_bins=2,
@@ -561,10 +561,10 @@ def test_a11_empty_calibration_bins_publish_none() -> None:
 
 def test_a12_no_published_float_is_inf_or_nan() -> None:
     scenarios = (
-        calculate_metrics(_series(1.0, 2.0), n_bootstrap=50),
-        calculate_metrics((_outcome(date(2026, 1, 5), pnl_net=2.0),), n_bootstrap=50),
+        calculate_metrics(_series(0.01, 0.02), n_bootstrap=50),
+        calculate_metrics((_outcome(date(2026, 1, 5), pnl_net=0.02),), n_bootstrap=50),
         calculate_metrics(
-            (_outcome(date(2026, 1, 5), pnl_net=2.0, probability=0.1),), n_bootstrap=50
+            (_outcome(date(2026, 1, 5), pnl_net=0.02, probability=0.1),), n_bootstrap=50
         ),
         calculate_metrics(
             (
@@ -573,9 +573,9 @@ def test_a12_no_published_float_is_inf_or_nan() -> None:
             ),
             n_bootstrap=50,
         ),
-        calculate_metrics(_series(1.0, 1.0, 1.0), n_bootstrap=50),
+        calculate_metrics(_series(0.01, 0.01, 0.01), n_bootstrap=50),
         calculate_metrics(
-            _series(2.0, -1.0, 4.0), n_bootstrap=50, benchmark_returns=(0.01, -0.005, 0.02)
+            _series(0.02, -0.01, 0.04), n_bootstrap=50, benchmark_returns=(0.01, -0.005, 0.02)
         ),
     )
 
@@ -645,9 +645,9 @@ def test_a14_inadmissible_inputs_raise_metrics_input_error() -> None:
     with pytest.raises(MetricsInputError, match="n_bootstrap"):
         bootstrap_confidence_interval((0.01,), lambda sample: sum(sample), n_bootstrap=0)
     with pytest.raises(MetricsInputError, match="n_bootstrap"):
-        calculate_metrics(_series(1.0), n_bootstrap=0)
+        calculate_metrics(_series(0.01), n_bootstrap=0)
     with pytest.raises(MetricsInputError, match="n_calibration_bins"):
-        calculate_metrics(_series(1.0), n_bootstrap=50, n_calibration_bins=0)
+        calculate_metrics(_series(0.01), n_bootstrap=50, n_calibration_bins=0)
     with pytest.raises(MetricsInputError, match="perder"):
         sharpe_ratio((-1.0, 0.01))
 
@@ -671,8 +671,8 @@ def test_a14_inadmissible_inputs_raise_metrics_input_error() -> None:
     assert degenerate.lower <= degenerate.upper
 
     mixed = (
-        _outcome(date(2026, 1, 5), pnl_net=1.0, probability=0.6),
-        _outcome(date(2026, 1, 6), pnl_net=-1.0),
+        _outcome(date(2026, 1, 5), pnl_net=0.01, probability=0.6),
+        _outcome(date(2026, 1, 6), pnl_net=-0.01),
     )
     with pytest.raises(MetricsInputError, match="declarar probability"):
         calculate_metrics(mixed, n_bootstrap=50)
@@ -680,29 +680,29 @@ def test_a14_inadmissible_inputs_raise_metrics_input_error() -> None:
     # El borde de `seed` (A14): todo valor que el contrato admite, `[0, MAX_SEED)`, da un
     # intervalo valido; el extremo superior ya no escapa como `ValueError` sin tipar.
     top_seed = metrics_module.MAX_SEED - 1
-    top = calculate_metrics(_series(1.0, -0.5, 0.8), n_bootstrap=50, seed=top_seed)
+    top = calculate_metrics(_series(0.01, -0.005, 0.008), n_bootstrap=50, seed=top_seed)
     assert top.sharpe_ci.seed == top_seed
     assert top.sortino_ci.seed == 0
     assert top.sharpe_ci.lower <= top.sharpe_ci.upper
     assert top.sortino_ci.lower <= top.sortino_ci.upper
 
-    initial = calculate_metrics(_series(1.0, -0.5, 0.8), n_bootstrap=50, seed=0)
+    initial = calculate_metrics(_series(0.01, -0.005, 0.008), n_bootstrap=50, seed=0)
     assert initial.sharpe_ci.seed == 0
     assert initial.sortino_ci.seed == 1
 
     for inadmissible_seed in (-1, metrics_module.MAX_SEED, metrics_module.MAX_SEED + 1):
         with pytest.raises(MetricsInputError, match="seed"):
-            calculate_metrics(_series(1.0, -0.5, 0.8), n_bootstrap=50, seed=inadmissible_seed)
+            calculate_metrics(_series(0.01, -0.005, 0.008), n_bootstrap=50, seed=inadmissible_seed)
 
     # El minimo admisible de `n_bootstrap` funciona; el barrido de `confidence_level`
     # recorre los extremos abiertos y deja tipados 0, 1, fuera de rango, `nan` e `inf`.
-    minimum = calculate_metrics(_series(1.0, -0.5, 0.8), n_bootstrap=1, n_calibration_bins=1)
+    minimum = calculate_metrics(_series(0.01, -0.005, 0.008), n_bootstrap=1, n_calibration_bins=1)
     assert minimum.sharpe_ci.n_bootstrap == 1
     assert minimum.sortino_ci.n_bootstrap == 1
 
     for edge in (1e-9, 0.5, 1.0 - 1e-9):
         edge_metrics = calculate_metrics(
-            _series(1.0, -0.5, 0.8), n_bootstrap=50, confidence_level=edge
+            _series(0.01, -0.005, 0.008), n_bootstrap=50, confidence_level=edge
         )
         assert edge_metrics.sharpe_ci.confidence_level == edge
         assert edge_metrics.sharpe_ci.lower <= edge_metrics.sharpe_ci.upper
@@ -710,7 +710,9 @@ def test_a14_inadmissible_inputs_raise_metrics_input_error() -> None:
     for inadmissible_confidence in (0.0, 1.0, -0.1, math.nan, math.inf):
         with pytest.raises(MetricsInputError, match="confidence_level"):
             calculate_metrics(
-                _series(1.0, -0.5, 0.8), n_bootstrap=50, confidence_level=inadmissible_confidence
+                _series(0.01, -0.005, 0.008),
+                n_bootstrap=50,
+                confidence_level=inadmissible_confidence,
             )
 
 
@@ -760,7 +762,7 @@ def test_a16_all_no_trade() -> None:
 
 def test_a17_no_trade_is_not_a_trade() -> None:
     outcomes = (
-        _outcome(date(2026, 1, 5), pnl_net=2.0),
+        _outcome(date(2026, 1, 5), pnl_net=0.02),
         _outcome(date(2026, 1, 6), status="no_trade", pnl_net=None),
     )
     metrics = calculate_metrics(outcomes, n_bootstrap=50)
@@ -773,8 +775,8 @@ def test_a17_no_trade_is_not_a_trade() -> None:
 
 
 def test_a18_constant_returns() -> None:
-    up = calculate_metrics(_series(1.0, 1.0, 1.0), n_bootstrap=100)
-    down = calculate_metrics(_series(-1.0, -1.0, -1.0), n_bootstrap=100)
+    up = calculate_metrics(_series(0.01, 0.01, 0.01), n_bootstrap=100)
+    down = calculate_metrics(_series(-0.01, -0.01, -0.01), n_bootstrap=100)
 
     assert up.sharpe == 0.0
     assert up.sortino == 0.0
@@ -790,7 +792,7 @@ def test_a18_constant_returns() -> None:
 
 
 def test_a19_single_trade() -> None:
-    metrics = calculate_metrics((_outcome(date(2026, 1, 5), pnl_net=2.0),), n_bootstrap=100)
+    metrics = calculate_metrics((_outcome(date(2026, 1, 5), pnl_net=0.02),), n_bootstrap=100)
 
     assert metrics.n_trades == 1
     assert metrics.hit_rate == 1.0
@@ -802,10 +804,12 @@ def test_a19_single_trade() -> None:
 
 
 def test_a20_turnover_needs_a_span() -> None:
-    one_session = calculate_metrics((_outcome(date(2026, 1, 5), pnl_net=1.0),), n_bootstrap=50)
-    short_span = calculate_metrics(_series(1.0, 1.0), n_bootstrap=50)
+    one_session = calculate_metrics((_outcome(date(2026, 1, 5), pnl_net=0.01),), n_bootstrap=50)
+    short_span = calculate_metrics(_series(0.01, 0.01), n_bootstrap=50)
     wide_days = (date(2026, 1, 5), date(2026, 1, 20), date(2026, 2, 4))
-    wide = calculate_metrics(tuple(_outcome(day, pnl_net=1.0) for day in wide_days), n_bootstrap=50)
+    wide = calculate_metrics(
+        tuple(_outcome(day, pnl_net=0.01) for day in wide_days), n_bootstrap=50
+    )
 
     assert one_session.trades_per_year is None
     assert one_session.session_span_days == 0
@@ -818,7 +822,7 @@ def test_a20_turnover_needs_a_span() -> None:
 
 
 def test_a21_unknown_status_is_an_error() -> None:
-    weird = _outcome(date(2026, 1, 5), status="weird", pnl_net=1.0)
+    weird = _outcome(date(2026, 1, 5), status="weird", pnl_net=0.01)
     with pytest.raises(MetricsInputError) as error:
         calculate_metrics((weird,), n_bootstrap=50)
 
@@ -901,7 +905,7 @@ def test_a25_total_cost_is_exact_decimal() -> None:
     assert cost.c_total_pct == Decimal("0.0024")
 
     outcomes = tuple(
-        _outcome(date(2026, 1, day), pnl_net=1.0, cost=_short_round_trip_cost())
+        _outcome(date(2026, 1, day), pnl_net=0.01, cost=_short_round_trip_cost())
         for day in (5, 6, 7)
     )
     metrics = calculate_metrics(outcomes, n_bootstrap=50)
@@ -910,9 +914,9 @@ def test_a25_total_cost_is_exact_decimal() -> None:
     assert metrics.total_cost_pct == pytest.approx(0.0072)
 
     partial = (
-        _outcome(date(2026, 1, 5), pnl_net=1.0, cost=_short_round_trip_cost()),
-        _outcome(date(2026, 1, 6), pnl_net=1.0, cost=None),
-        _outcome(date(2026, 1, 7), pnl_net=1.0, cost=_short_round_trip_cost()),
+        _outcome(date(2026, 1, 5), pnl_net=0.01, cost=_short_round_trip_cost()),
+        _outcome(date(2026, 1, 6), pnl_net=0.01, cost=None),
+        _outcome(date(2026, 1, 7), pnl_net=0.01, cost=_short_round_trip_cost()),
     )
     metrics_partial = calculate_metrics(partial, n_bootstrap=50)
     assert metrics_partial.total_cost_usd is None
@@ -926,7 +930,7 @@ def test_a25_total_cost_is_exact_decimal() -> None:
     )
     assert unmeasured.c_total_pct is None
     metrics_unmeasured = calculate_metrics(
-        (_outcome(date(2026, 1, 5), pnl_net=1.0, cost=unmeasured),), n_bootstrap=50
+        (_outcome(date(2026, 1, 5), pnl_net=0.01, cost=unmeasured),), n_bootstrap=50
     )
     assert metrics_unmeasured.total_cost_usd is None
     assert metrics_unmeasured.total_cost_pct is None
@@ -1022,7 +1026,7 @@ _GOLDEN_PROBE = textwrap.dedent(
     from cfdtrader.backtest.engine import Decision, Direction, SessionOutcome
     from cfdtrader.backtest.metrics import calculate_metrics
 
-    GOLDEN_PNLS = (1.0, -0.5, 0.8, -0.3, 0.4, -0.2)
+    GOLDEN_PNLS = (0.01, -0.005, 0.008, -0.003, 0.004, -0.002)
     GOLDEN_DAYS = (5, 6, 7, 8, 9, 12)
 
 

@@ -8,15 +8,12 @@ cost is therefore rejected instead of being presented as a cost-free performance
 Returns passed to the standalone metric functions are decimal returns (``0.01`` means one
 percent).  The engine stores **fractions of notional** (``gross``, ``pnl_declared`` and
 ``pnl_net``; the ``Unidades`` section of ``backtest/engine.py`` is the single declaration),
-so :func:`calculate_metrics` performs that conversion once, at this boundary.
+and :func:`_net_return` passes that net fraction through untouched: the fraction the engine
+publishes *is* the decimal return this module consumes.
 
-**Declared latent defect (#101):** :func:`_net_return` still divides the engine's net
-fraction by ``100``, as if the engine stored percentage points.  The conversion is kept
-here untouched — the frozen goldens of this module pin the current arithmetic — and is
-reconciled in #101; no other place in this module repeats it.  Units are declared and
-tested (A4): ``returns`` and ``equity`` are decimals, every ``*_pct`` field is in
-percentage points, ``max_drawdown_pct`` is a positive loss magnitude, and Sharpe, Sortino,
-beta, payoff and profit factor are dimensionless.
+Units are declared and tested (A4): ``returns`` and ``equity`` are decimals, every ``*_pct``
+field is in percentage points, ``max_drawdown_pct`` is a positive loss magnitude, and Sharpe,
+Sortino, beta, payoff and profit factor are dimensionless.
 
 Contracts this module fixes, because #15 found them ambiguous:
 
@@ -651,7 +648,7 @@ def _net_return(outcome: SessionOutcome) -> float:
             f"{outcome.session.isoformat()}: pnl_net es null; no se puede publicar "
             "una métrica neta usando pnl_declared (null != 0)"
         )
-    return value / 100.0
+    return value
 
 
 def _risk_returns(outcomes: Sequence[SessionOutcome]) -> tuple[float, ...]:
