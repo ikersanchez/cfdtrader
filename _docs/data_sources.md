@@ -157,7 +157,7 @@ tarea #8, no contra una fuente pública.
   `raw.market_daily` ni en `raw.market_intraday`, y ninguna fila de `^GSPC`,
   `ES=F` o `SPY` se etiqueta como CFD.
 
-## Limitación conocida del `open` diario de `^GSPC` (seguimiento en #52)
+## `open` diario de `^GSPC` — limitación conocida y decisión de la fuente de apertura
 
 En parte del histórico, el `open` diario que sirve Yahoo para el **índice** es el
 **cierre de la sesión anterior repetido**, no la apertura real:
@@ -182,8 +182,28 @@ Medido (2026-09-17): con la muestra completa el estudio del drift daría
 2014, 3.192 sesiones) da `intraday +2,00 pb` (p = 0,19, **no significativo**)
 frente a `overnight +2,91 pb` (p = 0,0008). **La conclusión se invierte según se
 limpie o no**, así que el estudio de la tarea #6 lo detecta, lo declara y decide
-sobre la muestra limpia. La decisión de qué fuente usar para la apertura es la
-**#52**.
+sobre la muestra limpia.
+
+### Decisión (tarea #52, 2026-10-01)
+
+Se **mantiene `^GSPC`** como fuente de apertura del estudio y el `open` repetido
+queda como **límite asumido y declarado**, no corregido: el veredicto de #6 ya se
+calcula sobre la era limpia. La decisión se midió comparando las tres fuentes
+sobre la **misma ventana** (corte limpio `2014-01-01`, artefacto
+`drift_open_source_2026-10-01.json`):
+
+| fuente | `open` repetido (muestra) | sesiones (ventana) | `open` repetido (ventana) | intradía pb (p) | nocturno pb (p) | veredicto / puerta |
+|---|---|---|---|---|---|---|
+| `^GSPC` | 10,11 % | 3.192 | 0,09 % | +2,00 (0,1928) | +2,91 (0,0008) | `overnight` / `fail` |
+| `SPY` | 0,90 % | 3.164 | 0,97 % | +1,75 (0,2289) | +3,03 (0,0151) | `overnight` / `fail` |
+| `ES=F` | 10,82 % | 3.039 | 4,91 % | +5,67 (0,0035) | −1,02 (0,0740) | `intraday` / `pass` |
+
+`SPY`, la apertura de subasta real del mismo mercado y horario (09:30–16:00 ET),
+**confirma** `overnight`/`fail`. `ES=F` **no es sustituto**: es el futuro, de
+sesión casi continua, así que su `open→close` no es la sesión regular del
+instrumento y da otro veredicto; además arrastra un 4,91 % de `open` repetido en
+la ventana. La comparación completa, con su digest y la forma del artefacto, vive
+en `drift_open_source_2026-10-01.json`.
 
 ## Cómo reproducir la ingesta
 
