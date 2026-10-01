@@ -149,7 +149,7 @@ tarea #8, no contra una fuente pública.
 ### Cómo se declara esta ausencia en el código
 
 - `config/data_sources.yaml` → bloque `unavailable:` con `status: unavailable`,
-  `bid_ask: false`, `reason`, `checked_on` y `follow_up_issue: 50`.
+  `bid_ask: false`, `reason`, `checked_on` y `follow_up_issue: 107` (la adquisición del dato real se sigue en #107).
 - El informe de cobertura emite `phase1_ready: false` con el bloqueo
   `cfd_source_missing`; con `--require-ready` el proceso sale con **2**.
 - El test `test_cfd_has_no_alias_to_index_or_future` falla si alguien introduce
