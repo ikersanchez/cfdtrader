@@ -2,7 +2,7 @@
 
 | Campo | Valor |
 |---|---|
-| **Versión** | **2.5** |
+| **Versión** | **2.6** |
 | **Fecha** | 2026-10-01 |
 | **Estado** | Diseño — pendiente de ejecutar Fase 0 |
 | **Instrumento** | **SPX500:CFD**, cotizando en el horario de la sesión regular estadounidense; las horas se calculan en `America/New_York` y se presentan en `Europe/Madrid` |
@@ -1124,8 +1124,17 @@ El registro debe distinguir con claridad tres situaciones **que no son lo mismo*
 | **Potencia** (§11.5) | Un edge del 52 % exige ~**4.900** operaciones; el S1 tiene **150** ⇒ «**no concluyente**» |
 
 - **La Fase 2 no supera su puerta de salida** (tarea 29 / §11.6). La decisión registrada es **`reframe`**.
-- **La Fase 3 (`#30`–`#38`) queda bloqueada** hasta que la puerta de salida se declare superada: no se autoriza su arranque.
+- **La Fase 3 (`#30`–`#38`) del carril B queda bloqueada** hasta que la puerta de salida se declare superada: no se autoriza su arranque.
 - El `reframe` arrastra las decisiones todavía abiertas **#59** (bróker definitivo) y **#60** (`R`/umbrales), registradas como abiertas en `tech_stack.md` §11 bis.
+
+### 19.7 Reencuadre del objetivo: dos carriles (2026-10-01)
+
+✅ **Decisión del propietario (2026-10-01): el proyecto es un asistente de apoyo a la decisión y se reencuadra en dos carriles.** Desarrolla la decisión `reframe` ya registrada en **§19.6** y acota al **carril B** toda afirmación de bloqueo de fase, para que ambas coincidan.
+
+- **carril A — asistente de decisión.** Uso personal, **ejecución manual**, tamaño mínimo; más tarde con *overlay* de noticias/LLM. Se puede **construir y usar sin superar** la puerta §11.6.
+- **carril B — estrategia validada.** Afirmación de *edge*, capital serio y producción: **sigue gated** por §11.6.
+- **Regla de fases.** La regla de `_docs/tasks.md` «no se empieza una fase sin haber pasado la puerta de salida de la anterior» pasa a aplicar **solo al carril B**. El **carril A** puede avanzar: el camino diario, la **Fase 3** como *overlay* de noticias y la Fase 4 de operación.
+- **Valla de honestidad.** Toda salida del asistente declara explícitamente que **no hay edge demostrado** (la Fase 2 no supera su puerta: criterio principal `not_evaluable`, `no_cell_crosses = true`, agregado `fail` y `phase2_ready = false`; decisión `reframe`) y que es **apoyo a la decisión con ejecución manual**, no una estrategia validada.
 
 ---
 
@@ -1235,3 +1244,4 @@ El registro debe distinguir con claridad tres situaciones **que no son lo mismo*
 | 2026-09-18 | **2.3** | 🚫 **RETIRADA DE LA AUTOMATIZACIÓN Y DE LAS NOTIFICACIONES.** **§4.1:** la fila «Alarma de cierre» pasa a «Comprobación previa al cierre», **humana y sin alarma del sistema**. **§12 regla 16 reescrita:** se mantienen la obligación de cierre a las 16:00 ET, la orden *bracket* al entrar y el registro del incumplimiento; se elimina la alarma de las 15:45 y se declara explícitamente que no hay ningún automatismo que respalde el cierre. Regla 14: «se notifican» → «se presentan». **§4.1, §8.3 y §13:** las enumeraciones de componentes sensibles al DST dejan de citar el scheduler y las alarmas. **§13:** nota de cabecera de que **no hay scheduler**, y la tabla pasa a describir orden y anclaje temporal, no disparos; fila de las 15:45 reformulada. **§13.1b:** nuevo párrafo de que el sistema no recuerda nada por ningún canal. **§15:** fuera `systemd timer` y «Alertas: httpx contra la Bot API de Telegram»; entran ejecución manual a demanda e informe en consola/Markdown. **§15 árbol:** `delivery/telegram.py` → `delivery/report.py` y `run_daily.py` como *entrypoint* **manual**. **§19.2:** columna «Se notifica como» → «Se presenta como». **§21 pregunta 14 resuelta** (disponibilidad por diseño). **§3.3:** «mecanismo obligatorio» → «obligación operativa que asumes tú manualmente» | **Decisión del usuario (2026-09-18): ejecución manual a demanda, sin Telegram y sin automatización.** No hay nada que notificar a distancia porque el usuario está delante cuando el sistema se ejecuta |
 | 2026-09-27 | **2.4** | ✅ **Las dos decisiones del propietario del 2026-09-18 dejan de declararse abiertas.** **§4.1:** el aviso del calendario pasa a declarar el **precio de entrada decidido** (el `open` de la subasta de apertura, 09:30 ET), con procedencia del propietario, enlaces **#64**/**#61** y evidencia medida (**59/59** sesiones, `max_abs_diff_bp` **0,0**). **§3.3:** entrada nueva del *slippage* como **supuesto declarado** (`assumed`, `is_measurement: false`, **20 % de `R`**, pendiente de **#60**, medición real en **#62**, bp ilustrativo). **§21 pregunta 7 resuelta** en el formato de la 14. Todo verificado en **#64** (commits `7a35db0` y `ed5981a`) | Cerrar el registro que mandatan `plan.md` §17 y la regla de `tech_stack.md` §11 bis: una decisión del propietario se anota en el documento que la declaraba abierta, con procedencia por commit y evidencia medida, sin fijar digests de artefactos regenerables |
 | 2026-10-01 | **2.5** | 🛑 **La Fase 2 no supera su puerta de salida (tarea 29 / §11.6).** Nuevo **§19.6** con la decisión del propietario (**`reframe`**) y la evidencia medida: Fase 0 en **`fail`** con el drift en el tramo **nocturno** (intradía limpio **no significativo**), Fase 2 con criterio principal **`not_evaluable`**, **`no_cell_crosses = true`**, agregado **`fail`** y **`phase2_ready = false`**; potencia de §11.5 (**~4.900** operaciones frente a las **150** del S1) ⇒ **no concluyente**. La **Fase 3 (`#30`–`#38`) queda bloqueada**. Cabecera a 2.5 | No se empieza una fase sin superar la puerta de salida de la anterior: registrar la decisión del propietario del 2026-10-01, sin fijar digests de artefactos regenerables |
+| 2026-10-01 | **2.6** | 🧭 **Reencuadre del objetivo en dos carriles.** Nuevo **§19.7**: el **carril A** (asistente de decisión, ejecución manual) puede construirse y usarse **sin superar §11.6**; el **carril B** (estrategia validada) **sigue gated** por §11.6. La regla de fases de `_docs/tasks.md` y la viñeta de bloqueo de §19.6 quedan **acotadas al carril B**, y se registra la **valla de honestidad** (toda salida del asistente avisa de que **no hay edge demostrado**). Cabecera a 2.6 | Registrar la decisión del propietario del 2026-10-01 sin reabrir §11.6 ni fijar digests de artefactos regenerables |
