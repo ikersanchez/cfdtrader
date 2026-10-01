@@ -253,22 +253,22 @@ def _verdict_of(block: Mapping[str, object]) -> str:
 
 def _decision_block(reference: str, by_id: Mapping[str, object]) -> dict[str, object]:
     """La decisión del propietario, redactada con los veredictos medidos (criterio 7)."""
-    spy = by_id.get("SPY")
-    future = by_id.get("ES=F")
+    spy = cast("dict[str, object] | None", by_id.get("SPY"))
+    future = cast("dict[str, object] | None", by_id.get("ES=F"))
     reference_window = _window_of(_mapping(by_id[reference]))
     parts = [
         f"Se mantiene {reference} como fuente de apertura del estudio (#6): el `open` repetido "
         "del índice queda como límite asumido y declarado, no corregido, porque el veredicto ya se "
         "calcula sobre la era limpia.",
     ]
-    if isinstance(spy, Mapping):
+    if spy is not None:
         spy_window = _window_of(spy)
         parts.append(
             "SPY, la apertura de subasta real del mismo mercado y horario (09:30–16:00 ET), "
             f"reproduce la referencia sobre la ventana común (`{_verdict_of(spy_window)}`/"
             f"`{spy_window['phase0_gate']}`), así que la confirma."
         )
-    if isinstance(future, Mapping):
+    if future is not None:
         future_window = _window_of(future)
         stale = _float_of(future_window["stale_open_share"])
         parts.append(
@@ -277,7 +277,7 @@ def _decision_block(reference: str, by_id: Mapping[str, object]) -> dict[str, ob
             f"(`{_verdict_of(future_window)}`/`{future_window['phase0_gate']}`); además arrastra "
             f"un {stale:.2%} de `open` repetido en la ventana."
         )
-    if not isinstance(spy, Mapping) and not isinstance(future, Mapping):
+    if spy is None and future is None:
         parts.append(
             f"La referencia se mantiene con el veredicto medido "
             f"(`{_verdict_of(reference_window)}`/`{reference_window['phase0_gate']}`)."
