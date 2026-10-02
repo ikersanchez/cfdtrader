@@ -1809,6 +1809,38 @@ def test_a5_three_sessions_off_are_stale_and_journaled(
     assert str(record["features_version"]).startswith(FEATURE_VERSION_PREFIX)
 
 
+def test_a5_a_long_absence_carries_the_reincorporation_notice(
+    store_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A5/A8 (§8.4 fila 3): el "no se" de una ausencia larga lleva su aviso de reincorporacion."""
+    journal_root = tmp_path / "journal"
+    _seed_journal(journal_root, (ABSENCE_START, date(2026, 9, 2)))
+    code = run_daily.main(
+        [
+            "--as-of",
+            AS_OF_MONDAY,
+            "--model-run",
+            RUN_ID,
+            "--journal-root",
+            str(journal_root),
+            "--git-commit",
+            GIT_COMMIT,
+            "--data-root",
+            str(store_root),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "estado: no_recommendation_stale_data" in captured.out
+    assert "direccion:" not in captured.out
+    assert "reincorporacion" in captured.out
+    assert "5 de 5" in captured.out
+
+    record = read_decision(journal_root, MONDAY_SESSION)
+    assert record["status"] == "no_recommendation_stale_data"
+    assert "reincorporacion" in cast("str", record["report_text"])
+
+
 def test_a6_a_half_session_is_a_justified_nothing(
     store_root: Path, runs_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

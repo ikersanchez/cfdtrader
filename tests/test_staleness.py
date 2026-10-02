@@ -188,6 +188,18 @@ def test_a4_the_freshness_verdicts_are_explicit() -> None:
     assert "festivo" in reason and "Thanksgiving" in reason
     assert "el cierre de la sesion anterior" not in closed.message
 
+    # §8.4 fila 3: un "no se" por ausencia larga viaja **con** su aviso de reincorporacion.
+    absent = staleness.session_guard(
+        as_of=_moment(MONDAY),
+        calendar=calendar,
+        snapshot_session=SNAPSHOT,
+        executions=(date(2026, 9, 1),),
+    )
+    assert absent.verdict is staleness.GuardVerdict.MISSING_PREVIOUS_CLOSE
+    assert absent.observation_sessions_remaining == 5
+    assert absent.reincorporation_notice is not None
+    assert "reincorporacion" in absent.reincorporation_notice
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # A7: el contador de observacion, derivado del diario

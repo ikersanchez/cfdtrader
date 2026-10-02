@@ -507,13 +507,14 @@ def _decimal_or_null(value: Decimal | None) -> str:
 # La guardia de obsolescencia (§8.4), el motivo del informe y el movimiento esperado
 # ─────────────────────────────────────────────────────────────────────────────
 def _guard_message(guard: SessionGuard) -> str:
-    """El ``motivo:`` del informe: el de la guardia, o el de siempre con su aviso (#40).
+    """El ``motivo:`` del informe: el de la guardia (o el declarado) **mas** su aviso (#40).
 
-    Con la guardia parada, el motivo es suyo (y no se le suma nada: el aviso de reincorporacion ya
-    viaja en el texto de la guardia). Siguiendo, el motivo es el declarado del escenario -para no
-    cambiar el informe de #110 sin necesidad- **mas** el aviso de reincorporacion cuando lo hay: un
-    ``NOTHING`` por modo observacion tiene que decir "no operar hasta revalidar" en el informe, no
-    solo en el diario.
+    Con la guardia parada, el motivo es el suyo (la frescura). Siguiendo, el motivo es el declarado
+    del escenario -para no cambiar el informe de #110 sin necesidad-. En los dos casos se le suma
+    el **aviso de reincorporacion** cuando lo hay: la fila 3 de la tabla de §8.4 pide "sin
+    recomendacion **+ aviso explicito de reincorporacion**", y la fila 6 pide que el modo
+    observacion se muestre marcado ("no operar hasta revalidar") en el informe, no solo en el
+    diario.
     """
     base = (
         guard.message
