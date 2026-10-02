@@ -42,8 +42,11 @@ El instante entra declarado (``as_of``, ISO-8601 con zona) y el modulo no lo con
 escribe nada**. Del disco solo lee el diario de decisiones, y lo hace por el lector de #39
 (``read_decisions``, **importado**, nunca reabriendo ``<root>/decisions/*.json`` a mano).
 
-Reuso por import: ``MarketCalendar``/``EASTERN`` de ``data.calendar``, ``read_decisions`` de
-``journal.decision_log`` y ``GateStatus`` de ``decision.gate``. Ninguno se reimplementa.
+Reuso por import: ``MarketCalendar``/``EASTERN`` de ``data.calendar`` y
+``Journal``/``read_decisions`` de ``journal.decision_log`` (la capa de #39). Ninguno se
+reimplementa. El **camino diario** (``delivery.run_daily``) es quien mapea el veredicto al
+``GateStatus`` de ``decision.gate``: la guardia no necesita el gate para decidir la frescura ni la
+clausura, y por eso no lo importa.
 """
 
 from __future__ import annotations
