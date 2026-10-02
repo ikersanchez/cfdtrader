@@ -31,6 +31,7 @@ import pytest
 from cfdtrader.analysis.backtest_report import NOTIONAL_USD
 from cfdtrader.analysis.pipeline_report import (
     EXPECTED_MOVE_BASIS,
+    GARCH_COLUMN,
     SCENARIO_STOP_SIGMA_MULTIPLE,
     SCENARIO_TARGET_STOP_MULTIPLE,
     scenario_parameters,
@@ -105,6 +106,9 @@ FROZEN: Final[frozenset[str]] = frozenset(
         "src/cfdtrader/data/settings.py",
     }
 )
+
+#: La guardia de calidad de fila del modulo, por su nombre, para la prueba directa.
+_ROW_PROBLEM = run_daily._row_problem  # pyright: ignore[reportPrivateUsage]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -668,6 +672,171 @@ def test_the_delivery_modules_are_the_only_ones_written() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # Extra: la familia lineal y la guardia de obsolescencia
 # ─────────────────────────────────────────────────────────────────────────────
+def test_main_emits_the_recommendation_state(
+    store_root: Path, runs_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A6: el CLI completa el flujo y publica el estado `recommendation`."""
+    code = run_daily.main(
+        [
+            "--as-of",
+            AS_OF_NEXT,
+            "--model-run",
+            RUN_ID,
+            "--data-root",
+            str(store_root),
+            "--runs-root",
+            str(runs_root),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "estado: recommendation" in captured.out
+    assert "direccion: NOTHING" in captured.out
+    assert "ev_neto_pct: null" in captured.out
+    assert "gate_sha256: sha256:" in captured.out
+    assert "no hay edge demostrado" in captured.out
+    assert captured.err == ""
+
+
+def test_main_reports_a_configuration_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A1: `--settings` inexistente es un error de configuracion (salida 2)."""
+    code = run_daily.main(
+        [
+            "--as-of",
+            AS_OF_NEXT,
+            "--model-run",
+            RUN_ID,
+            "--settings",
+            str(tmp_path / "no-existe.yaml"),
+        ]
+    )
+    assert code == 2
+    assert "no se puede emitir la pista diaria" in capsys.readouterr().err
+
+
+def test_main_reports_a_missing_dataset_as_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A1/A7: un almacen sin datasets es un `error` del pipeline (salida 2, sin traceback)."""
+    code = run_daily.main(
+        [
+            "--as-of",
+            AS_OF_NEXT,
+            "--model-run",
+            RUN_ID,
+            "--data-root",
+            str(tmp_path / "almacen-vacio"),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "estado: error" in captured.err
+    assert "no hay edge demostrado" in captured.err
+
+
+def test_row_problem_flags_a_missing_or_non_positive_garch() -> None:
+    """A7: sin un `garch_forecast` positivo no hay movimiento, stop ni objetivo."""
+    row: dict[str, object] = dict.fromkeys(BASELINE_FEATURES, 1.0)
+    row[GARCH_COLUMN] = None
+    assert "es null" in cast("str", _ROW_PROBLEM(row))
+    row[GARCH_COLUMN] = 0.0
+    assert "no es positivo" in cast("str", _ROW_PROBLEM(row))
+    row[GARCH_COLUMN] = 1e-6
+    assert _ROW_PROBLEM(row) is None
+
+
+def test_predict_rejects_malformed_documents(tmp_path: Path) -> None:
+    """A2/A3: una familia que no es la lineal o un fold incompleto son errores tipados."""
+    with pytest.raises(run_daily.UnsupportedModelError):
+        run_daily.predict(
+            _write_model(
+                tmp_path,
+                cast("Mapping[str, object]", {"model": {"features": list(BASELINE_FEATURES)}}),
+                run_id="sin-folds",
+            ),
+            _FEATURES,
+        )
+    with pytest.raises(run_daily.UnsupportedModelError):
+        run_daily.predict(
+            _write_model(
+                tmp_path,
+                cast(
+                    "Mapping[str, object]",
+                    {"model": {"features": list(BASELINE_FEATURES), "folds": []}},
+                ),
+                run_id="folds-vacios",
+            ),
+            _FEATURES,
+        )
+    with pytest.raises(run_daily.UnsupportedModelError):
+        run_daily.predict(
+            _write_model(
+                tmp_path,
+                cast(
+                    "Mapping[str, object]",
+                    {
+                        "model": {
+                            "features": list(BASELINE_FEATURES),
+                            "folds": [
+                                {"mean": [0.0] * 10, "coefficients": [0.0] * 10, "intercept": 0.0}
+                            ],
+                        }
+                    },
+                ),
+                run_id="sin-scale",
+            ),
+            _FEATURES,
+        )
+    with pytest.raises(run_daily.UnsupportedModelError):
+        run_daily.predict(
+            _write_model(
+                tmp_path,
+                cast(
+                    "Mapping[str, object]",
+                    {
+                        "model": {
+                            "features": list(BASELINE_FEATURES),
+                            "folds": [
+                                {
+                                    "mean": [0.0] * 10,
+                                    "scale": [1.0] * 10,
+                                    "coefficients": [0.0] * 9,
+                                    "intercept": 0.0,
+                                }
+                            ],
+                        }
+                    },
+                ),
+                run_id="longitudes",
+            ),
+            _FEATURES,
+        )
+    with pytest.raises(run_daily.DeliveryError):
+        run_daily.predict(
+            _write_model(tmp_path, _model_document(calibration=None), run_id="sin-fila"), {}
+        )
+
+    bad_json = tmp_path / "bad-json" / "model.json"
+    bad_json.parent.mkdir(parents=True, exist_ok=True)
+    bad_json.write_text("{ no es json", encoding="utf-8")
+    with pytest.raises(run_daily.UnsupportedModelError):
+        run_daily.predict(bad_json, _FEATURES)
+
+    not_a_document = tmp_path / "lista" / "model.json"
+    not_a_document.parent.mkdir(parents=True, exist_ok=True)
+    not_a_document.write_text("[1, 2, 3]", encoding="utf-8")
+    with pytest.raises(run_daily.UnsupportedModelError):
+        run_daily.predict(not_a_document, _FEATURES)
+
+    without_model = tmp_path / "sin-modelo" / "model.json"
+    without_model.parent.mkdir(parents=True, exist_ok=True)
+    without_model.write_text("{}", encoding="utf-8")
+    with pytest.raises(run_daily.UnsupportedModelError):
+        run_daily.predict(without_model, _FEATURES)
+
+
 def test_the_linear_family_rejects_lightgbm_documents(tmp_path: Path) -> None:
     """A2: un documento con `booster_model` (LightGBM) es `UnsupportedModelError`."""
     booster = _write_model(
