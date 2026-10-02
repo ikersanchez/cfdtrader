@@ -24,7 +24,7 @@ import os
 import re
 import subprocess
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -58,7 +58,7 @@ from cfdtrader.decision.gate import GateOutput, GateStatus, evaluate_gate, gate_
 from cfdtrader.delivery import run_daily
 from cfdtrader.features import store as feature_store
 from cfdtrader.features.store import FEATURE_VERSION_PREFIX
-from cfdtrader.journal.decision_log import read_decision
+from cfdtrader.journal.decision_log import Journal, build_decision, read_decision
 from cfdtrader.models.baseline import BASELINE_FEATURES
 
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[1]
@@ -88,6 +88,12 @@ STALE_SESSION: Final[date] = date(2026, 9, 18)
 AS_OF_NEXT: Final[str] = "2026-09-17T12:00:00+00:00"
 AS_OF_STALE: Final[str] = "2026-09-18T12:00:00+00:00"
 
+#: #40: una sesion tres dias despues del almacen (las sesiones 17, 18 y 21) y el inicio de la
+#: ausencia larga con la que se siembra la ventana de observacion de la regla 15.
+MONDAY_SESSION: Final[date] = date(2026, 9, 21)
+AS_OF_MONDAY: Final[str] = "2026-09-21T12:00:00+00:00"
+ABSENCE_START: Final[date] = date(2026, 9, 1)
+
 #: Identidad declarada de la corrida sintetica del modelo.
 RUN_ID: Final[str] = "1" * 64
 
@@ -97,7 +103,12 @@ GIT_COMMIT: Final[str] = "5" * 40
 #: Guarda de diff (criterio 12): forma sancionada SUBSET + DISJOINT.
 BASE_COMMIT: Final[str] = "388ac87"
 WRITTEN: Final[frozenset[str]] = frozenset(
-    {"src/cfdtrader/delivery/run_daily.py", "tests/test_run_daily.py"}
+    {
+        "src/cfdtrader/delivery/run_daily.py",
+        "src/cfdtrader/delivery/staleness.py",
+        "tests/test_run_daily.py",
+        "tests/test_staleness.py",
+    }
 )
 FROZEN: Final[frozenset[str]] = frozenset(
     {
@@ -688,7 +699,7 @@ def test_the_report_is_deterministic_across_hash_seeds(
 # A12: guarda de diff (SUBSET + DISJOINT)
 # ─────────────────────────────────────────────────────────────────────────────
 def test_the_delivery_modules_are_the_only_ones_written() -> None:
-    """A12: los dos ficheros son los escritos y ninguno del conjunto congelado se toca."""
+    """A12/A13: los cuatro ficheros son los escritos y ninguno del conjunto congelado se toca."""
 
     def _git(*arguments: str) -> str:
         completed = subprocess.run(  # noqa: S603 - el git del sistema, uso fijo
@@ -1692,3 +1703,273 @@ def test_the_variant_path_is_deterministic_across_hash_seeds(
 
     assert outputs[0] == outputs[1]
     assert digests[0] == digests[1]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #40: la guardia de obsolescencia (festivo, media sesion, ausencia y observacion)
+# ─────────────────────────────────────────────────────────────────────────────
+def _write_calendar(
+    tmp_path: Path, *, holidays: Sequence[date] = (), half_days: Sequence[date] = ()
+) -> Path:
+    """Un `calendar.yaml` con las excepciones **declaradas** del propio `CalendarConfig` (#40).
+
+    Es el mecanismo del proyecto para lo que ninguna regla deduce ("cierres por luto nacional o
+    medias sesiones anunciadas a la ultima hora"): asi la prueba declara un festivo o una media
+    sesion sin tocar `data/calendar.py`, que esta congelado para esta entrega.
+    """
+    lines: list[str] = []
+    for key, days in (("extra_holidays", holidays), ("extra_half_days", half_days)):
+        if days:
+            lines.append(f"{key}:")
+            lines.extend(f"  - {day.isoformat()}" for day in days)
+    path = tmp_path / "calendar.yaml"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def _seed_journal(root: Path, days: Sequence[date]) -> None:
+    """Siembra el diario con la capa de #39: una fila por sesion, sin `GateOutput`."""
+    for day in days:
+        payload = build_decision(
+            trade_date=day,
+            as_of=datetime(day.year, day.month, day.day, 12, 0, tzinfo=UTC),
+            features_version="features_de_prueba",
+            model_version="modelo_de_prueba",
+            git_commit=GIT_COMMIT,
+            report_text="informe sembrado en la prueba (#40)",
+            status=GateStatus.NO_RECOMMENDATION_STALE_DATA,
+        )
+        Journal(root).write("decisions", payload)
+
+
+def test_a3_a_market_holiday_does_not_run_the_daily_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A3: con el mercado cerrado no se lee el almacen, no hay informe y no hay fila."""
+    calendar_path = _write_calendar(tmp_path, holidays=(NEXT_SESSION,))
+    journal_root = tmp_path / "journal"
+    code = run_daily.main(
+        [
+            "--as-of",
+            AS_OF_NEXT,
+            "--model-run",
+            RUN_ID,
+            "--journal-root",
+            str(journal_root),
+            "--git-commit",
+            GIT_COMMIT,
+            "--data-root",
+            str(tmp_path / "almacen-que-no-existe"),
+            "--calendar",
+            str(calendar_path),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 0
+    assert f"sin sesion: {NEXT_SESSION.isoformat()}" in captured.out
+    assert "festivo" in captured.out
+    for token in ("estado:", "direccion:", "gate_sha256:", "modelo:", "no hay edge demostrado"):
+        assert token not in captured.out, token
+    assert captured.err == ""
+    assert not journal_root.exists()
+
+
+def test_a5_three_sessions_off_are_stale_and_journaled(
+    store_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A5: tres sesiones sin ejecutar son `no_recommendation_stale_data`, con su fila y motivo."""
+    journal_root = tmp_path / "journal"
+    code = run_daily.main(
+        [
+            "--as-of",
+            AS_OF_MONDAY,
+            "--model-run",
+            RUN_ID,
+            "--journal-root",
+            str(journal_root),
+            "--git-commit",
+            GIT_COMMIT,
+            "--data-root",
+            str(store_root),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "estado: no_recommendation_stale_data" in captured.out
+    assert f"sesion: {MONDAY_SESSION.isoformat()}" in captured.out
+    assert "direccion:" not in captured.out
+    assert "no hay edge demostrado" in captured.out
+    assert captured.err == ""
+
+    record = read_decision(journal_root, MONDAY_SESSION)
+    assert record["status"] == "no_recommendation_stale_data"
+    assert record["direction"] is None
+    # A5: el informe se persiste verbatim (el `print` anade un salto al de `render`).
+    assert captured.out == cast("str", record["report_text"]) + "\n"
+    assert str(record["features_version"]).startswith(FEATURE_VERSION_PREFIX)
+
+
+def test_a6_a_half_session_is_a_justified_nothing(
+    store_root: Path, runs_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A6: media sesion ⇒ `NOTHING` justificado (regla 18), no un "no se"; y se registra."""
+    # El festivo del 17 y la media sesion del 18: la sesion anterior a la evaluada sigue siendo
+    # el cierre del 16 que trae el almacen sintetico.
+    calendar_path = _write_calendar(tmp_path, holidays=(NEXT_SESSION,), half_days=(STALE_SESSION,))
+    journal_root = tmp_path / "journal"
+    code = run_daily.main(
+        [
+            "--as-of",
+            AS_OF_STALE,
+            "--model-run",
+            RUN_ID,
+            "--journal-root",
+            str(journal_root),
+            "--git-commit",
+            GIT_COMMIT,
+            "--data-root",
+            str(store_root),
+            "--runs-root",
+            str(runs_root),
+            "--calendar",
+            str(calendar_path),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "estado: recommendation" in captured.out
+    assert "direccion: NOTHING" in captured.out
+    assert "bloqueo: 18:media_sesion" in captured.out
+    assert "no_recommendation" not in captured.out
+    assert captured.err == ""
+
+    record = read_decision(journal_root, STALE_SESSION)
+    assert record["status"] == "recommendation"
+    assert record["direction"] == "nothing"
+    assert record["blocking_events"] == ["media_sesion"]
+    assert captured.out == cast("str", record["report_text"]) + "\n"
+
+
+def test_a8_observation_mode_is_not_an_actionable_hint(
+    store_root: Path, runs_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A7/A8: la vuelta de una ausencia de mas de una semana deja la pista en observacion."""
+    journal_root = tmp_path / "journal"
+    _seed_journal(journal_root, (ABSENCE_START, date(2026, 9, 2)))
+    code = run_daily.main(
+        [
+            "--as-of",
+            AS_OF_NEXT,
+            "--model-run",
+            RUN_ID,
+            "--journal-root",
+            str(journal_root),
+            "--git-commit",
+            GIT_COMMIT,
+            "--data-root",
+            str(store_root),
+            "--runs-root",
+            str(runs_root),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "estado: recommendation" in captured.out
+    assert "direccion: NOTHING" in captured.out
+    assert "bloqueo: 15:modo_observacion" in captured.out
+    assert "reincorporacion" in captured.out
+    assert "5 de 5" in captured.out
+    assert "no_recommendation" not in captured.out
+    assert captured.err == ""
+
+    record = read_decision(journal_root, NEXT_SESSION)
+    assert record["status"] == "recommendation"
+    assert record["direction"] == "nothing"
+    assert record["blocking_events"] == ["modo_observacion"]
+    assert captured.out == cast("str", record["report_text"]) + "\n"
+
+
+def test_a9_the_report_shows_the_blockers_only_when_there_are_any() -> None:
+    """A9: una linea `bloqueo:` por bloqueo del gate, y ninguna cuando el gate no bloquea."""
+    blocked = _gate_output(measured=False, probability=0.62)
+    assert blocked.blockers
+    moment = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
+    text = run_daily.render(
+        status=blocked.status,
+        session=NEXT_SESSION,
+        as_of=moment,
+        snapshot_session=SNAPSHOT_SESSION,
+        model_source="runs/model.json",
+        message="motivo de la prueba",
+        output=blocked,
+    )
+    expected = [f"bloqueo: {entry['rule']}:{entry['code']}" for entry in blocked.blockers]
+    assert [line for line in text.splitlines() if line.startswith("bloqueo:")] == expected
+
+    clean = _gate_output(measured=True, probability=0.62)
+    assert clean.blockers == ()
+    clean_text = run_daily.render(
+        status=clean.status,
+        session=NEXT_SESSION,
+        as_of=moment,
+        snapshot_session=SNAPSHOT_SESSION,
+        model_source="runs/model.json",
+        message="motivo de la prueba",
+        output=clean,
+    )
+    assert "bloqueo:" not in clean_text
+    assert "direccion: LONG" in clean_text
+
+
+def test_the_guard_paths_are_deterministic_across_hash_seeds(
+    store_root: Path, runs_root: Path, tmp_path: Path
+) -> None:
+    """A11 (#40): el festivo (no escribe) y la media sesion (escribe) son deterministas."""
+    holiday_calendar = _write_calendar(tmp_path, holidays=(NEXT_SESSION,))
+    half_calendar = _write_calendar(tmp_path, holidays=(NEXT_SESSION,), half_days=(STALE_SESSION,))
+    scenarios = (
+        (AS_OF_NEXT, holiday_calendar, None),
+        (AS_OF_STALE, half_calendar, STALE_SESSION),
+    )
+    for as_of, calendar_path, written in scenarios:
+        outputs: list[str] = []
+        digests: list[bytes] = []
+        for seed in ("0", "1"):
+            journal = tmp_path / f"journal-{seed}-{as_of}"
+            environment = {**os.environ, "PYTHONHASHSEED": seed}
+            completed = subprocess.run(  # noqa: S603 - el ejecutable es el interprete de la sesion
+                [
+                    sys.executable,
+                    "-m",
+                    "cfdtrader.delivery.run_daily",
+                    "--as-of",
+                    as_of,
+                    "--model-run",
+                    RUN_ID,
+                    "--journal-root",
+                    str(journal),
+                    "--git-commit",
+                    GIT_COMMIT,
+                    "--data-root",
+                    str(store_root),
+                    "--runs-root",
+                    str(runs_root),
+                    "--calendar",
+                    str(calendar_path),
+                ],
+                capture_output=True,
+                text=True,
+                env=environment,
+                cwd=REPO_ROOT,
+                check=False,
+            )
+            assert completed.returncode == 0, completed.stderr
+            outputs.append(completed.stdout)
+            if written is None:
+                assert not journal.exists(), "el festivo no deja fila en el diario"
+            else:
+                digests.append((journal / "decisions" / f"{written.isoformat()}.json").read_bytes())
+
+        assert outputs[0] == outputs[1], as_of
+        if written is not None:
+            assert digests[0] == digests[1], as_of

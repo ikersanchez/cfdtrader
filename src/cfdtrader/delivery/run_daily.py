@@ -36,19 +36,39 @@ Son alternativos: exactamente uno de los dos es obligatorio, y el criterio de se
 `variant_id` soportados se declaran abajo (``VARIANT_SELECTION_RULE``/``SUPPORTED_VARIANTS``),
 importados de ``analysis.model_comparison`` para no tener una tabla paralela.
 
-Los cuatro estados de §19.2 y la guardia de §8.4
-------------------------------------------------
+Los cuatro estados de §19.2 y la guardia de §8.4 (#40)
+------------------------------------------------------
 
 La salida es uno de los cuatro estados de ``plan.md`` §19.2 y el informe imprime su ``value``
 literal: ``recommendation``, ``no_recommendation_stale_data``, ``no_recommendation_data_quality``
 y ``error``. El quinto estado del gate, ``no_recommendation_undecided``, no aparece porque el
-escenario declarado S1 cierra los once parametros (``scenario_parameters``). Antes de tocar el
-modelo, la guardia de obsolescencia de ``tech_stack.md`` §8.4 exige que la ultima sesion del
-almacen sea exactamente la anterior (si no, ``no_recommendation_stale_data``) y que la fila
-tenga las diez features y un ``garch_forecast`` positivo (si no, el estado
-``no_recommendation_data_quality``). El contador de ausencia, el modo observacion y los
-festivos/medias sesiones completos siguen siendo **#40 (OPEN)**: aqui solo se consume el minimo
-que impide que un dato viejo produzca una pista.
+escenario declarado S1 cierra los once parametros (``scenario_parameters``).
+
+La guardia de obsolescencia de ``tech_stack.md`` §8.4 vive en ``delivery.staleness`` y se
+consulta **en dos momentos**, porque no todos sus datos estan disponibles a la vez:
+
+1. **Antes de tocar el almacen**, con ``market_closure``: si el mercado no abre ese dia (festivo
+   de EE. UU. o fin de semana) imprime el aviso de ``closure_notice`` en stdout y **no ejecuta
+   nada**: ni lee el almacen, ni puntua el modelo, ni emite informe, ni escribe fila. Es la rama
+   "No se ejecuta" de §8.4: un mercado cerrado no es ``NOTHING`` (no hay sesion que evaluar) ni un
+   "no se" (el calendario **si** sabe que no abre), asi que no se colapsa en ninguno de los cuatro
+   estados.
+2. **Despues de construir la matriz**, con ``session_guard``: el veredicto sale de comparar la
+   ultima sesion del almacen con la anterior a la evaluada (``missing_previous_close`` y
+   ``snapshot_ahead`` son ``no_recommendation_stale_data``; el segundo es el caso de un
+   ``--as-of`` que no se corresponde con el almacen) y el **contador de observacion** de la regla
+   15 se deriva del diario (``execution_dates`` + ``observation_sessions_remaining``): la vuelta de
+   una ausencia de mas de una semana deja 5 sesiones por revalidar, que el gate convierte en
+   ``NOTHING`` con su bloqueo 15.
+
+Despues, la fila del almacen tiene que traer las diez features y un ``garch_forecast`` positivo
+(si no, ``no_recommendation_data_quality``). El informe imprime la **justificacion** de un
+``NOTHING`` bloqueado (una linea ``bloqueo: <regla>:<codigo>`` por bloqueo, con los codigos del
+gate) y, en modo observacion, el ``motivo:`` lleva el aviso de reincorporacion: sin eso, el
+``NOTHING`` de una media sesion o el de la observacion serian indistinguibles de un ``NOTHING``
+cualquiera.
+
+
 
 Sin reloj y sin red
 --------------------------------------
@@ -114,6 +134,13 @@ from cfdtrader.data.calendar import EASTERN, MarketCalendar, load_calendar
 from cfdtrader.data.settings import ConfigurationError, load_settings
 from cfdtrader.data.store import Store
 from cfdtrader.decision.gate import GateOutput, GateStatus, evaluate_gate
+from cfdtrader.delivery.staleness import (
+    SessionGuard,
+    closure_notice,
+    execution_dates,
+    market_closure,
+    session_guard,
+)
 from cfdtrader.features.store import FEATURE_VERSION_PREFIX
 from cfdtrader.journal.decision_log import DecisionLogError, Journal, build_decision
 from cfdtrader.models.baseline import BASELINE_FEATURES
@@ -419,10 +446,12 @@ def render(
     message: str,
     output: GateOutput | None = None,
 ) -> str:
-    """El informe del dia: cabecera, pista (si la hay), motivo y valla de honestidad (#109).
+    """El informe del dia: cabecera, pista (si la hay), bloqueos, motivo y valla (#109, #40).
 
     Los cuatro estados salen con el mismo formato y **todos** imprimen la valla: la salida no
-    puede parecer una estrategia validada ni ocultar que la ejecucion es manual.
+    puede parecer una estrategia validada ni ocultar que la ejecucion es manual. Los bloqueos del
+    gate se publican **solo** cuando los hay, para que un ``NOTHING`` justificado (media sesion,
+    modo observacion) no sea indistinguible de un ``NOTHING`` cualquiera (#40).
     """
     lines = [
         f"estado: {status.value}",
@@ -433,6 +462,7 @@ def render(
     ]
     if output is not None:
         lines.extend(_recommendation_lines(output))
+        lines.extend(_blocker_lines(output))
     lines.append(f"motivo: {message}")
     lines.append("")
     lines.extend(HONESTY_FENCE)
@@ -454,6 +484,15 @@ def _recommendation_lines(output: GateOutput) -> list[str]:
     ]
 
 
+def _blocker_lines(output: GateOutput) -> list[str]:
+    """Una linea por bloqueo del gate (``regla:codigo``), en el orden en que los publica (#40).
+
+    Es la justificacion de un ``NOTHING``: sin esta linea, un bloqueo por media sesion (regla 18)
+    o por modo observacion (regla 15) se presentaria igual que un ``NOTHING`` sin motivo.
+    """
+    return [f"bloqueo: {entry['rule']}:{entry['code']}" for entry in output.blockers]
+
+
 def _date_or_null(value: date | None) -> str:
     """Una fecha ISO, o ``null`` sin inventar un valor."""
     return "null" if value is None else value.isoformat()
@@ -465,8 +504,26 @@ def _decimal_or_null(value: Decimal | None) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# La guardia de obsolescencia (§8.4) y el movimiento esperado
+# La guardia de obsolescencia (§8.4), el motivo del informe y el movimiento esperado
 # ─────────────────────────────────────────────────────────────────────────────
+def _guard_message(guard: SessionGuard) -> str:
+    """El ``motivo:`` del informe: el de la guardia, o el de siempre con su aviso (#40).
+
+    Con la guardia parada, el motivo es suyo (y no se le suma nada: el aviso de reincorporacion ya
+    viaja en el texto de la guardia). Siguiendo, el motivo es el declarado del escenario -para no
+    cambiar el informe de #110 sin necesidad- **mas** el aviso de reincorporacion cuando lo hay: un
+    ``NOTHING`` por modo observacion tiene que decir "no operar hasta revalidar" en el informe, no
+    solo en el diario.
+    """
+    base = (
+        guard.message
+        if guard.blocks
+        else f"pista evaluada con el escenario declarado {SCENARIO_LABEL} y coste declarado"
+    )
+    notice = guard.reincorporation_notice
+    return base if notice is None else f"{base} | {notice}"
+
+
 def _row_problem(row: Mapping[str, object]) -> str | None:
     """El problema de calidad de la fila evaluada, o ``None`` si se puede predecir (§8.4)."""
     missing = [name for name in BASELINE_FEATURES if row.get(name) is None]
@@ -657,10 +714,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Imprime la pista del dia o su estado «sin recomendacion»; devuelve el codigo de salida.
 
     Codigos: ``0`` = informe emitido (``recommendation``, ``no_recommendation_stale_data`` o
-    ``no_recommendation_data_quality``); ``2`` = ``--as-of``/``--model-run``/``--journal-root``/
+    ``no_recommendation_data_quality``) o mercado cerrado (la rama "no se ejecuta" de §8.4: aviso
+    con su motivo, sin informe y sin fila); ``2`` = ``--as-of``/``--model-run``/``--journal-root``/
     ``--git-commit`` ausentes o invalidos, fallo del pipeline (``error``) o diario no escribible,
     con el motivo por ``stderr`` y sin *traceback*. Cada ejecucion registra la fila del diario
-    (§19.3) antes de devolver.
+    (§19.3) antes de devolver, salvo cuando no hay sesion que registrar.
     """
     parser = argparse.ArgumentParser(
         prog="cfdtrader.delivery.run_daily",
@@ -768,28 +826,38 @@ def main(argv: Sequence[str] | None = None) -> int:
     # mientras la resolucion contra el registro no lo haya devuelto (nunca un digest inventado).
     model_version = cast("str", declared_run if declared_run is not None else declared_variant)
 
+    # La guardia de §8.4 empieza **antes de leer nada**: si ese dia el mercado americano no abre,
+    # el camino diario "no se ejecuta" (ni almacen, ni registro, ni modelo, ni informe, ni fila).
+    closure = market_closure(as_of=moment, calendar=calendar)
+    if closure is not None:
+        print(closure_notice(session=session, reason=closure))
+        return 0
+
     try:
         if declared_variant is not None:
             entry = resolve_run(runs_root=runs_root, variant_id=declared_variant)
             model_version = entry.run_sha256
             model_path = runs_root / entry.run_sha256 / MODEL_FILE
             model_source = f"{model_path} (variant_id: {entry.variant_id})"
-        previous = calendar.previous_session(session)
         matrix = build_feature_matrix(Store(data_root))
         features_version = FEATURE_VERSION_PREFIX + matrix.matrix_sha256
         snapshot_session = matrix.last_session
-        if snapshot_session != previous:
+        guard = session_guard(
+            as_of=moment,
+            calendar=calendar,
+            snapshot_session=snapshot_session,
+            executions=execution_dates(journal_root),
+        )
+        if guard.blocks:
+            # Aqui solo pueden llegar los dos "no se" de frescura: la clausura ya se comprobo
+            # arriba, con el mismo `as_of` y el mismo calendario.
             text = render(
                 status=GateStatus.NO_RECOMMENDATION_STALE_DATA,
                 session=session,
                 as_of=moment,
                 snapshot_session=snapshot_session,
                 model_source=model_source,
-                message=(
-                    f"datos obsoletos (tech_stack.md §8.4): la ultima sesion del almacen es "
-                    f"{snapshot_session.isoformat()} y la sesion anterior a "
-                    f"{session.isoformat()} es {previous.isoformat()}; no se emite pista"
-                ),
+                message=_guard_message(guard),
             )
             failure = _record_or_report(
                 journal_root,
@@ -861,7 +929,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             daily_pnl_pct=None,
             weekly_pnl_pct=None,
             monthly_pnl_pct=None,
-            observation_sessions_remaining=0,
+            observation_sessions_remaining=guard.observation_sessions_remaining,
         )
     except (MissingModelError, UnsupportedModelError) as error:
         return _fail_with_error(
@@ -894,7 +962,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         as_of=moment,
         snapshot_session=snapshot_session,
         model_source=model_source,
-        message=(f"pista evaluada con el escenario declarado {SCENARIO_LABEL} y coste declarado"),
+        message=_guard_message(guard),
         output=output,
     )
     failure = _record_or_report(
