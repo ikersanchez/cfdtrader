@@ -13,16 +13,28 @@ Flujo de manana (§13), no evaluacion a cierre
 anterior), que es el insumo *lag-1* de ``models.baseline.design_frame``. La sesion anterior
 declarada es ``MarketCalendar.previous_session(session)``.
 
-Modelo: familia lineal, sin reajustar
--------------------------------------
+Modelo: las dos familias del registro, sin reajustar
+----------------------------------------------------
 
-El modelo vive en ``runs/<run_sha256>/model.json``. La probabilidad es la del **ultimo fold**
-(``folds[-1]``) aplicado a la fila nueva, seguida de su calibrador: `((x - mean) / scale) @
-coefficients + intercept`, y despues ``Calibration.calibrate`` (o ``sigmoid`` si el metodo es
-``"none"``). **No se reajusta** y **no** se consulta ``test_positions``: es una
-**extrapolacion** mas alla de la ventana de *test* del fold, declarada aqui a proposito. Cualquier
-otra familia (p. ej. el *booster* de LightGBM, con ``library``/``booster_model``) es un
-``UnsupportedModelError`` tipado: LightGBM en el camino diario es #111.
+El modelo vive en ``runs/<run_sha256>/model.json`` y la probabilidad es la del **ultimo fold**
+(``folds[-1]``) aplicado a la fila nueva, seguida de su calibrador. **No se reajusta** y **no** se
+consulta ``test_positions``: es una **extrapolacion** mas alla de la ventana de *test* del fold,
+declarada aqui a proposito. La **familia** la decide el payload: sin ``library`` es la lineal de
+``models.baseline`` (``((x - mean) / scale) @ coefficients + intercept`` y despues
+``Calibration.calibrate``, o ``sigmoid`` si el metodo es ``"none"``); con
+``library.name == 'lightgbm'`` es el *booster* de #111, que se **recarga del texto publicado**
+(``Booster(model_str=...)``, sin `pickle`) y se puntua con ``raw_score=True``, con ese mismo
+calibrador sobre el **margen**. Cualquier otro ``library`` es un ``UnsupportedModelError`` tipado.
+
+Elegir el modelo: por identidad o por el registro (#111)
+--------------------------------------------------------
+
+``--model-run <run_sha256>`` selecciona la corrida por identidad (lo de #110/#112);
+``--variant-id <variant_id>`` la resuelve contra el registro con ``load_registry`` de
+``analysis.experiment_log`` (**importada**, nunca reimplementada), sin teclear un `run_sha256`.
+Son alternativos: exactamente uno de los dos es obligatorio, y el criterio de seleccion y los
+`variant_id` soportados se declaran abajo (``VARIANT_SELECTION_RULE``/``SUPPORTED_VARIANTS``),
+importados de ``analysis.model_comparison`` para no tener una tabla paralela.
 
 Los cuatro estados de §19.2 y la guardia de §8.4
 ------------------------------------------------
@@ -43,8 +55,9 @@ Sin reloj y sin red
 
 El modulo no consulta el reloj (``--as-of`` es obligatorio, ISO-8601 con zona), no importa
 ``yfinance``/``requests``/``urllib`` y no escribe en el almacen ni en el registro: solo lee el
-almacen y ``runs/<run_sha256>/model.json``, y escribe **solo** el diario de decisiones que
-declara ``--journal-root`` (#112). Mismas entradas ⇒ misma salida byte a byte.
+almacen, el registro (``config.json``/``result.json`` de ``runs/``, a traves de
+``load_registry``) y ``runs/<run_sha256>/model.json``, y escribe **solo** el diario de decisiones
+que declara ``--journal-root`` (#112). Mismas entradas ⇒ misma salida byte a byte.
 
 Diario de decisiones (#112)
 ---------------------------
@@ -68,12 +81,22 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Final, cast
 
+import numpy as np
+from lightgbm import Booster
+from lightgbm.basic import LightGBMError
+
 from cfdtrader.analysis.backtest_report import NOTIONAL_USD
+from cfdtrader.analysis.experiment_log import (
+    ExperimentLogError,
+    RegistryEntry,
+    load_registry,
+)
 from cfdtrader.analysis.feature_frame import (
     FeatureFrameError,
     FeatureMatrix,
     build_feature_matrix,
 )
+from cfdtrader.analysis.model_comparison import BASELINE_VARIANT_ID, VARIANT_ID
 from cfdtrader.analysis.pipeline_report import (
     EXPECTED_MOVE_BASIS,
     GARCH_COLUMN,
@@ -99,10 +122,12 @@ from cfdtrader.models.calibration import Calibration, sigmoid
 __all__ = [
     "DeliveryError",
     "MissingModelError",
+    "RegistrySelectionError",
     "UnsupportedModelError",
     "main",
     "predict",
     "render",
+    "resolve_run",
 ]
 
 #: Nombre del documento del modelo dentro de la corrida declarada.
@@ -126,6 +151,21 @@ _LINEAR_FOLD_KEYS: Final[tuple[str, ...]] = ("mean", "scale", "coefficients", "i
 #: ``error``): una ausencia declarada, nunca un digest inventado.
 FEATURES_VERSION_UNAVAILABLE: Final[str] = "unavailable"
 
+#: Las dos familias del payload: la lineal de #110 (sin `library`) y la LightGBM de #111.
+_LINEAR_FAMILY: Final[str] = "linear"
+_LIGHTGBM_FAMILY: Final[str] = "lightgbm"
+
+#: Los `variant_id` soportados: se **importan** de `analysis.model_comparison`, la unica fuente de
+#: verdad, para que no haya una tabla paralela que se desincronice.
+SUPPORTED_VARIANTS: Final[tuple[str, ...]] = (BASELINE_VARIANT_ID, VARIANT_ID)
+
+#: Criterio declarado de seleccion cuando el registro trae varias entradas del mismo `variant_id`.
+VARIANT_SELECTION_RULE: Final[str] = (
+    "entre las entradas del registro con ese `variant_id` gana la de mayor "
+    "`sharpe_per_session` y, a igualdad, el `run_sha256` menor: determinista y sin depender "
+    "del orden de lectura"
+)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Errores tipados
@@ -139,7 +179,11 @@ class MissingModelError(DeliveryError):
 
 
 class UnsupportedModelError(DeliveryError):
-    """El documento no es la familia lineal soportada (p. ej. LightGBM, #111)."""
+    """El documento no es ninguna de las familias soportadas (lineal o LightGBM)."""
+
+
+class RegistrySelectionError(DeliveryError):
+    """El `variant_id` declarado no se pudo resolver contra el registro de `runs/`."""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -148,11 +192,12 @@ class UnsupportedModelError(DeliveryError):
 def predict(model_path: Path, features: Mapping[str, float]) -> float:
     """Probabilidad **calibrada** de la fila nueva con el ultimo fold del modelo lineal.
 
-    Lee ``model["folds"][-1]`` y devuelve el score ``((x - mean) / scale) @ coefficients +
-    intercept`` pasado por el calibrador publicado (o por ``sigmoid`` si el metodo es
-    ``"none"``). No reajusta nada y es determinista. Un documento ausente es
-    :class:`MissingModelError`; uno que no sea la familia lineal (LightGBM) o que no declare
-    exactamente las diez columnas de ``BASELINE_FEATURES`` es :class:`UnsupportedModelError`.
+    Lee ``model["folds"][-1]`` y devuelve la probabilidad de las dos familias soportadas: la
+    lineal (``((x - mean) / scale) @ coefficients + intercept``) y la LightGBM (#111), en los dos
+    casos pasada por el calibrador publicado (o por ``sigmoid`` si el metodo es ``"none"``). No
+    reajusta nada y es determinista. Un documento ausente es :class:`MissingModelError`; uno que
+    no sea ninguna de las dos familias, o que no declare exactamente las diez columnas de
+    ``BASELINE_FEATURES``, es :class:`UnsupportedModelError`.
     """
     return _predictions(model_path, features)[1]
 
@@ -166,26 +211,88 @@ def _predictions(model_path: Path, features: Mapping[str, float]) -> tuple[float
     """
     document = _load_document(model_path)
     model = cast("Mapping[str, object]", document["model"])
-    if "library" in model:
-        raise UnsupportedModelError(
-            f"{model_path}: el documento publica `library` (LightGBM); el camino diario solo "
-            "soporta la familia lineal de `models.baseline` (#111)"
-        )
+    family = _family(model, model_path=model_path)
     if "features" not in model or "folds" not in model:
         raise UnsupportedModelError(
-            f"{model_path}: el documento no declara `features`/`folds`: no es la familia lineal"
+            f"{model_path}: el documento no declara `features`/`folds`: no es una familia soportada"
         )
     declared = tuple(str(name) for name in cast("Sequence[object]", model["features"]))
     if declared != BASELINE_FEATURES:
         raise UnsupportedModelError(
-            f"{model_path}: el documento declara {declared!r} y la familia lineal exige "
+            f"{model_path}: el documento declara {declared!r} y el camino diario puntua "
             "exactamente las 10 columnas de `models.baseline.BASELINE_FEATURES`"
         )
     folds = cast("Sequence[object]", model["folds"])
     if not folds:
         raise UnsupportedModelError(f"{model_path}: el modelo no publica ningun fold")
     fold = cast("Mapping[str, object]", folds[-1])
+    if family == _LIGHTGBM_FAMILY:
+        return _lightgbm_probabilities(fold, features, declared, model_path=model_path)
     return _fold_probabilities(fold, features, declared, model_path=model_path)
+
+
+def _family(model: Mapping[str, object], *, model_path: Path) -> str:
+    """La familia del payload: la lineal de #110 (sin `library`) o la LightGBM de #111.
+
+    Un `library` de otra forma (p. ej. un texto, como el que rechazaba #110) **no** es una familia
+    soportada: se declara, no se intenta puntuar.
+    """
+    if "library" not in model:
+        return _LINEAR_FAMILY
+    block = model["library"]
+    if isinstance(block, Mapping):
+        declared_library = cast("Mapping[str, object]", block)
+        if declared_library.get("name") == _LIGHTGBM_FAMILY:
+            return _LIGHTGBM_FAMILY
+    raise UnsupportedModelError(
+        f"{model_path}: el documento publica un `library` que no es una familia soportada "
+        "(`library.name == 'lightgbm'` para la de #111, o sin `library` para la lineal de #110)"
+    )
+
+
+def _lightgbm_probabilities(
+    fold: Mapping[str, object],
+    features: Mapping[str, float],
+    declared: tuple[str, ...],
+    *,
+    model_path: Path,
+) -> tuple[float, float]:
+    """``(prob_up_raw, prob_up_calibrated)`` del ultimo fold de LightGBM, sin reajustar.
+
+    El texto publicado del ``Booster`` (``model_to_string()``, **sin** `pickle`) se **recarga** con
+    ``Booster(model_str=...)`` y la fila nueva se puntua con ``raw_score=True``: el margen, del que
+    sale ``prob_up_raw = sigmoid(margen)``. El calibrador **publicado** del fold se aplica a ese
+    mismo margen (la aritmetica de `models.lightgbm_model` / `analysis.model_comparison`). El
+    artefacto **solo se lee**: no se reajusta ni se reescribe.
+    """
+    text = fold.get("booster_model")
+    if not isinstance(text, str) or not text.strip():
+        raise UnsupportedModelError(
+            f"{model_path}: el ultimo fold no publica `booster_model` como texto: no es la "
+            "familia LightGBM"
+        )
+    missing = [name for name in declared if name not in features]
+    if missing:
+        raise DeliveryError(
+            f"la fila a predecir no trae las features declaradas: faltan {missing!r}"
+        )
+    row = np.asarray([[float(features[name]) for name in declared]], dtype=np.float64)
+    try:
+        booster = Booster(model_str=text)
+        margin = float(np.asarray(booster.predict(row, raw_score=True)).ravel()[0])
+    except LightGBMError as error:
+        raise UnsupportedModelError(
+            f"{model_path}: el `booster_model` del ultimo fold no puntua la fila nueva: {error}"
+        ) from error
+    raw = sigmoid(margin)
+    block = fold.get("calibration")
+    if block is None:
+        return raw, raw
+    calibrator = _calibration_from_payload(cast("Mapping[str, object]", block))
+    if not calibrator.calibrated:
+        return raw, raw
+    value = calibrator.calibrate([margin])[0]
+    return raw, (raw if value is None else float(value))
 
 
 def _fold_probabilities(
@@ -497,6 +604,40 @@ def _fail_with_error(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Registro: elegir el modelo por `variant_id` (#111)
+# ─────────────────────────────────────────────────────────────────────────────
+def resolve_run(*, runs_root: Path, variant_id: str) -> RegistryEntry:
+    """Resuelve el `run_sha256` de una variante del registro, sin teclearlo (#111).
+
+    El registro lo lee ``analysis.experiment_log.load_registry`` (**importada**, no
+    reimplementada): este modulo no abre `config.json`/`result.json` ni calcula `registry_sha256`.
+    Criterio declarado (``VARIANT_SELECTION_RULE``): entre las entradas con ese `variant_id` gana
+    la de mayor `sharpe_per_session` y, a igualdad, el `run_sha256` menor. Un `variant_id` que no
+    sea una de las familias soportadas, o que el registro no traiga, es error tipado.
+    """
+    if variant_id not in SUPPORTED_VARIANTS:
+        raise RegistrySelectionError(
+            f"`{variant_id}` no es un `variant_id` soportado por el camino diario "
+            f"({list(SUPPORTED_VARIANTS)}): solo se puntuan las familias publicadas por "
+            "`analysis.model_comparison`"
+        )
+    try:
+        registry = load_registry(runs_root)
+    except ExperimentLogError as error:
+        raise RegistrySelectionError(
+            f"no se pudo leer el registro de `{runs_root}`: {error}"
+        ) from error
+    candidates = [entry for entry in registry.entries if entry.variant_id == variant_id]
+    if not candidates:
+        published = sorted({entry.variant_id for entry in registry.entries})
+        raise RegistrySelectionError(
+            f"el registro de `{runs_root}` no trae ninguna variante `{variant_id}`: publica "
+            f"{published!r} ({VARIANT_SELECTION_RULE})"
+        )
+    return min(candidates, key=lambda entry: (-entry.sharpe_per_session, entry.run_sha256))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # CLI
 # ─────────────────────────────────────────────────────────────────────────────
 def _parse_as_of(value: str | None) -> datetime:
@@ -529,7 +670,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--as-of", default=None, help="instante declarado ISO-8601 con zona (obligatorio)"
     )
     parser.add_argument(
-        "--model-run", default=None, help="run_sha256 de la corrida de `runs/` (obligatorio)"
+        "--model-run",
+        default=None,
+        help="run_sha256 de la corrida de `runs/` (alternativo a --variant-id)",
+    )
+    parser.add_argument(
+        "--variant-id",
+        default=None,
+        help="variant_id resuelto contra `--runs-root` (alternativo a --model-run)",
     )
     parser.add_argument(
         "--journal-root", default=None, help="raiz del diario de decisiones (obligatorio)"
@@ -553,9 +701,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"no se puede emitir la pista diaria: {error}", file=sys.stderr)
         return 2
     model_run = cast("str | None", args.model_run)
-    if model_run is None or not model_run.strip():
+    variant_id = cast("str | None", args.variant_id)
+    declared_run = model_run if model_run is not None and model_run.strip() else None
+    declared_variant = variant_id if variant_id is not None and variant_id.strip() else None
+    if declared_run is not None and declared_variant is not None:
         print(
-            "no se puede emitir la pista diaria: --model-run es obligatorio",
+            "no se puede emitir la pista diaria: declara `--model-run` o `--variant-id`, no los "
+            "dos",
+            file=sys.stderr,
+        )
+        return 2
+    if declared_run is None and declared_variant is None:
+        print(
+            "no se puede emitir la pista diaria: --model-run o --variant-id es obligatorio",
             file=sys.stderr,
         )
         return 2
@@ -586,8 +744,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     data_root = Path(args.data_root) if args.data_root is not None else Path(settings.data.root)
     runs_root = Path(args.runs_root)
     journal_root = Path(journal_root_arg)
-    model_path = runs_root / model_run / MODEL_FILE
-    model_source = str(model_path)
+    # La ruta se conoce de antemano con `--model-run`; con `--variant-id` la decide el registro, y
+    # hasta entonces el informe declara el selector sin resolver (nunca un digest inventado).
+    model_path = (
+        runs_root / declared_run / MODEL_FILE
+        if declared_run is not None
+        else runs_root / MODEL_FILE
+    )
+    model_source = (
+        str(model_path)
+        if declared_run is not None
+        else f"variant_id {declared_variant!r} (sin resolver contra {runs_root})"
+    )
     as_of_et = moment.astimezone(EASTERN)
     session = as_of_et.date()
     snapshot_session: date | None = None
@@ -596,8 +764,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     features_version = FEATURES_VERSION_UNAVAILABLE
     # La probabilidad cruda solo existe si el modelo se pudo puntuar (estado `recommendation`).
     prob_up_raw: float | None = None
+    # El `model_version` del diario: el `run_sha256` resuelto, o el selector declarado verbatim
+    # mientras la resolucion contra el registro no lo haya devuelto (nunca un digest inventado).
+    model_version = cast("str", declared_run if declared_run is not None else declared_variant)
 
     try:
+        if declared_variant is not None:
+            entry = resolve_run(runs_root=runs_root, variant_id=declared_variant)
+            model_version = entry.run_sha256
+            model_path = runs_root / entry.run_sha256 / MODEL_FILE
+            model_source = f"{model_path} (variant_id: {entry.variant_id})"
         previous = calendar.previous_session(session)
         matrix = build_feature_matrix(Store(data_root))
         features_version = FEATURE_VERSION_PREFIX + matrix.matrix_sha256
@@ -621,7 +797,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 as_of=moment,
                 status=GateStatus.NO_RECOMMENDATION_STALE_DATA,
                 features_version=features_version,
-                model_version=model_run,
+                model_version=model_version,
                 git_commit=git_commit,
                 report_text=text,
             )
@@ -646,7 +822,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 as_of=moment,
                 status=GateStatus.NO_RECOMMENDATION_DATA_QUALITY,
                 features_version=features_version,
-                model_version=model_run,
+                model_version=model_version,
                 git_commit=git_commit,
                 report_text=text,
             )
@@ -695,7 +871,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             snapshot_session=snapshot_session,
             model_source=model_source,
             features_version=features_version,
-            model_version=model_run,
+            model_version=model_version,
             git_commit=git_commit,
             message=str(error),
         )
@@ -707,7 +883,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             snapshot_session=snapshot_session,
             model_source=model_source,
             features_version=features_version,
-            model_version=model_run,
+            model_version=model_version,
             git_commit=git_commit,
             message=str(error),
         )
@@ -727,7 +903,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         as_of=moment,
         status=output.status,
         features_version=features_version,
-        model_version=model_run,
+        model_version=model_version,
         git_commit=git_commit,
         report_text=text,
         output=output,

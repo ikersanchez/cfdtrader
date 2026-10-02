@@ -8,10 +8,15 @@ consulta el reloj.
 La prueba de render del estado ``recommendation`` construye el ``GateOutput`` llamando al
 **gate real** con un ``SlippageParameter.measured(...)``, sin almacen. La determinismo se
 verifica con ``subprocess`` y ``PYTHONHASHSEED`` distinto.
+
+Desde #111 este fichero cubre ademas la eleccion del modelo por ``--variant-id`` sobre un
+registro sintetico y la familia LightGBM, puntuada con un **booster real entrenado en el test**
+(semilla fija, un hilo): nada de ``runs/`` del repositorio y sin red.
 """
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import math
@@ -25,10 +30,14 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Final, cast
 
+import lightgbm
+import numpy as np
 import polars as pl
 import pytest
 
+from cfdtrader.analysis import experiment_log, model_comparison
 from cfdtrader.analysis.backtest_report import NOTIONAL_USD
+from cfdtrader.analysis.model_comparison import BASELINE_VARIANT_ID, VARIANT_ID
 from cfdtrader.analysis.pipeline_report import (
     EXPECTED_MOVE_BASIS,
     GARCH_COLUMN,
@@ -1138,3 +1147,548 @@ def test_the_journal_is_immutable_across_reruns(
     assert run_daily.main(changed) == 2
     assert "diario" in capsys.readouterr().err
     assert path.read_bytes() == first
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #111: elegir el modelo del registro (`--variant-id`) y puntuar LightGBM (A1-A13)
+# ─────────────────────────────────────────────────────────────────────────────
+def _fingerprint(root: Path) -> dict[str, str]:
+    """Ruta relativa -> sha256 de cada fichero: demuestra que un arbol no cambio (A4, A9, A12)."""
+    if not root.exists():
+        return {}
+    return {
+        str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+@pytest.fixture(scope="module")
+def booster_text() -> str:
+    """Un booster LightGBM **real**, entrenado en el test con semilla fija (A12)."""
+    rng = np.random.default_rng(11)
+    design = rng.normal(size=(48, len(BASELINE_FEATURES)))
+    outcome = (design[:, 0] > 0.0).astype(int)
+    booster = lightgbm.train(  # pyright: ignore[reportUnknownMemberType]
+        {
+            "objective": "binary",
+            "num_leaves": 3,
+            "min_data_in_leaf": 4,
+            "learning_rate": 0.3,
+            "num_threads": 1,
+            "seed": 7,
+            "deterministic": True,
+            "verbose": -1,
+        },
+        lightgbm.Dataset(design, label=outcome),
+        num_boost_round=4,
+    )
+    return str(booster.model_to_string())
+
+
+def _lightgbm_document(
+    *, booster_model: str, calibration: dict[str, object] | None
+) -> dict[str, object]:
+    """El documento de la familia LightGBM: `library` con nombre/version y un fold con el texto."""
+    fold: dict[str, object] = {
+        "index": 0,
+        "n_train": 24,
+        "n_test": 2,
+        "train_first_session": "2026-08-03",
+        "train_last_session": "2026-08-28",
+        "train_positives": 12,
+        "train_base_rate": 0.5,
+        "n_trees": 4,
+        "booster_model": booster_model,
+        "test_positions": [0, 1],
+        "test_probabilities": [0.4, 0.6],
+        "test_scores": [-0.4, 0.4],
+    }
+    if calibration is not None:
+        fold["calibration"] = calibration
+    return {
+        "model": {
+            "library": {"name": "lightgbm", "version": lightgbm.__version__},
+            "features": list(BASELINE_FEATURES),
+            "hyperparameters": {"objective": "binary", "num_leaves": 3, "seed": 7},
+            "seed": 7,
+            "design_lag_sessions": 1,
+            "decision_threshold": 0.55,
+            "folds": [fold],
+        },
+        "note": "",
+    }
+
+
+def _register(
+    root: Path,
+    *,
+    variant_id: str,
+    sharpe: float,
+    index: int,
+    document: Mapping[str, object],
+    n_observations: int = 40,
+) -> experiment_log.ExperimentRecord:
+    """Registra una variante con `record_experiment` y le escribe su `model.json` (A12)."""
+    record = experiment_log.record_experiment(
+        runs_root=root,
+        config=experiment_log.ExperimentConfig(
+            variant_id=variant_id,
+            features=BASELINE_FEATURES,
+            hyperparameters={"variant": variant_id, "index": index},
+            seed=index,
+            series_id=ANCHOR,
+            window={"kind": "index", "start": 0, "stop": n_observations},
+        ),
+        result=experiment_log.ExperimentResult(
+            sharpe_per_session=sharpe, n_observations=n_observations
+        ),
+        as_of=FETCHED_AT,
+    )
+    _write_model(root, document, run_id=record.run_sha256)
+    return record
+
+
+@pytest.fixture(scope="module")
+def registry_root(tmp_path_factory: pytest.TempPathFactory, booster_text: str) -> Path:
+    """Un registro sintetico: dos lineales del mismo `variant_id` y una de LightGBM (A3, A12)."""
+    root = tmp_path_factory.mktemp("run_daily_registry")
+    _register(
+        root,
+        variant_id=BASELINE_VARIANT_ID,
+        sharpe=0.05,
+        index=0,
+        document=_model_document(calibration=_PLATT),
+    )
+    _register(
+        root,
+        variant_id=BASELINE_VARIANT_ID,
+        sharpe=0.20,
+        index=1,
+        document=_model_document(calibration=_PLATT),
+    )
+    _register(
+        root,
+        variant_id=VARIANT_ID,
+        sharpe=0.10,
+        index=2,
+        document=_lightgbm_document(booster_model=booster_text, calibration=_PLATT),
+    )
+    return root
+
+
+def test_the_model_selector_is_exactly_one_of_the_two(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A1: sin selector -> 2 nombrando los dos; con los dos -> 2 con el motivo; sin traceback."""
+    assert run_daily.main(["--as-of", AS_OF_NEXT]) == 2
+    missing = capsys.readouterr().err
+    assert "Traceback" not in missing
+    assert "--model-run" in missing
+    assert "--variant-id" in missing
+
+    assert (
+        run_daily.main(
+            [
+                "--as-of",
+                AS_OF_NEXT,
+                "--model-run",
+                RUN_ID,
+                "--variant-id",
+                BASELINE_VARIANT_ID,
+                "--journal-root",
+                str(tmp_path / "journal"),
+                "--git-commit",
+                GIT_COMMIT,
+            ]
+        )
+        == 2
+    )
+    both = capsys.readouterr().err
+    assert "Traceback" not in both
+    assert "no los dos" in both
+
+
+def test_the_registry_is_read_through_the_imported_loader() -> None:
+    """A2/D6: el registro lo lee `load_registry` importada y las familias, del comparador."""
+    assert run_daily.load_registry is experiment_log.load_registry
+    assert run_daily.SUPPORTED_VARIANTS == (BASELINE_VARIANT_ID, VARIANT_ID)
+    assert run_daily.SUPPORTED_VARIANTS == model_comparison.FAMILY_ORDER
+    assert run_daily.VARIANT_SELECTION_RULE
+
+
+def test_the_selection_criterion_is_declared_and_deterministic(
+    registry_root: Path, tmp_path: Path
+) -> None:
+    """A3: gana el mayor `sharpe_per_session`; empate -> `run_sha256` menor; determinista."""
+    chosen = run_daily.resolve_run(runs_root=registry_root, variant_id=BASELINE_VARIANT_ID)
+    assert chosen.variant_id == BASELINE_VARIANT_ID
+    assert chosen.sharpe_per_session == pytest.approx(0.20)
+    assert chosen == run_daily.resolve_run(runs_root=registry_root, variant_id=BASELINE_VARIANT_ID)
+
+    tie = tmp_path / "tie"
+    first = _register(
+        tie,
+        variant_id=BASELINE_VARIANT_ID,
+        sharpe=0.10,
+        index=0,
+        document=_model_document(calibration=None),
+    )
+    second = _register(
+        tie,
+        variant_id=BASELINE_VARIANT_ID,
+        sharpe=0.10,
+        index=1,
+        document=_model_document(calibration=None),
+    )
+    assert first.run_sha256 != second.run_sha256
+    expected = min(first.run_sha256, second.run_sha256)
+    tied = run_daily.resolve_run(runs_root=tie, variant_id=BASELINE_VARIANT_ID)
+    assert tied.run_sha256 == expected
+
+
+def test_an_unresolvable_variant_is_a_typed_error_and_touches_nothing(
+    store_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A4: registro vacio o sin esa familia -> error tipado, salida 2 y `runs/` intacto."""
+    empty = tmp_path / "empty-runs"
+    empty.mkdir()
+    assert (
+        run_daily.main(
+            [
+                "--as-of",
+                AS_OF_NEXT,
+                "--variant-id",
+                BASELINE_VARIANT_ID,
+                "--journal-root",
+                str(tmp_path / "journal-empty"),
+                "--git-commit",
+                GIT_COMMIT,
+                "--data-root",
+                str(store_root),
+                "--runs-root",
+                str(empty),
+            ]
+        )
+        == 2
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "estado: error" in captured.err
+    assert "no se pudo leer el registro" in captured.err
+    assert "Traceback" not in captured.err
+    assert _fingerprint(empty) == {}
+    empty_row = read_decision(tmp_path / "journal-empty", NEXT_SESSION)
+    assert empty_row["status"] == "error"
+    assert empty_row["model_version"] == BASELINE_VARIANT_ID  # D5: el selector declarado
+
+    only_baseline = tmp_path / "only-baseline"
+    _register(
+        only_baseline,
+        variant_id=BASELINE_VARIANT_ID,
+        sharpe=0.10,
+        index=0,
+        document=_model_document(calibration=None),
+    )
+    before = _fingerprint(only_baseline)
+    assert (
+        run_daily.main(
+            [
+                "--as-of",
+                AS_OF_NEXT,
+                "--variant-id",
+                VARIANT_ID,
+                "--journal-root",
+                str(tmp_path / "journal-absent"),
+                "--git-commit",
+                GIT_COMMIT,
+                "--data-root",
+                str(store_root),
+                "--runs-root",
+                str(only_baseline),
+            ]
+        )
+        == 2
+    )
+    absent = capsys.readouterr().err
+    assert "no trae ninguna variante" in absent
+    assert "Traceback" not in absent
+    assert _fingerprint(only_baseline) == before
+
+
+def test_a_variant_outside_the_two_families_is_a_typed_error(
+    store_root: Path, registry_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A5: un `variant_id` que no publican las dos familias -> error tipado, salida 2."""
+    with pytest.raises(run_daily.RegistrySelectionError):
+        run_daily.resolve_run(runs_root=registry_root, variant_id="random_forest_v9")
+
+    assert (
+        run_daily.main(
+            [
+                "--as-of",
+                AS_OF_NEXT,
+                "--variant-id",
+                "random_forest_v9",
+                "--journal-root",
+                str(tmp_path / "journal"),
+                "--git-commit",
+                GIT_COMMIT,
+                "--data-root",
+                str(store_root),
+                "--runs-root",
+                str(registry_root),
+            ]
+        )
+        == 2
+    )
+    err = capsys.readouterr().err
+    assert "no es un `variant_id` soportado" in err
+    assert "Traceback" not in err
+
+
+def test_the_family_is_decided_by_the_payload(tmp_path: Path) -> None:
+    """A6: sin `library` es lineal; `library.name == lightgbm` es LightGBM; otro, error."""
+    linear = _write_model(tmp_path, _model_document(calibration=_PLATT), run_id="linear")
+    expected = 1.0 / (1.0 + math.exp(-(2.0 * 5.25 - 1.0)))
+    assert _PREDICTIONS(linear, _FEATURES) == (
+        pytest.approx(run_daily.sigmoid(5.25)),
+        pytest.approx(expected),
+    )
+
+    unknown = _write_model(
+        tmp_path,
+        cast(
+            "Mapping[str, object]",
+            {
+                "model": {
+                    "library": {"name": "xgboost"},
+                    "features": list(BASELINE_FEATURES),
+                    "folds": [{"index": 0}],
+                }
+            },
+        ),
+        run_id="unknown-family",
+    )
+    with pytest.raises(run_daily.UnsupportedModelError):
+        _PREDICTIONS(unknown, _FEATURES)
+
+    text_library = _write_model(
+        tmp_path,
+        cast(
+            "Mapping[str, object]",
+            {"model": {"library": "lightgbm", "features": list(BASELINE_FEATURES), "folds": []}},
+        ),
+        run_id="text-library",
+    )
+    with pytest.raises(run_daily.UnsupportedModelError):
+        _PREDICTIONS(text_library, _FEATURES)
+
+
+def test_the_lightgbm_family_reloads_the_published_booster(
+    booster_text: str, tmp_path: Path
+) -> None:
+    """A7/A9: la cruda se recomputa aparte con `raw_score=True`; el artefacto no cambia."""
+    document = _lightgbm_document(booster_model=booster_text, calibration=_PLATT)
+    path = _write_model(tmp_path, document, run_id="lightgbm")
+    before = path.read_bytes()
+    raw, calibrated = _PREDICTIONS(path, _FEATURES)
+    assert path.read_bytes() == before  # A9: solo se lee
+
+    model_block = cast("Mapping[str, object]", document["model"])
+    fold = cast("Mapping[str, object]", cast("list[object]", model_block["folds"])[0])
+    published = cast("str", fold["booster_model"])
+    row = np.asarray([[3.0] * len(BASELINE_FEATURES)], dtype=np.float64)
+    margin = float(
+        np.asarray(lightgbm.Booster(model_str=published).predict(row, raw_score=True)).ravel()[0]
+    )
+    assert raw == pytest.approx(math.exp(margin) / (1.0 + math.exp(margin)))
+    assert calibrated == pytest.approx(1.0 / (1.0 + math.exp(-(2.0 * margin - 1.0))))
+
+
+def test_the_lightgbm_calibration_is_the_published_one(booster_text: str, tmp_path: Path) -> None:
+    """A8: `none` y la ausencia de bloque pasan la cruda; un texto corrupto es error tipado."""
+    none_path = _write_model(
+        tmp_path,
+        _lightgbm_document(booster_model=booster_text, calibration=_NONE),
+        run_id="gbm-none",
+    )
+    raw, calibrated = _PREDICTIONS(none_path, _FEATURES)
+    assert calibrated == pytest.approx(raw)
+    assert run_daily.predict(none_path, _FEATURES) == pytest.approx(raw)
+
+    bare_path = _write_model(
+        tmp_path,
+        _lightgbm_document(booster_model=booster_text, calibration=None),
+        run_id="gbm-bare",
+    )
+    bare_raw, bare_calibrated = _PREDICTIONS(bare_path, _FEATURES)
+    assert bare_calibrated == pytest.approx(bare_raw)
+
+    broken_path = _write_model(
+        tmp_path,
+        _lightgbm_document(booster_model="no-es-un-booster", calibration=None),
+        run_id="gbm-broken",
+    )
+    with pytest.raises(run_daily.UnsupportedModelError):
+        _PREDICTIONS(broken_path, _FEATURES)
+
+    empty_path = _write_model(
+        tmp_path,
+        _lightgbm_document(booster_model="   ", calibration=None),
+        run_id="gbm-empty",
+    )
+    with pytest.raises(run_daily.UnsupportedModelError):
+        _PREDICTIONS(empty_path, _FEATURES)
+
+
+def test_the_cli_scores_a_lightgbm_variant_from_the_registry(
+    store_root: Path, registry_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A10/A11: `--variant-id` resuelve la corrida, el informe se anota y el diario la registra."""
+    journal = tmp_path / "journal"
+    before = _fingerprint(registry_root)
+    code = run_daily.main(
+        [
+            "--as-of",
+            AS_OF_NEXT,
+            "--variant-id",
+            VARIANT_ID,
+            "--journal-root",
+            str(journal),
+            "--git-commit",
+            GIT_COMMIT,
+            "--data-root",
+            str(store_root),
+            "--runs-root",
+            str(registry_root),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 0
+    assert f"(variant_id: {VARIANT_ID})" in captured.out
+
+    entry = run_daily.resolve_run(runs_root=registry_root, variant_id=VARIANT_ID)
+    record = read_decision(journal, NEXT_SESSION)
+    assert f"estado: {record['status']}" in captured.out
+    assert record["model_version"] == entry.run_sha256
+    assert record["status"] == "recommendation"
+    assert captured.out == cast("str", record["report_text"]) + "\n"
+    assert _fingerprint(registry_root) == before
+
+    raw = cast("float", record["prob_up_raw"])
+    calibrated = cast("float", record["prob_up_calibrated"])
+    logit = math.log(raw / (1.0 - raw))
+    assert calibrated == pytest.approx(1.0 / (1.0 + math.exp(-(2.0 * logit - 1.0))))
+
+    # D5/A13: la misma corrida por identidad da las mismas probabilidades (cambia `modelo:`).
+    other = tmp_path / "by-identity"
+    assert (
+        run_daily.main(
+            [
+                "--as-of",
+                AS_OF_NEXT,
+                "--model-run",
+                entry.run_sha256,
+                "--journal-root",
+                str(other),
+                "--git-commit",
+                GIT_COMMIT,
+                "--data-root",
+                str(store_root),
+                "--runs-root",
+                str(registry_root),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    same = read_decision(other, NEXT_SESSION)
+    assert same["status"] == record["status"]
+    assert same["prob_up_raw"] == record["prob_up_raw"]
+    assert same["prob_up_calibrated"] == record["prob_up_calibrated"]
+
+
+def test_the_cli_picks_the_highest_sharpe_entry_from_the_registry(
+    store_root: Path, registry_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A3/A10: con `--variant-id` el CLI usa la entrada de mayor Sharpe de esa familia."""
+    assert (
+        run_daily.main(
+            [
+                "--as-of",
+                AS_OF_NEXT,
+                "--variant-id",
+                BASELINE_VARIANT_ID,
+                "--journal-root",
+                str(tmp_path / "journal"),
+                "--git-commit",
+                GIT_COMMIT,
+                "--data-root",
+                str(store_root),
+                "--runs-root",
+                str(registry_root),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    chosen = run_daily.resolve_run(runs_root=registry_root, variant_id=BASELINE_VARIANT_ID)
+    assert chosen.sharpe_per_session == pytest.approx(0.20)
+    record = read_decision(tmp_path / "journal", NEXT_SESSION)
+    assert record["model_version"] == chosen.run_sha256
+    assert record["status"] == "recommendation"
+
+
+def test_the_lightgbm_fixture_is_a_real_booster_in_a_tmp_registry(
+    booster_text: str, registry_root: Path
+) -> None:
+    """A12: el booster se entrena en el test y el registro sintetico no es el `runs/` del repo."""
+    assert lightgbm.Booster(model_str=booster_text)
+    assert "tree_sizes" in booster_text
+    assert registry_root.name.startswith("run_daily_registry")
+    assert not registry_root.is_relative_to(REPO_ROOT / "runs")
+    assert not registry_root.is_relative_to(REPO_ROOT / "data")
+    names = {path.name for path in registry_root.rglob("*") if path.is_file()}
+    assert names <= {"config.json", "result.json", "summary.md", "model.json"}
+
+
+def test_the_variant_path_is_deterministic_across_hash_seeds(
+    store_root: Path, registry_root: Path, tmp_path: Path
+) -> None:
+    """A13: dos procesos con `PYTHONHASHSEED` distinto dan el mismo informe y el mismo diario."""
+    outputs: list[str] = []
+    digests: list[bytes] = []
+    for seed in ("0", "1"):
+        journal = tmp_path / f"journal-{seed}"
+        environment = {**os.environ, "PYTHONHASHSEED": seed}
+        completed = subprocess.run(  # noqa: S603 - el ejecutable es el interprete de la sesion
+            [
+                sys.executable,
+                "-m",
+                "cfdtrader.delivery.run_daily",
+                "--as-of",
+                AS_OF_NEXT,
+                "--variant-id",
+                VARIANT_ID,
+                "--journal-root",
+                str(journal),
+                "--git-commit",
+                GIT_COMMIT,
+                "--data-root",
+                str(store_root),
+                "--runs-root",
+                str(registry_root),
+            ],
+            capture_output=True,
+            text=True,
+            env=environment,
+            cwd=REPO_ROOT,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
+        outputs.append(completed.stdout)
+        digests.append((journal / "decisions" / f"{NEXT_SESSION.isoformat()}.json").read_bytes())
+
+    assert outputs[0] == outputs[1]
+    assert digests[0] == digests[1]
