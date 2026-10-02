@@ -48,6 +48,8 @@ from cfdtrader.data.store import Store
 from cfdtrader.decision.gate import GateOutput, GateStatus, evaluate_gate, gate_sha256
 from cfdtrader.delivery import run_daily
 from cfdtrader.features import store as feature_store
+from cfdtrader.features.store import FEATURE_VERSION_PREFIX
+from cfdtrader.journal.decision_log import read_decision
 from cfdtrader.models.baseline import BASELINE_FEATURES
 
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[1]
@@ -80,6 +82,9 @@ AS_OF_STALE: Final[str] = "2026-09-18T12:00:00+00:00"
 #: Identidad declarada de la corrida sintetica del modelo.
 RUN_ID: Final[str] = "1" * 64
 
+#: Commit inyectado por el llamante (el modulo no lee git, #112).
+GIT_COMMIT: Final[str] = "5" * 40
+
 #: Guarda de diff (criterio 12): forma sancionada SUBSET + DISJOINT.
 BASE_COMMIT: Final[str] = "388ac87"
 WRITTEN: Final[frozenset[str]] = frozenset(
@@ -109,6 +114,7 @@ FROZEN: Final[frozenset[str]] = frozenset(
 
 #: La guardia de calidad de fila del modulo, por su nombre, para la prueba directa.
 _ROW_PROBLEM = run_daily._row_problem  # pyright: ignore[reportPrivateUsage]
+_PREDICTIONS = run_daily._predictions  # pyright: ignore[reportPrivateUsage]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -387,6 +393,10 @@ def test_a_missing_model_is_a_typed_error(
             AS_OF_NEXT,
             "--model-run",
             "deadbeef",
+            "--journal-root",
+            str(tmp_path / "journal"),
+            "--git-commit",
+            GIT_COMMIT,
             "--data-root",
             str(store_root),
             "--runs-root",
@@ -445,7 +455,9 @@ def test_predict_applies_the_last_fold_and_its_calibrator(tmp_path: Path) -> Non
 # ─────────────────────────────────────────────────────────────────────────────
 # A7: guardia de obsolescencia (§8.4)
 # ─────────────────────────────────────────────────────────────────────────────
-def test_a_stale_store_has_no_hint(store_root: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_a_stale_store_has_no_hint(
+    store_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """A4/A7: si la ultima sesion no es la anterior, `no_recommendation_stale_data` y sin pista."""
     code = run_daily.main(
         [
@@ -453,6 +465,10 @@ def test_a_stale_store_has_no_hint(store_root: Path, capsys: pytest.CaptureFixtu
             AS_OF_STALE,
             "--model-run",
             "deadbeef",
+            "--journal-root",
+            str(tmp_path / "journal"),
+            "--git-commit",
+            GIT_COMMIT,
             "--data-root",
             str(store_root),
         ]
@@ -468,7 +484,7 @@ def test_a_stale_store_has_no_hint(store_root: Path, capsys: pytest.CaptureFixtu
 
 
 def test_a_null_feature_row_is_a_data_quality_state(
-    constant_vix_root: Path, capsys: pytest.CaptureFixture[str]
+    constant_vix_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A7: una fila con un `null` en las diez features es `no_recommendation_data_quality`."""
     code = run_daily.main(
@@ -477,6 +493,10 @@ def test_a_null_feature_row_is_a_data_quality_state(
             AS_OF_NEXT,
             "--model-run",
             "deadbeef",
+            "--journal-root",
+            str(tmp_path / "journal"),
+            "--git-commit",
+            GIT_COMMIT,
             "--data-root",
             str(constant_vix_root),
         ]
@@ -612,9 +632,13 @@ def test_the_report_declares_the_honesty_fence_in_every_state() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # A10: determinismo entre procesos
 # ─────────────────────────────────────────────────────────────────────────────
-def test_the_report_is_deterministic_across_hash_seeds(store_root: Path, runs_root: Path) -> None:
+def test_the_report_is_deterministic_across_hash_seeds(
+    store_root: Path, runs_root: Path, tmp_path: Path
+) -> None:
     """A10: dos CLI con `PYTHONHASHSEED` distinto imprimen exactamente el mismo texto."""
     outputs: list[str] = []
+    digests: list[bytes] = []
+    journal_file = tmp_path / "journal" / "decisions" / f"{NEXT_SESSION.isoformat()}.json"
     for seed in ("0", "1"):
         environment = {**os.environ, "PYTHONHASHSEED": seed}
         completed = subprocess.run(  # noqa: S603 - el ejecutable es el interprete de la sesion
@@ -626,6 +650,10 @@ def test_the_report_is_deterministic_across_hash_seeds(store_root: Path, runs_ro
                 AS_OF_NEXT,
                 "--model-run",
                 RUN_ID,
+                "--journal-root",
+                str(tmp_path / "journal"),
+                "--git-commit",
+                GIT_COMMIT,
                 "--data-root",
                 str(store_root),
                 "--runs-root",
@@ -639,8 +667,10 @@ def test_the_report_is_deterministic_across_hash_seeds(store_root: Path, runs_ro
         )
         assert completed.returncode == 0, completed.stderr
         outputs.append(completed.stdout)
+        digests.append(journal_file.read_bytes())
 
     assert outputs[0] == outputs[1]
+    assert digests[0] == digests[1]  # A14: el diario es determinista byte a byte
     assert "estado: recommendation" in outputs[0]
     assert "gate_sha256: sha256:" in outputs[0]
 
@@ -673,7 +703,7 @@ def test_the_delivery_modules_are_the_only_ones_written() -> None:
 # Extra: la familia lineal y la guardia de obsolescencia
 # ─────────────────────────────────────────────────────────────────────────────
 def test_main_emits_the_recommendation_state(
-    store_root: Path, runs_root: Path, capsys: pytest.CaptureFixture[str]
+    store_root: Path, runs_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A6: el CLI completa el flujo y publica el estado `recommendation`."""
     code = run_daily.main(
@@ -682,6 +712,10 @@ def test_main_emits_the_recommendation_state(
             AS_OF_NEXT,
             "--model-run",
             RUN_ID,
+            "--journal-root",
+            str(tmp_path / "journal"),
+            "--git-commit",
+            GIT_COMMIT,
             "--data-root",
             str(store_root),
             "--runs-root",
@@ -708,6 +742,10 @@ def test_main_reports_a_configuration_error(
             AS_OF_NEXT,
             "--model-run",
             RUN_ID,
+            "--journal-root",
+            str(tmp_path / "journal"),
+            "--git-commit",
+            GIT_COMMIT,
             "--settings",
             str(tmp_path / "no-existe.yaml"),
         ]
@@ -726,6 +764,10 @@ def test_main_reports_a_missing_dataset_as_error(
             AS_OF_NEXT,
             "--model-run",
             RUN_ID,
+            "--journal-root",
+            str(tmp_path / "journal"),
+            "--git-commit",
+            GIT_COMMIT,
             "--data-root",
             str(tmp_path / "almacen-vacio"),
         ]
@@ -871,3 +913,228 @@ def test_the_module_exports_are_the_declared_contract() -> None:
         assert hasattr(module, name)
     assert issubclass(run_daily.MissingModelError, run_daily.DeliveryError)
     assert issubclass(run_daily.UnsupportedModelError, run_daily.DeliveryError)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #112: el diario de decisiones en el camino diario (A1-A11)
+# ─────────────────────────────────────────────────────────────────────────────
+def test_the_cli_requires_a_journal_root_and_a_git_commit(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A1: sin `--journal-root` y sin `--git-commit` el CLI sale con 2 y lo dice por stderr."""
+    assert run_daily.main(["--as-of", AS_OF_NEXT, "--model-run", RUN_ID]) == 2
+    assert "--journal-root" in capsys.readouterr().err
+
+    assert (
+        run_daily.main(
+            [
+                "--as-of",
+                AS_OF_NEXT,
+                "--model-run",
+                RUN_ID,
+                "--journal-root",
+                str(tmp_path / "journal"),
+            ]
+        )
+        == 2
+    )
+    assert "--git-commit" in capsys.readouterr().err
+
+
+def test_the_module_does_not_read_git_or_the_network() -> None:
+    """A2: la raiz del diario es el unico destino; el modulo no lanza procesos ni usa red."""
+    source = Path(run_daily.__file__).read_text(encoding="utf-8")
+    assert re.search(r"subprocess|os\.system|os\.popen", source) is None
+    assert re.search(r"import\s+(yfinance|requests|urllib)", source) is None
+
+
+def test_the_raw_and_calibrated_probabilities_come_from_the_last_fold(tmp_path: Path) -> None:
+    """A4: `_predictions` devuelve el `sigmoid(score)` crudo y su calibrador, sin reajustar."""
+    model = _write_model(tmp_path, _model_document(calibration=_PLATT))
+    raw, calibrated = _PREDICTIONS(model, _FEATURES)
+    assert raw == pytest.approx(run_daily.sigmoid(5.25))
+    assert calibrated == pytest.approx(1.0 / (1.0 + math.exp(-(2.0 * 5.25 - 1.0))))
+    assert raw != pytest.approx(calibrated)
+
+
+def test_a_recommendation_is_journaled(
+    store_root: Path, runs_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A3/A4/A8/A9/A10/A12: la fila lleva estado, versiones, las dos probabilidades y el informe."""
+    journal = tmp_path / "journal"
+    code = run_daily.main(
+        [
+            "--as-of",
+            AS_OF_NEXT,
+            "--model-run",
+            RUN_ID,
+            "--journal-root",
+            str(journal),
+            "--git-commit",
+            GIT_COMMIT,
+            "--data-root",
+            str(store_root),
+            "--runs-root",
+            str(runs_root),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 0
+
+    record = read_decision(journal, NEXT_SESSION)
+    assert record["trade_date"] == NEXT_SESSION.isoformat()
+    assert record["status"] == "recommendation"
+    assert record["direction"] is not None
+    assert record["model_version"] == RUN_ID
+    assert record["git_commit"] == GIT_COMMIT
+    assert cast("str", record["features_version"]).startswith(FEATURE_VERSION_PREFIX)
+    assert f"prob_calibrada: {record['prob_up_calibrated']!r}" in captured.out
+    raw = cast("float", record["prob_up_raw"])
+    calibrated = cast("float", record["prob_up_calibrated"])
+    assert raw != pytest.approx(calibrated)
+    # A4: la calibrada es el transform de Platt sobre la cruda: sigmoid(2 * logit(raw) - 1).
+    logit = math.log(raw / (1.0 - raw))
+    assert calibrated == pytest.approx(1.0 / (1.0 + math.exp(-(2.0 * logit - 1.0))))
+    # A10: el informe se persiste verbatim (el `print` anade un salto de linea al de `render`).
+    assert captured.out == cast("str", record["report_text"]) + "\n"
+    assert "journal" not in captured.out.lower()  # A12: la salida no gana lineas
+
+
+def test_the_no_recommendation_states_are_journaled_without_direction(
+    store_root: Path, constant_vix_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A5/A6: los estados "no se" se registran con su `status` y `direction = null`."""
+    stale = tmp_path / "stale"
+    assert (
+        run_daily.main(
+            [
+                "--as-of",
+                AS_OF_STALE,
+                "--model-run",
+                "deadbeef",
+                "--journal-root",
+                str(stale),
+                "--git-commit",
+                GIT_COMMIT,
+                "--data-root",
+                str(store_root),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    stale_record = read_decision(stale, STALE_SESSION)
+    assert stale_record["status"] == "no_recommendation_stale_data"
+    assert stale_record["direction"] is None
+    assert stale_record["prob_up_calibrated"] is None
+
+    quality = tmp_path / "quality"
+    assert (
+        run_daily.main(
+            [
+                "--as-of",
+                AS_OF_NEXT,
+                "--model-run",
+                "deadbeef",
+                "--journal-root",
+                str(quality),
+                "--git-commit",
+                GIT_COMMIT,
+                "--data-root",
+                str(constant_vix_root),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    quality_record = read_decision(quality, NEXT_SESSION)
+    assert quality_record["status"] == "no_recommendation_data_quality"
+    assert quality_record["direction"] is None
+
+
+def test_the_error_state_is_journaled_with_a_declared_features_version(
+    store_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A7: el estado `error` tambien registra; sin matriz, `features_version` es el centinela."""
+    empty = tmp_path / "empty"
+    code = run_daily.main(
+        [
+            "--as-of",
+            AS_OF_NEXT,
+            "--model-run",
+            RUN_ID,
+            "--journal-root",
+            str(empty),
+            "--git-commit",
+            GIT_COMMIT,
+            "--data-root",
+            str(tmp_path / "almacen-vacio"),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "estado: error" in captured.err
+    record = read_decision(empty, NEXT_SESSION)
+    assert record["status"] == "error"
+    assert record["features_version"] == run_daily.FEATURES_VERSION_UNAVAILABLE
+    assert captured.err == cast("str", record["report_text"]) + "\n"
+
+    missing_model = tmp_path / "missing-model"
+    assert (
+        run_daily.main(
+            [
+                "--as-of",
+                AS_OF_NEXT,
+                "--model-run",
+                "deadbeef",
+                "--journal-root",
+                str(missing_model),
+                "--git-commit",
+                GIT_COMMIT,
+                "--data-root",
+                str(store_root),
+                "--runs-root",
+                str(tmp_path / "runs"),
+            ]
+        )
+        == 2
+    )
+    capsys.readouterr()
+    with_matrix = read_decision(missing_model, NEXT_SESSION)
+    assert with_matrix["status"] == "error"
+    assert cast("str", with_matrix["features_version"]).startswith(FEATURE_VERSION_PREFIX)
+
+
+def test_the_journal_is_immutable_across_reruns(
+    store_root: Path, runs_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A11: misma entrada -> UNCHANGED; otro contenido -> error tipado, bytes intactos."""
+    journal = tmp_path / "journal"
+    args = [
+        "--as-of",
+        AS_OF_NEXT,
+        "--model-run",
+        RUN_ID,
+        "--journal-root",
+        str(journal),
+        "--git-commit",
+        GIT_COMMIT,
+        "--data-root",
+        str(store_root),
+        "--runs-root",
+        str(runs_root),
+    ]
+    assert run_daily.main(args) == 0
+    capsys.readouterr()
+    path = journal / "decisions" / f"{NEXT_SESSION.isoformat()}.json"
+    first = path.read_bytes()
+
+    assert run_daily.main(args) == 0  # la misma identidad con el mismo contenido: UNCHANGED
+    capsys.readouterr()
+    assert path.read_bytes() == first
+
+    changed = list(args)
+    changed[changed.index("--as-of") + 1] = "2026-09-17T13:00:00+00:00"
+    assert run_daily.main(changed) == 2
+    assert "diario" in capsys.readouterr().err
+    assert path.read_bytes() == first

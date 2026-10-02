@@ -38,12 +38,22 @@ tenga las diez features y un ``garch_forecast`` positivo (si no, el estado
 festivos/medias sesiones completos siguen siendo **#40 (OPEN)**: aqui solo se consume el minimo
 que impide que un dato viejo produzca una pista.
 
-Sin reloj, sin red y sin escribir nada
+Sin reloj y sin red
 --------------------------------------
 
 El modulo no consulta el reloj (``--as-of`` es obligatorio, ISO-8601 con zona), no importa
 ``yfinance``/``requests``/``urllib`` y no escribe en el almacen ni en el registro: solo lee el
-diario y ``runs/<run_sha256>/model.json``. Mismas entradas ⇒ misma salida byte a byte.
+almacen y ``runs/<run_sha256>/model.json``, y escribe **solo** el diario de decisiones que
+declara ``--journal-root`` (#112). Mismas entradas ⇒ misma salida byte a byte.
+
+Diario de decisiones (#112)
+---------------------------
+
+Cada ejecucion registra una fila de ``journal.decisions`` (la capa de #39) para la sesion
+evaluada, **en los cuatro estados** de §19.2 y con el ``report_text`` verbatim. La fila lleva
+``git_commit`` (inyectado), ``features_version`` (``FeatureMatrix.matrix_sha256``) y
+``model_version`` (el ``run_sha256``), mas ``prob_up_raw`` (el ``sigmoid(score)`` previo al
+calibrador) y ``prob_up_calibrated``. La salida por pantalla **no** cambia respecto a #110.
 """
 
 from __future__ import annotations
@@ -81,6 +91,8 @@ from cfdtrader.data.calendar import EASTERN, MarketCalendar, load_calendar
 from cfdtrader.data.settings import ConfigurationError, load_settings
 from cfdtrader.data.store import Store
 from cfdtrader.decision.gate import GateOutput, GateStatus, evaluate_gate
+from cfdtrader.features.store import FEATURE_VERSION_PREFIX
+from cfdtrader.journal.decision_log import DecisionLogError, Journal, build_decision
 from cfdtrader.models.baseline import BASELINE_FEATURES
 from cfdtrader.models.calibration import Calibration, sigmoid
 
@@ -110,6 +122,10 @@ HONESTY_FENCE: Final[tuple[str, ...]] = (
 #: Claves del bloque de la pista que el modelo lineal tiene que publicar en su ultimo fold.
 _LINEAR_FOLD_KEYS: Final[tuple[str, ...]] = ("mean", "scale", "coefficients", "intercept")
 
+#: ``features_version`` declarada cuando el almacen **no** pudo construir la matriz (estado
+#: ``error``): una ausencia declarada, nunca un digest inventado.
+FEATURES_VERSION_UNAVAILABLE: Final[str] = "unavailable"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Errores tipados
@@ -138,6 +154,16 @@ def predict(model_path: Path, features: Mapping[str, float]) -> float:
     :class:`MissingModelError`; uno que no sea la familia lineal (LightGBM) o que no declare
     exactamente las diez columnas de ``BASELINE_FEATURES`` es :class:`UnsupportedModelError`.
     """
+    return _predictions(model_path, features)[1]
+
+
+def _predictions(model_path: Path, features: Mapping[str, float]) -> tuple[float, float]:
+    """``(prob_up_raw, prob_up_calibrated)`` del ultimo fold: las dos se persisten (#112).
+
+    ``prob_up_raw`` es ``sigmoid(score)`` **antes** del calibrador (la probabilidad cruda de
+    §19.3); ``prob_up_calibrated`` es la que consume el gate. Sin recalibrador (o con el metodo
+    ``"none"``) coinciden.
+    """
     document = _load_document(model_path)
     model = cast("Mapping[str, object]", document["model"])
     if "library" in model:
@@ -159,17 +185,17 @@ def predict(model_path: Path, features: Mapping[str, float]) -> float:
     if not folds:
         raise UnsupportedModelError(f"{model_path}: el modelo no publica ningun fold")
     fold = cast("Mapping[str, object]", folds[-1])
-    return _calibrated_probability(fold, features, declared, model_path=model_path)
+    return _fold_probabilities(fold, features, declared, model_path=model_path)
 
 
-def _calibrated_probability(
+def _fold_probabilities(
     fold: Mapping[str, object],
     features: Mapping[str, float],
     declared: tuple[str, ...],
     *,
     model_path: Path,
-) -> float:
-    """El score del ultimo fold pasado por su calibrador (``sigmoid`` si no calibra)."""
+) -> tuple[float, float]:
+    """Las dos probabilidades del fold: cruda (``sigmoid``) y calibrada, sin reajustar."""
     for key in _LINEAR_FOLD_KEYS:
         if key not in fold:
             raise UnsupportedModelError(
@@ -181,14 +207,15 @@ def _calibrated_probability(
             f"la fila a predecir no trae las features declaradas: faltan {missing!r}"
         )
     score = _score(fold, features, declared, model_path=model_path)
+    raw = sigmoid(score)
     block = fold.get("calibration")
     if block is None:
-        return sigmoid(score)
+        return raw, raw
     calibrator = _calibration_from_payload(cast("Mapping[str, object]", block))
     if not calibrator.calibrated:
-        return sigmoid(score)
+        return raw, raw
     value = calibrator.calibrate([score])[0]
-    return sigmoid(score) if value is None else float(value)
+    return raw, (raw if value is None else float(value))
 
 
 def _score(
@@ -361,6 +388,114 @@ def _expected_move_pct(row: Mapping[str, object]) -> Decimal:
     return Decimal(str(math.sqrt(variance) * 100.0))
 
 
+def _record(
+    journal_root: Path,
+    *,
+    session: date,
+    as_of: datetime,
+    status: GateStatus,
+    features_version: str,
+    model_version: str,
+    git_commit: str,
+    report_text: str,
+    output: GateOutput | None = None,
+    prob_up_raw: float | None = None,
+) -> None:
+    """Escribe la fila de ``journal.decisions`` con la capa de #39 (esquema cerrado, inmutable).
+
+    ``report_text`` es el informe **tal cual se emitio** (el mismo texto que va a stdout/stderr),
+    persistido verbatim (§19.3). ``prob_up_raw`` solo lo aporta el estado ``recommendation`` (el
+    gate no lo calcula); en los estados "no se" y ``error`` va ``null``.
+    """
+    payload = build_decision(
+        trade_date=session,
+        as_of=as_of,
+        features_version=features_version,
+        model_version=model_version,
+        git_commit=git_commit,
+        report_text=report_text,
+        status=status,
+        output=output,
+        prob_up_raw=prob_up_raw,
+    )
+    Journal(journal_root).write("decisions", payload)
+
+
+def _record_or_report(
+    journal_root: Path,
+    *,
+    session: date,
+    as_of: datetime,
+    status: GateStatus,
+    features_version: str,
+    model_version: str,
+    git_commit: str,
+    report_text: str,
+    output: GateOutput | None = None,
+    prob_up_raw: float | None = None,
+) -> int | None:
+    """Registra la fila; si el diario no la acepta, publica el motivo y devuelve ``2``.
+
+    Un diario no escribible (raiz invalida, o la identidad de la sesion ya registrada con **otro**
+    contenido: ``JournalRewriteError``) convierte la ejecucion en un error visible: sin diario no
+    hay auditoria (§19.1), asi que **no** se emite la pista en silencio.
+    """
+    try:
+        _record(
+            journal_root,
+            session=session,
+            as_of=as_of,
+            status=status,
+            features_version=features_version,
+            model_version=model_version,
+            git_commit=git_commit,
+            report_text=report_text,
+            output=output,
+            prob_up_raw=prob_up_raw,
+        )
+    except DecisionLogError as error:
+        print(f"no se puede registrar la decision en el diario: {error}", file=sys.stderr)
+        return 2
+    return None
+
+
+def _fail_with_error(
+    journal_root: Path,
+    *,
+    session: date,
+    as_of: datetime,
+    snapshot_session: date | None,
+    model_source: str,
+    features_version: str,
+    model_version: str,
+    git_commit: str,
+    message: str,
+) -> int:
+    """Estado ``error``: registra la fila, imprime el informe por ``stderr`` y devuelve ``2``."""
+    text = render(
+        status=GateStatus.ERROR,
+        session=session,
+        as_of=as_of,
+        snapshot_session=snapshot_session,
+        model_source=model_source,
+        message=message,
+    )
+    failure = _record_or_report(
+        journal_root,
+        session=session,
+        as_of=as_of,
+        status=GateStatus.ERROR,
+        features_version=features_version,
+        model_version=model_version,
+        git_commit=git_commit,
+        report_text=text,
+    )
+    if failure is not None:
+        return failure
+    print(text, file=sys.stderr)
+    return 2
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # CLI
 # ─────────────────────────────────────────────────────────────────────────────
@@ -381,8 +516,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Imprime la pista del dia o su estado «sin recomendacion»; devuelve el codigo de salida.
 
     Codigos: ``0`` = informe emitido (``recommendation``, ``no_recommendation_stale_data`` o
-    ``no_recommendation_data_quality``); ``2`` = ``--as-of``/``--model-run`` ausentes o
-    invalidos, o fallo del pipeline (``error``), con el motivo por ``stderr`` y sin *traceback*.
+    ``no_recommendation_data_quality``); ``2`` = ``--as-of``/``--model-run``/``--journal-root``/
+    ``--git-commit`` ausentes o invalidos, fallo del pipeline (``error``) o diario no escribible,
+    con el motivo por ``stderr`` y sin *traceback*. Cada ejecucion registra la fila del diario
+    (§19.3) antes de devolver.
     """
     parser = argparse.ArgumentParser(
         prog="cfdtrader.delivery.run_daily",
@@ -393,6 +530,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--model-run", default=None, help="run_sha256 de la corrida de `runs/` (obligatorio)"
+    )
+    parser.add_argument(
+        "--journal-root", default=None, help="raiz del diario de decisiones (obligatorio)"
+    )
+    parser.add_argument(
+        "--git-commit",
+        default=None,
+        help="git rev-parse HEAD, inyectado por el llamante (obligatorio; el modulo no lee git)",
     )
     parser.add_argument("--data-root", type=Path, default=None, help="raiz del almacen")
     parser.add_argument("--settings", type=Path, default=None, help="ruta de settings.yaml")
@@ -414,6 +559,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    journal_root_arg = cast("str | None", args.journal_root)
+    if journal_root_arg is None or not journal_root_arg.strip():
+        print(
+            "no se puede emitir la pista diaria: --journal-root es obligatorio (sin diario no "
+            "hay auditoria, §19.1)",
+            file=sys.stderr,
+        )
+        return 2
+    git_commit = cast("str | None", args.git_commit)
+    if git_commit is None or not git_commit.strip():
+        print(
+            "no se puede emitir la pista diaria: --git-commit es obligatorio (el modulo no lee "
+            "git; p. ej. `git rev-parse HEAD`)",
+            file=sys.stderr,
+        )
+        return 2
 
     try:
         settings = load_settings(args.settings)
@@ -424,48 +585,77 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     data_root = Path(args.data_root) if args.data_root is not None else Path(settings.data.root)
     runs_root = Path(args.runs_root)
+    journal_root = Path(journal_root_arg)
     model_path = runs_root / model_run / MODEL_FILE
     model_source = str(model_path)
     as_of_et = moment.astimezone(EASTERN)
     session = as_of_et.date()
     snapshot_session: date | None = None
+    # La version del snapshot de features: se conoce en cuanto la matriz se construye; si no se
+    # llega a construir (estado `error`), se declara la ausencia en vez de inventar un digest.
+    features_version = FEATURES_VERSION_UNAVAILABLE
+    # La probabilidad cruda solo existe si el modelo se pudo puntuar (estado `recommendation`).
+    prob_up_raw: float | None = None
 
     try:
         previous = calendar.previous_session(session)
         matrix = build_feature_matrix(Store(data_root))
+        features_version = FEATURE_VERSION_PREFIX + matrix.matrix_sha256
         snapshot_session = matrix.last_session
         if snapshot_session != previous:
-            print(
-                render(
-                    status=GateStatus.NO_RECOMMENDATION_STALE_DATA,
-                    session=session,
-                    as_of=moment,
-                    snapshot_session=snapshot_session,
-                    model_source=model_source,
-                    message=(
-                        f"datos obsoletos (tech_stack.md §8.4): la ultima sesion del almacen es "
-                        f"{snapshot_session.isoformat()} y la sesion anterior a "
-                        f"{session.isoformat()} es {previous.isoformat()}; no se emite pista"
-                    ),
-                )
+            text = render(
+                status=GateStatus.NO_RECOMMENDATION_STALE_DATA,
+                session=session,
+                as_of=moment,
+                snapshot_session=snapshot_session,
+                model_source=model_source,
+                message=(
+                    f"datos obsoletos (tech_stack.md §8.4): la ultima sesion del almacen es "
+                    f"{snapshot_session.isoformat()} y la sesion anterior a "
+                    f"{session.isoformat()} es {previous.isoformat()}; no se emite pista"
+                ),
             )
+            failure = _record_or_report(
+                journal_root,
+                session=session,
+                as_of=moment,
+                status=GateStatus.NO_RECOMMENDATION_STALE_DATA,
+                features_version=features_version,
+                model_version=model_run,
+                git_commit=git_commit,
+                report_text=text,
+            )
+            if failure is not None:
+                return failure
+            print(text)
             return 0
         row = _last_row(matrix)
         problem = _row_problem(row)
         if problem is not None:
-            print(
-                render(
-                    status=GateStatus.NO_RECOMMENDATION_DATA_QUALITY,
-                    session=session,
-                    as_of=moment,
-                    snapshot_session=snapshot_session,
-                    model_source=model_source,
-                    message=f"calidad de datos (tech_stack.md §8.4): {problem}; no se emite pista",
-                )
+            text = render(
+                status=GateStatus.NO_RECOMMENDATION_DATA_QUALITY,
+                session=session,
+                as_of=moment,
+                snapshot_session=snapshot_session,
+                model_source=model_source,
+                message=f"calidad de datos (tech_stack.md §8.4): {problem}; no se emite pista",
             )
+            failure = _record_or_report(
+                journal_root,
+                session=session,
+                as_of=moment,
+                status=GateStatus.NO_RECOMMENDATION_DATA_QUALITY,
+                features_version=features_version,
+                model_version=model_run,
+                git_commit=git_commit,
+                report_text=text,
+            )
+            if failure is not None:
+                return failure
+            print(text)
             return 0
         features = {name: float(cast("float", row[name])) for name in BASELINE_FEATURES}
-        probability = predict(model_path, features)
+        prob_up_raw, probability = _predictions(model_path, features)
         move = _expected_move_pct(row)
         cost = cost_breakdown(
             model=declared_cost_model(),
@@ -498,45 +688,54 @@ def main(argv: Sequence[str] | None = None) -> int:
             observation_sessions_remaining=0,
         )
     except (MissingModelError, UnsupportedModelError) as error:
-        print(
-            render(
-                status=GateStatus.ERROR,
-                session=session,
-                as_of=moment,
-                snapshot_session=snapshot_session,
-                model_source=model_source,
-                message=str(error),
-            ),
-            file=sys.stderr,
-        )
-        return 2
-    except (DeliveryError, FeatureFrameError, ConfigurationError) as error:
-        print(
-            render(
-                status=GateStatus.ERROR,
-                session=session,
-                as_of=moment,
-                snapshot_session=snapshot_session,
-                model_source=model_source,
-                message=str(error),
-            ),
-            file=sys.stderr,
-        )
-        return 2
-
-    print(
-        render(
-            status=output.status,
+        return _fail_with_error(
+            journal_root,
             session=session,
             as_of=moment,
             snapshot_session=snapshot_session,
             model_source=model_source,
-            message=(
-                f"pista evaluada con el escenario declarado {SCENARIO_LABEL} y coste declarado"
-            ),
-            output=output,
+            features_version=features_version,
+            model_version=model_run,
+            git_commit=git_commit,
+            message=str(error),
         )
+    except (DeliveryError, FeatureFrameError, ConfigurationError) as error:
+        return _fail_with_error(
+            journal_root,
+            session=session,
+            as_of=moment,
+            snapshot_session=snapshot_session,
+            model_source=model_source,
+            features_version=features_version,
+            model_version=model_run,
+            git_commit=git_commit,
+            message=str(error),
+        )
+
+    text = render(
+        status=output.status,
+        session=session,
+        as_of=moment,
+        snapshot_session=snapshot_session,
+        model_source=model_source,
+        message=(f"pista evaluada con el escenario declarado {SCENARIO_LABEL} y coste declarado"),
+        output=output,
     )
+    failure = _record_or_report(
+        journal_root,
+        session=session,
+        as_of=moment,
+        status=output.status,
+        features_version=features_version,
+        model_version=model_run,
+        git_commit=git_commit,
+        report_text=text,
+        output=output,
+        prob_up_raw=prob_up_raw,
+    )
+    if failure is not None:
+        return failure
+    print(text)
     return 0
 
 
