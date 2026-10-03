@@ -23,6 +23,7 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
@@ -55,6 +56,8 @@ from cfdtrader.backtest.costs import (
     declared_slippage_assumption,
 )
 from cfdtrader.data.calendar import EASTERN, load_calendar
+from cfdtrader.data.news import ingest as ingest_news
+from cfdtrader.data.sources.news import Headline
 from cfdtrader.data.store import Store
 from cfdtrader.decision.gate import GateOutput, GateStatus, evaluate_gate, gate_sha256
 from cfdtrader.decision.overlay import OverlayDecision, OverlayState, disabled_overlay
@@ -62,6 +65,7 @@ from cfdtrader.delivery import run_daily
 from cfdtrader.features import store as feature_store
 from cfdtrader.features.store import FEATURE_VERSION_PREFIX
 from cfdtrader.journal.decision_log import Journal, build_decision, read_decision
+from cfdtrader.llm.base import LLMRequest, LLMResponse
 from cfdtrader.models.baseline import BASELINE_FEATURES
 
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[1]
@@ -936,6 +940,89 @@ def test_a12_the_daily_path_uses_the_public_bridge() -> None:
     classes = {node.name for node in ast.walk(ast.parse(source)) if isinstance(node, ast.ClassDef)}
     assert not [name for name in classes if "Bridge" in name or "Puente" in name]
     assert "OverlayClient(" in source, "el puente publico de llm.budget es el que se usa"
+
+
+def test_a9_without_a_provider_the_pipeline_still_recommends(
+    store_root: Path,
+    runs_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A8/A9: sin clave de LLM el overlay queda desactivado y **el dia se recomienda igual**.
+
+    Es la red de seguridad de `_compute_overlay`: cualquier fallo de configuracion, de proveedor o
+    de plantilla tiene que degradar a `disabled_error` y no romper el pipeline (§4.9).
+    """
+    monkeypatch.setenv("LLM_API_KEY", "")
+    journal_root = tmp_path / "journal"
+
+    assert _daily_run(store_root, runs_root, journal_root) == 0
+    captured = capsys.readouterr()
+
+    assert "estado: recommendation" in captured.out
+    row = _journal_row(journal_root)
+    assert row["llm_overlay"] == "disabled_error"
+    assert row["prompt_hashes"] == {}
+
+
+def test_the_whole_chain_runs_when_there_are_headlines(
+    store_root: Path,
+    runs_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """La cadena completa con proveedor simulado: titulares -> agente -> overlay -> gate -> diario.
+
+    Se copia el almacen de fixtures para **no contaminar** el compartido: si el dataset de
+    noticias quedase en `store_root`, las demas pruebas del fichero intentarian ejecutar el overlay
+    de verdad.
+    """
+    data_root = tmp_path / "store"
+    shutil.copytree(store_root, data_root)
+
+    moment = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
+    ingest_news(
+        store=Store(data_root),
+        headlines=(
+            Headline(
+                source="rss",
+                feed="qa",
+                title="La Fed mantiene los tipos sin cambios",
+                url="https://example.invalid/fed",
+                published_at=moment,
+            ),
+        ),
+        now=moment,
+    )
+
+    class _FakeProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete(self, request: LLMRequest) -> LLMResponse:
+            self.calls += 1
+            return LLMResponse(content='{"events": []}', model="falso", system_fingerprint="fp-qa")
+
+    provider = _FakeProvider()
+    monkeypatch.setenv("LLM_API_KEY", "clave-solo-para-esta-prueba")
+    monkeypatch.setenv("LLM_MODEL_EXTRACT", "modelo-falso-de-prueba")
+
+    def _fake_build(settings: object) -> _FakeProvider:
+        return provider
+
+    monkeypatch.setattr(run_daily, "build_client", _fake_build)
+
+    journal_root = tmp_path / "journal"
+    assert _daily_run(data_root, runs_root, journal_root) == 0
+    capsys.readouterr()
+
+    assert provider.calls == 1, "un lote de un titular es una llamada"
+    row = _journal_row(journal_root)
+    assert row["llm_overlay"] == "applied"
+    hashes = cast("Mapping[str, object]", row["prompt_hashes"])
+    assert list(hashes) == [PROMPT_TEMPLATE_NAME], "el hash del prompt queda registrado"
 
 
 def test_a12_the_cost_layer_still_does_not_touch_the_decision_layer() -> None:
