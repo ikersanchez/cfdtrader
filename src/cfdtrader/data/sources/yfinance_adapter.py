@@ -19,13 +19,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import date, datetime
-from typing import cast
+from typing import Any, cast
 
 import pandas as pd
 import polars as pl
 import yfinance as yf
 from tenacity import Retrying, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from cfdtrader.data.earnings import EarningsMoment, RawEarnings
 from cfdtrader.data.sources.base import (
     FetchRequest,
     FetchResult,
@@ -38,7 +39,7 @@ from cfdtrader.data.sources.base import (
 )
 from cfdtrader.data.sources.frames import empty_canonical_frame, session_close_utc, to_utc
 
-__all__ = ["YFinanceAdapter"]
+__all__ = ["YFinanceAdapter", "YFinanceEarningsAdapter"]
 
 #: Nombres canónicos y sus equivalentes en la respuesta de Yahoo (en minúsculas).
 _COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
@@ -403,3 +404,50 @@ def _frame(data: dict[str, list[object]], *, interval: str | None) -> pl.DataFra
     if interval is not None:
         frame = frame.with_columns(pl.lit(interval).alias("interval"))
     return frame.sort("as_of")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Resultados de mega-caps (parte (c) de #114, #126)
+# ─────────────────────────────────────────────────────────────────────────────
+class YFinanceEarningsAdapter:
+    """Las fechas de resultados de una mega-cap, desde ``yfinance``, sin inventar nada.
+
+    Es el **único** sitio del proyecto que pide resultados a Yahoo, con la misma disciplina que
+    ``YFinanceAdapter``: detrás de una interfaz propia y con el cliente inyectable, de modo que
+    las pruebas no abran red (``ticker_factory``).
+
+    Una fecha devuelta por Yahoo es una **estimación** y quien la consume la declara como tal;
+    el ``moment`` (BMO/AMC) se declara ``unknown`` salvo que la fuente lo dé de forma explícita,
+    porque **asumirlo sería inventarlo**.
+
+    Implementa la interfaz :class:`cfdtrader.data.earnings.EarningsSource` (``name`` +
+    ``earnings_dates``), que es lo que el ingestor necesita.
+    """
+
+    name = "yfinance"
+
+    def __init__(self, *, ticker_factory: Callable[[str], Any] | None = None) -> None:
+        self._ticker_factory: Callable[[str], Any] = (
+            ticker_factory if ticker_factory is not None else yf.Ticker
+        )
+
+    def earnings_dates(self, symbol: str, *, now: datetime) -> tuple[RawEarnings, ...]:
+        """Las fechas conocidas para ``symbol`` en ``now`` (estimadas, y sin momento declarado).
+
+        Yahoo puede no devolver nada para un emisor: eso son **cero fechas**, no un error. El
+        ``observed_at`` de cada fecha es ``now``: es el instante en que se observó la estimación.
+        """
+        ticker = self._ticker_factory(symbol)
+        frame = ticker.get_earnings_dates(limit=12)
+        index = getattr(frame, "index", None)
+        if index is None:
+            return ()
+        found: dict[date, RawEarnings] = {}
+        for value in index:
+            day = _day_of(value)
+            if day is None:
+                continue
+            found[day] = RawEarnings(
+                symbol=symbol, on=day, moment=EarningsMoment.UNKNOWN, observed_at=now
+            )
+        return tuple(found[day] for day in sorted(found))

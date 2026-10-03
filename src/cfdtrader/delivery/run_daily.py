@@ -143,6 +143,7 @@ from cfdtrader.data.calendar import (
     load_calendar,
     load_fomc_calendar,
 )
+from cfdtrader.data.earnings import EarningsEvent, earnings_on
 from cfdtrader.data.macro import MacroPublication, publications_on
 from cfdtrader.data.news import load_headlines
 from cfdtrader.data.settings import ConfigurationError, load_settings
@@ -530,6 +531,28 @@ def _day_publications(
         return ()
 
 
+def _day_earnings(store: Store, session: date, moment: datetime) -> tuple[EarningsEvent, ...]:
+    """Los resultados de mega-caps del dia, o ``()`` si no se pueden leer (#126).
+
+    Se leen del almacen (``raw.earnings``), nunca de ``yfinance``: la ingesta es el CLI de
+    ``data.earnings``. Si el almacen no se puede leer, el dia se emite **sin** su seccion.
+    """
+    try:
+        return earnings_on(store, session=session, as_of=moment)
+    except (ConfigurationError, duckdb.Error) as failure:
+        print(f"no se pueden leer los resultados de mega-caps: {failure}", file=sys.stderr)
+        return ()
+
+
+def _earnings_blockers(earnings: Sequence[EarningsEvent]) -> tuple[str, ...]:
+    """Los codigos de los resultados **confirmados** del dia (una fecha estimada no bloquea).
+
+    Se calculan aqui, no en el gate: una fecha confirmada es un evento del calendario y su
+    codigo viaja en `blocking_events` del diario sin que el gate gane una regla nueva (§19.8).
+    """
+    return tuple(f"earnings_confirmado:{event.symbol}" for event in earnings if event.blocking)
+
+
 def render(
     *,
     status: GateStatus,
@@ -541,6 +564,7 @@ def render(
     output: GateOutput | None = None,
     calendar_events: EventCalendarSignal | None = None,
     publications: Sequence[MacroPublication] = (),
+    earnings: Sequence[EarningsEvent] = (),
     notes: Sequence[str] = (),
 ) -> str:
     """El informe del dia: cabecera, pista (si la hay), bloqueos, motivo y valla (#109, #40).
@@ -563,6 +587,7 @@ def render(
     if calendar_events is not None:
         lines.extend(_calendar_lines(calendar_events))
     lines.extend(_publication_lines(publications))
+    lines.extend(_earnings_lines(earnings))
     lines.extend(f"nota: {note}" for note in notes)
     lines.append(f"motivo: {message}")
     lines.append("")
@@ -631,6 +656,21 @@ def _publication_lines(publications: Sequence[MacroPublication]) -> list[str]:
             f"disponible en el as_of: {available}"
         )
     return lines
+
+
+def _earnings_lines(earnings: Sequence[EarningsEvent]) -> list[str]:
+    """Los resultados de mega-caps del dia, con su momento y su certeza (#126).
+
+    El **momento** (``bmo``/``amc``/``unknown``) se publica tal cual: cuando la fuente no lo da,
+    se declara ``unknown`` en vez de asumir uno. Una fecha **estimada** se lee con
+    ``bloquea: no``; solo una **confirmada** bloquea y su codigo va a ``blocking_events``.
+    """
+    return [
+        f"resultado_mega_cap: {event.symbol} | {event.name} | {event.on.isoformat()} | "
+        f"momento: {event.moment.value} | certeza: {event.certainty.value} | "
+        f"bloquea: {'si' if event.blocking else 'no'}"
+        for event in earnings
+    ]
 
 
 def _date_or_null(value: date | None) -> str:
@@ -769,6 +809,7 @@ def _record(
     prob_up_raw: float | None = None,
     overlay: OverlayDecision | None = None,
     prompt_hashes: Mapping[str, object] | None = None,
+    extra_blockers: Sequence[str] = (),
 ) -> None:
     """Escribe la fila de ``journal.decisions`` con la capa de #39 (esquema cerrado, inmutable).
 
@@ -776,7 +817,9 @@ def _record(
     persistido verbatim (§19.3). ``prob_up_raw`` solo lo aporta el estado ``recommendation`` (el
     gate no lo calcula); en los estados "no se" y ``error`` va ``null``. ``overlay`` y
     ``prompt_hashes`` son lo que hizo el overlay del LLM ese dia (#35): sin overlay declarado, la
-    columna va ``null`` y el mapa vacio, nunca un valor inventado.
+    columna va ``null`` y el mapa vacio, nunca un valor inventado. ``extra_blockers`` son los
+    eventos del dia que bloquean y **no** son reglas del gate (p. ej. un resultado de mega-cap
+    confirmado, #126): se anaden a los codigos que ya derivó el gate.
     """
     payload = build_decision(
         trade_date=session,
@@ -791,6 +834,11 @@ def _record(
         llm_overlay=None if overlay is None else overlay.state.value,
         prompt_hashes=prompt_hashes,
     )
+    if extra_blockers:
+        payload["blocking_events"] = [
+            *cast("list[str]", payload["blocking_events"]),
+            *extra_blockers,
+        ]
     Journal(journal_root).write("decisions", payload)
 
 
@@ -808,6 +856,7 @@ def _record_or_report(
     prob_up_raw: float | None = None,
     overlay: OverlayDecision | None = None,
     prompt_hashes: Mapping[str, object] | None = None,
+    extra_blockers: Sequence[str] = (),
 ) -> int | None:
     """Registra la fila; si el diario no la acepta, publica el motivo y devuelve ``2``.
 
@@ -829,6 +878,7 @@ def _record_or_report(
             prob_up_raw=prob_up_raw,
             overlay=overlay,
             prompt_hashes=prompt_hashes,
+            extra_blockers=extra_blockers,
         )
     except DecisionLogError as error:
         print(f"no se puede registrar la decision en el diario: {error}", file=sys.stderr)
@@ -1102,6 +1152,9 @@ def _deliver(
     calendar_events: EventCalendarSignal | None = None
     # Las publicaciones macro del dia (informativas, sin bloqueo): parte (b) de #114 (#125).
     publications: tuple[MacroPublication, ...] = ()
+    # Los resultados de mega-caps del dia: parte (c) de #114 (#126). Solo los **confirmados**
+    # bloquean; su codigo entra en `blocking_events` sin que el gate gane una regla nueva (§19.8).
+    earnings: tuple[EarningsEvent, ...] = ()
     # El conjunto de FOMC declarado y su procedencia (parte (a) de #114). Un año no declarado deja
     # el conjunto vacio **y una nota**: lo que no puede volver es el silencio del literal `()`.
     fomc_dates: tuple[date, ...] = ()
@@ -1131,9 +1184,12 @@ def _deliver(
             )
         observer.add_version("features_version", features_version)
         observer.add_version("model_version", model_version)
-        # Las publicaciones macro del dia se leen del registro y del almacen; nunca de la red.
+        # Las publicaciones macro y los resultados de mega-caps se leen del almacen; nunca de
+        # la red (el camino diario no llama a `yfinance`).
         with observer.stage("macro-publications"):
             publications = _day_publications(store, session, moment)
+            earnings = _day_earnings(store, session, moment)
+        earnings_blockers = _earnings_blockers(earnings)
         if guard.blocks and guard.verdict is not GuardVerdict.MARKET_CLOSED:
             # Aqui solo llegan los dos "no se" de frescura. La clausura (#113, MARKET_CLOSED) **no**
             # para el camino: el gate la convierte en un `NOTHING` justificado (regla 19) que si se
@@ -1146,6 +1202,7 @@ def _deliver(
                 model_source=model_source,
                 message=_guard_message(guard),
                 publications=publications,
+                earnings=earnings,
             )
             with observer.stage("journal"):
                 failure = _record_or_report(
@@ -1157,6 +1214,7 @@ def _deliver(
                     model_version=model_version,
                     git_commit=git_commit,
                     report_text=text,
+                    extra_blockers=earnings_blockers,
                 )
             if failure is not None:
                 return failure
@@ -1173,6 +1231,7 @@ def _deliver(
                 model_source=model_source,
                 message=f"calidad de datos (tech_stack.md §8.4): {problem}; no se emite pista",
                 publications=publications,
+                earnings=earnings,
             )
             with observer.stage("journal"):
                 failure = _record_or_report(
@@ -1184,6 +1243,7 @@ def _deliver(
                     model_version=model_version,
                     git_commit=git_commit,
                     report_text=text,
+                    extra_blockers=earnings_blockers,
                 )
             if failure is not None:
                 return failure
@@ -1273,6 +1333,7 @@ def _deliver(
         output=output,
         calendar_events=calendar_events,
         publications=publications,
+        earnings=earnings,
         notes=() if fomc_declared else (fomc_note,),
     )
     with observer.stage("journal"):
@@ -1289,6 +1350,7 @@ def _deliver(
             prob_up_raw=prob_up_raw,
             overlay=overlay,
             prompt_hashes=prompt_hashes,
+            extra_blockers=earnings_blockers,
         )
     if failure is not None:
         return failure

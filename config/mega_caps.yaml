@@ -1,0 +1,38 @@
+# Lista declarada de mega-caps del S&P 500 — parte (c) de #114 (#126).
+#
+# Esquema: `src/cfdtrader/data/earnings.py` (Pydantic, `extra="forbid"`).
+#
+# La fuente de las fechas de resultados es `yfinance` (ya es dependencia): `plan.md` §19.8 y la
+# decisión del propietario del 2026-10-03. `yfinance` **no** forma parte del camino diario: un
+# adaptador ingiere los eventos en `raw.earnings` y el diario los lee de ahí.
+#
+# ⚠️ Una fecha de `yfinance` es una **estimación** y se mueve conforme se acerca el evento.
+# Por eso el valor por defecto de una fecha sin confirmar es `estimated`, y una fecha estimada
+# **no bloquea**. Sólo una fecha **confirmada** —declarada aquí por el propietario, con su
+# `moment` (BMO/AMC)— entra en `blocking_events`.
+#
+# `symbol`: ticker de Yahoo. `name`: nombre legible. `confirmed_earnings`: fechas anunciadas por
+# la compañía que el propietario ha verificado (vacío = nada confirmado todavía; no se inventa).
+
+version: 1
+dataset: earnings
+source: yfinance
+declared_on: 2026-10-03
+
+issuers:
+  - symbol: NVDA
+    name: NVIDIA
+  - symbol: MSFT
+    name: Microsoft
+  - symbol: AAPL
+    name: Apple
+  - symbol: AMZN
+    name: Amazon
+  - symbol: GOOGL
+    name: Alphabet
+  - symbol: META
+    name: Meta Platforms
+  - symbol: AVGO
+    name: Broadcom
+  - symbol: TSLA
+    name: Tesla

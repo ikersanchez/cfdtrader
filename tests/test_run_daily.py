@@ -61,6 +61,7 @@ from cfdtrader.backtest.costs import (
     declared_slippage_assumption,
 )
 from cfdtrader.data.calendar import EASTERN, MADRID, load_calendar
+from cfdtrader.data.earnings import EarningsCertainty, EarningsEvent, EarningsMoment
 from cfdtrader.data.macro import MacroPublication, publications_on
 from cfdtrader.data.news import ingest as ingest_news
 from cfdtrader.data.sources.fred_adapter import MacroSeriesRegistry, MacroSeriesSpec
@@ -2759,3 +2760,102 @@ def test_125_the_report_publishes_the_publications_without_blocking() -> None:
     assert "publicacion_macro:" not in without
     assert "bloqueo:" not in text
     assert "evento_bloqueante:" not in text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #126 · Resultados de mega-caps: estimado no bloquea, confirmado si (parte (c) de #114)
+# ─────────────────────────────────────────────────────────────────────────────
+def _store_with_earnings(root: Path, *, certainty: str, session: date) -> None:
+    """El almacen sintetico **mas** una observacion de resultado de NVDA para `session`."""
+    _build_store(root, vix_mode="varying")
+    observed = datetime(2026, 9, 10, 12, 0, tzinfo=UTC)
+    Store(root).append(
+        "raw",
+        "earnings",
+        [
+            {
+                "source": "yfinance",
+                "series_id": f"NVDA@{session.isoformat()}",
+                "as_of": observed,
+                "fetched_at": FETCHED_AT,
+                "published_at": observed,
+                "name": "NVIDIA",
+                "event_date": session,
+                "moment": "amc",
+                "certainty": certainty,
+                "observed_at": observed,
+            }
+        ],
+    )
+
+
+def test_126_the_report_publishes_earnings_with_moment_and_certainty() -> None:
+    """El informe publica el momento (BMO/AMC/unknown) y la certeza, sin asumir el momento."""
+    session = date(2026, 9, 17)
+    observed = datetime(2026, 9, 10, 12, 0, tzinfo=UTC)
+    confirmed = EarningsEvent(
+        symbol="NVDA",
+        name="NVIDIA",
+        on=session,
+        moment=EarningsMoment.AMC,
+        certainty=EarningsCertainty.CONFIRMED,
+        observed_at=observed,
+    )
+    estimated = EarningsEvent(
+        symbol="AAPL",
+        name="Apple",
+        on=session,
+        moment=EarningsMoment.UNKNOWN,
+        certainty=EarningsCertainty.ESTIMATED,
+        observed_at=observed,
+    )
+
+    text = run_daily.render(
+        status=GateStatus.RECOMMENDATION,
+        session=session,
+        as_of=_instant(session),
+        snapshot_session=session,
+        model_source="modelo",
+        message="motivo",
+        earnings=(confirmed, estimated),
+    )
+
+    assert (
+        "resultado_mega_cap: NVDA | NVIDIA | 2026-09-17 | momento: amc | certeza: confirmed | "
+        "bloquea: si" in text
+    )
+    assert (
+        "resultado_mega_cap: AAPL | Apple | 2026-09-17 | momento: unknown | certeza: estimated | "
+        "bloquea: no" in text
+    )
+    assert "bloqueo:" not in text, "la seccion de earnings no inventa bloqueos del gate"
+
+
+def test_126_only_a_confirmed_earnings_enters_blocking_events(
+    runs_root: Path, tmp_path: Path
+) -> None:
+    """Una fecha confirmada deja su codigo en `blocking_events`; una estimada, no."""
+    _store_with_earnings(tmp_path / "estimated_store", certainty="estimated", session=NEXT_SESSION)
+    estimated_journal = tmp_path / "estimated_journal"
+    assert _daily_run(tmp_path / "estimated_store", runs_root, estimated_journal) == 0
+    estimated = cast("list[str]", _journal_row(estimated_journal)["blocking_events"])
+    assert not any(code.startswith("earnings_confirmado") for code in estimated)
+
+    _store_with_earnings(tmp_path / "confirmed_store", certainty="confirmed", session=NEXT_SESSION)
+    confirmed_journal = tmp_path / "confirmed_journal"
+    assert _daily_run(tmp_path / "confirmed_store", runs_root, confirmed_journal) == 0
+    confirmed = cast("list[str]", _journal_row(confirmed_journal)["blocking_events"])
+    assert "earnings_confirmado:NVDA" in confirmed
+
+
+def test_126_a_day_without_earnings_adds_no_line() -> None:
+    """Un dia sin resultados no anade ninguna linea."""
+    text = run_daily.render(
+        status=GateStatus.RECOMMENDATION,
+        session=NEXT_SESSION,
+        as_of=_instant(NEXT_SESSION),
+        snapshot_session=NEXT_SESSION,
+        model_source="modelo",
+        message="motivo",
+    )
+    assert "resultado_mega_cap:" not in text
