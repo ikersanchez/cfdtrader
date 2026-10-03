@@ -99,6 +99,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Final, cast
 
+import duckdb
 import numpy as np
 from lightgbm import Booster
 from lightgbm.basic import LightGBMError
@@ -142,6 +143,7 @@ from cfdtrader.data.calendar import (
     load_calendar,
     load_fomc_calendar,
 )
+from cfdtrader.data.macro import MacroPublication, publications_on
 from cfdtrader.data.news import load_headlines
 from cfdtrader.data.settings import ConfigurationError, load_settings
 from cfdtrader.data.store import Store
@@ -511,6 +513,23 @@ def _day_events(
         return None
 
 
+def _day_publications(
+    store: Store, session: date, moment: datetime
+) -> tuple[MacroPublication, ...]:
+    """Las publicaciones macro del dia, o ``()`` si no se pueden leer (#125).
+
+    Es **informativa**: no bloquea nada ni cambia la direccion, el `tier` ni el
+    `blocking_events`. Si el registro macro o el almacen no se pueden leer, el dia se emite
+    **sin** su seccion en vez de caerse: es la degradacion gracil de §7.4 aplicada a una capa
+    que no esta en el camino critico.
+    """
+    try:
+        return publications_on(store=store, session=session, as_of=moment)
+    except (ConfigurationError, duckdb.Error) as failure:
+        print(f"no se pueden leer las publicaciones macro del dia: {failure}", file=sys.stderr)
+        return ()
+
+
 def render(
     *,
     status: GateStatus,
@@ -521,6 +540,7 @@ def render(
     message: str,
     output: GateOutput | None = None,
     calendar_events: EventCalendarSignal | None = None,
+    publications: Sequence[MacroPublication] = (),
     notes: Sequence[str] = (),
 ) -> str:
     """El informe del dia: cabecera, pista (si la hay), bloqueos, motivo y valla (#109, #40).
@@ -542,6 +562,7 @@ def render(
         lines.extend(_blocker_lines(output))
     if calendar_events is not None:
         lines.extend(_calendar_lines(calendar_events))
+    lines.extend(_publication_lines(publications))
     lines.extend(f"nota: {note}" for note in notes)
     lines.append(f"motivo: {message}")
     lines.append("")
@@ -584,6 +605,32 @@ def _calendar_lines(signal: EventCalendarSignal) -> list[str]:
         f"{'evento_bloqueante' if event.blocking else 'evento'}: {event.kind.value} | {event.name}"
         for event in signal.events
     ]
+
+
+def _publication_lines(publications: Sequence[MacroPublication]) -> list[str]:
+    """Las publicaciones macro del dia, con su hora real y su disponibilidad (#125).
+
+    Una publicacion **no bloquea**: va con prefijo propio (`publicacion_macro:`) para no
+    confundirse con un `bloqueo:` del gate ni con un `evento:` del calendario. Cuando la serie
+    no declara hora, se publica **declarando la ausencia**, nunca con una inventada; entonces la
+    disponibilidad queda `no evaluable`.
+    """
+    lines: list[str] = []
+    for publication in publications:
+        if publication.release_time_et is None:
+            when = "hora no declarada"
+            available = "no evaluable"
+        else:
+            at_et = cast("datetime", publication.release_at_et)
+            at_utc = cast("datetime", publication.release_at_utc)
+            at_madrid = cast("datetime", publication.release_at_madrid)
+            when = f"{at_et:%H:%M} ET ({at_utc:%H:%M} UTC / {at_madrid:%H:%M} Madrid)"
+            available = "si" if publication.available_at_as_of else "no"
+        lines.append(
+            f"publicacion_macro: {publication.series_id} | {publication.name} | {when} | "
+            f"disponible en el as_of: {available}"
+        )
+    return lines
 
 
 def _date_or_null(value: date | None) -> str:
@@ -1053,6 +1100,8 @@ def _deliver(
     # Los eventos del dia (informativos incluidos) se publican en el informe; si la senal del
     # calendario no se puede calcular, el informe sale **sin** su seccion en vez de caerse (#121).
     calendar_events: EventCalendarSignal | None = None
+    # Las publicaciones macro del dia (informativas, sin bloqueo): parte (b) de #114 (#125).
+    publications: tuple[MacroPublication, ...] = ()
     # El conjunto de FOMC declarado y su procedencia (parte (a) de #114). Un año no declarado deja
     # el conjunto vacio **y una nota**: lo que no puede volver es el silencio del literal `()`.
     fomc_dates: tuple[date, ...] = ()
@@ -1069,8 +1118,9 @@ def _deliver(
             model_version = entry.run_sha256
             model_path = runs_root / entry.run_sha256 / MODEL_FILE
             model_source = f"{model_path} (variant_id: {entry.variant_id})"
+        store = Store(data_root)
         with observer.stage("features"):
-            matrix = build_feature_matrix(Store(data_root))
+            matrix = build_feature_matrix(store)
             features_version = FEATURE_VERSION_PREFIX + matrix.matrix_sha256
             snapshot_session = matrix.last_session
             guard = session_guard(
@@ -1081,6 +1131,9 @@ def _deliver(
             )
         observer.add_version("features_version", features_version)
         observer.add_version("model_version", model_version)
+        # Las publicaciones macro del dia se leen del registro y del almacen; nunca de la red.
+        with observer.stage("macro-publications"):
+            publications = _day_publications(store, session, moment)
         if guard.blocks and guard.verdict is not GuardVerdict.MARKET_CLOSED:
             # Aqui solo llegan los dos "no se" de frescura. La clausura (#113, MARKET_CLOSED) **no**
             # para el camino: el gate la convierte en un `NOTHING` justificado (regla 19) que si se
@@ -1092,6 +1145,7 @@ def _deliver(
                 snapshot_session=snapshot_session,
                 model_source=model_source,
                 message=_guard_message(guard),
+                publications=publications,
             )
             with observer.stage("journal"):
                 failure = _record_or_report(
@@ -1118,6 +1172,7 @@ def _deliver(
                 snapshot_session=snapshot_session,
                 model_source=model_source,
                 message=f"calidad de datos (tech_stack.md §8.4): {problem}; no se emite pista",
+                publications=publications,
             )
             with observer.stage("journal"):
                 failure = _record_or_report(
@@ -1217,6 +1272,7 @@ def _deliver(
         message=_guard_message(guard),
         output=output,
         calendar_events=calendar_events,
+        publications=publications,
         notes=() if fomc_declared else (fomc_note,),
     )
     with observer.stage("journal"):

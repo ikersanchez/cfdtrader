@@ -74,8 +74,11 @@ class MacroSeriesSpec(BaseModel):
     dataset: str = "macro"
     unit: str = ""
     seasonal_adjustment: str | None = None
-    #: Hora oficial de publicación en ``America/New_York`` (08:30 en BLS/BEA).
-    release_time_et: time = time(8, 30)
+    #: Hora oficial de publicación en ``America/New_York`` (08:30 en BLS/BEA), o ``None``
+    #: si la serie **no la declara**: entonces el instante de publicación no se puede
+    #: determinar y ``published_at`` queda ``NULL``. Un valor por defecto inventaría una
+    #: hora que la serie no confirmó (#125).
+    release_time_et: time | None = None
     #: ``True`` si la fecha de publicación la da la *vintage* de ALFRED
     #: (BLS/BEA). ``False`` si el valor se conoce el día al que se refiere
     #: (series de mercado), con el desplazamiento de abajo.
@@ -87,8 +90,8 @@ class MacroSeriesSpec(BaseModel):
     notes: str | None = None
 
     @property
-    def release_hour_et(self) -> time:
-        """Hora de publicación en ET, tal y como se declaró."""
+    def release_hour_et(self) -> time | None:
+        """Hora de publicación en ET tal y como se declaró, o ``None`` si no se declaró."""
         return self.release_time_et
 
 
@@ -357,6 +360,10 @@ def _published_at(spec: MacroSeriesSpec, *, day: date, realtime_start: object) -
     Es la pieza que hace que el *point-in-time* sea real: una serie de las 08:30
     ET **no** es visible en el snapshot de las 08:45 ET del día anterior.
     """
+    if spec.release_time_et is None:
+        # Sin hora declarada no se puede situar el comunicado en el día: ``NULL``, nunca
+        # una hora inventada (y el almacén cae a ``fetched_at`` para la visibilidad).
+        return None
     if spec.publication_from_realtime_start:
         release_day = _as_date(realtime_start)
         if release_day is None:

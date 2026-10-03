@@ -28,7 +28,7 @@ import json
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Final
 
@@ -37,9 +37,10 @@ import httpx
 import polars as pl
 import yaml
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from cfdtrader.data.calendar import EASTERN, MADRID
 from cfdtrader.data.settings import (
     DEFAULT_MACRO_SERIES_PATH,
     REPO_ROOT,
@@ -60,11 +61,13 @@ __all__ = [
     "EXIT_CONFIG_ERROR",
     "EXIT_MISSING_API_KEY",
     "EXIT_OK",
+    "MacroPublication",
     "MacroReport",
     "MacroRow",
     "ingest",
     "load_macro_series",
     "main",
+    "publications_on",
 ]
 
 EXIT_OK: Final[int] = 0
@@ -156,6 +159,132 @@ def load_macro_series(path: Path | str | None = None) -> MacroSeriesRegistry:
         return MacroSeriesRegistry.model_validate(loaded)
     except ValidationError as error:
         raise ConfigurationError(f"registro macro inválido en {target}: {error}") from error
+
+
+class MacroPublication(BaseModel):
+    """Una publicación macro del día: qué se publicó, a qué hora y si ya estaba en el ``as_of``.
+
+    No lleva **ningún** campo de bloqueo, a propósito: una publicación macro por sí sola no
+    cambia la dirección, el ``tier`` ni el ``blocking_events`` del día (#125).
+    ``available_at_as_of`` es información, no una regla: sólo dice si el comunicado de las
+    08:30 ET ya estaba en el instante de la decisión (08:45 ET) o todavía no.
+
+    ``release_time_et`` (y los tres instantes) son ``None`` cuando la serie **no declara** hora:
+    entonces no se inventa ninguna, y ``available_at_as_of`` queda ``None`` («no evaluable»).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    series_id: str
+    name: str
+    unit: str = ""
+    release_time_et: time | None = Field(
+        default=None, description="hora declarada en ET, o None si la serie no la declara"
+    )
+    release_at_et: datetime | None = Field(
+        default=None, description="instante del comunicado en ET"
+    )
+    release_at_utc: datetime | None = Field(default=None, description="el mismo instante en UTC")
+    release_at_madrid: datetime | None = Field(
+        default=None, description="el mismo instante en hora de Madrid (sólo presentación)"
+    )
+    available_at_as_of: bool | None = Field(
+        default=None,
+        description="True/False si la hora se declara; None si no se puede evaluar",
+    )
+
+
+def publications_on(
+    *,
+    store: Store,
+    session: date,
+    as_of: datetime,
+    registry: MacroSeriesRegistry | None = None,
+    series_path: Path | str | None = None,
+) -> tuple[MacroPublication, ...]:
+    """Las publicaciones macro del día ``session``, con su hora real y su disponibilidad.
+
+    Cruza las **dos** fuentes con la disciplina *point-in-time*:
+
+    - ``config/macro_series.yaml`` declara, por serie, ``release_time_et`` (la hora oficial en
+      ET). De ahí sale la **hora** del comunicado.
+    - el almacén ``raw.macro`` dice **qué se publicó de verdad** ese día: la *vintage*
+      ``realtime_start`` de ALFRED es la fecha real del comunicado (CPI/PCE/NFP) y el
+      desplazamiento declarado cubre las series que fija el mercado. De ahí sale la **fecha**.
+
+    Una serie declara su hora pero no se publicó ese día (o al revés) **no** aparece: la
+    lista es la intersección, no la unión. Una serie que se publicó y **no** declara hora se
+    publica declarando la ausencia de hora, nunca con una inventada.
+
+    No lee la red ni el reloj: recibe ``store``, ``session`` y ``as_of`` explícitos. No
+    bloquea nada: devuelve información, y el ``blocking_events`` del día lo decide el gate.
+    """
+    if as_of.utcoffset() is None:
+        raise ConfigurationError("as_of: se espera un datetime con zona (TZ-aware)")
+    moment = as_of.astimezone(UTC)
+    declared = registry if registry is not None else load_macro_series(series_path)
+    published = _series_published_on(store, session=session)
+    publications = [
+        _publication(spec, session=session, moment=moment)
+        for spec in declared.series
+        if spec.series_id in published
+    ]
+    publications.sort(key=lambda item: _ordering_key(item, session=session))
+    return tuple(publications)
+
+
+def _series_published_on(store: Store, *, session: date) -> frozenset[str]:
+    """Las series con al menos una publicación cuyo día **en ET** es ``session``.
+
+    Se acota por la ventana UTC que cubre ese día ET, no comparando horas locales: la
+    conversión la hace ``zoneinfo`` una sola vez, con las dos fronteras del día. Un almacén
+    sin ``raw.macro`` devuelve el conjunto vacío: no tener macro no es un error.
+    """
+    if "macro" not in store.datasets("raw"):
+        return frozenset()
+    start_et = datetime.combine(session, time(0, 0), tzinfo=EASTERN)
+    low = start_et.astimezone(UTC)
+    high = (start_et + timedelta(days=1)).astimezone(UTC)
+    # Los dos literales son instantes ISO construidos aquí, no valores del llamante.
+    query = (
+        "SELECT DISTINCT series_id FROM raw.macro "
+        f"WHERE published_at >= CAST('{low.isoformat()}' AS TIMESTAMPTZ) "
+        f"AND published_at < CAST('{high.isoformat()}' AS TIMESTAMPTZ)"
+    )
+    try:
+        frame = store.sql(query)
+    except (UnknownDatasetError, duckdb.Error):
+        return frozenset()
+    return frozenset(str(row["series_id"]) for row in frame.iter_rows(named=True))
+
+
+def _publication(spec: MacroSeriesSpec, *, session: date, moment: datetime) -> MacroPublication:
+    """La publicación del día de una serie declarada, o la ausencia de hora declarada."""
+    declared = spec.release_time_et
+    if declared is None:
+        return MacroPublication(series_id=spec.series_id, name=spec.name, unit=spec.unit)
+    at_et = datetime.combine(session, declared, tzinfo=EASTERN)
+    at_utc = at_et.astimezone(UTC)
+    return MacroPublication(
+        series_id=spec.series_id,
+        name=spec.name,
+        unit=spec.unit,
+        release_time_et=declared,
+        release_at_et=at_et,
+        release_at_utc=at_utc,
+        release_at_madrid=at_et.astimezone(MADRID),
+        available_at_as_of=at_utc <= moment,
+    )
+
+
+def _ordering_key(item: MacroPublication, *, session: date) -> tuple[datetime, str]:
+    """Orden de emisión: por instante del comunicado y, a igualdad, por ``series_id``.
+
+    Las series sin hora declarada caen al principio del día (``00:00``), que es donde
+    corresponde a un dato que se publicó sin que se sepa a qué hora.
+    """
+    floor = datetime.combine(session, time(0, 0), tzinfo=UTC)
+    return (item.release_at_utc or floor, item.series_id)
 
 
 def ingest(

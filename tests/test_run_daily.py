@@ -27,7 +27,7 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from pathlib import Path
 from typing import Final, cast
@@ -60,8 +60,10 @@ from cfdtrader.backtest.costs import (
     declared_cost_model,
     declared_slippage_assumption,
 )
-from cfdtrader.data.calendar import EASTERN, load_calendar
+from cfdtrader.data.calendar import EASTERN, MADRID, load_calendar
+from cfdtrader.data.macro import MacroPublication, publications_on
 from cfdtrader.data.news import ingest as ingest_news
+from cfdtrader.data.sources.fred_adapter import MacroSeriesRegistry, MacroSeriesSpec
 from cfdtrader.data.sources.news import Headline
 from cfdtrader.data.store import Store
 from cfdtrader.decision.gate import GateOutput, GateStatus, evaluate_gate, gate_sha256
@@ -2598,3 +2600,162 @@ def test_124_a_declared_fomc_day_blocks_with_rule_17() -> None:
         params=scenario_parameters(cost_pct=cost.c_declared_pct),
     )
     assert ("17", "dia_de_fomc") in [(entry["rule"], entry["code"]) for entry in output.blockers]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #125 · Las publicaciones macro del dia (parte (b) de #114)
+# ─────────────────────────────────────────────────────────────────────────────
+#: Un registro con una unica serie que **no declara** hora de publicacion.
+_MISSING_PUBLICATION_HOUR: Final[MacroSeriesRegistry] = MacroSeriesRegistry(
+    version=1,
+    series=(MacroSeriesSpec(series_id="SINHORA", name="serie sin hora declarada"),),
+)
+
+
+def _macro_store(root: Path, *, series_id: str, session: date) -> Store:
+    """Un almacen minimo con una publicacion macro cuyo dia **en ET** es `session`."""
+    published_at = datetime.combine(session, time(8, 30), tzinfo=EASTERN).astimezone(UTC)
+    store = Store(root)
+    store.append(
+        "raw",
+        "macro",
+        [
+            {
+                "source": SOURCE_MACRO,
+                "series_id": series_id,
+                "as_of": date(session.year, session.month, 1),
+                # `fetched_at` posterior al comunicado: el almacen exige published_at <= fetched_at.
+                "fetched_at": datetime.combine(session, time(12, 0), tzinfo=EASTERN).astimezone(
+                    UTC
+                ),
+                "published_at": published_at,
+                "value": 1.0,
+            }
+        ],
+    )
+    return store
+
+
+def _as_of_et(session: date, at: time) -> datetime:
+    """El instante de decision de ese dia en ET (08:45 ET por defecto)."""
+    return datetime.combine(session, at, tzinfo=EASTERN)
+
+
+@pytest.mark.parametrize(
+    ("session", "madrid_hour"),
+    [
+        (date(2026, 3, 10), 13),  # ventana DST de marzo: ET ya cambio, Madrid todavia no
+        (date(2026, 6, 10), 14),  # alineados: Madrid va dos horas por delante de UTC
+        (date(2026, 10, 27), 13),  # ventana DST de finales de octubre
+    ],
+)
+def test_125_the_et_hour_is_fixed_and_madrid_moves(
+    tmp_path: Path, session: date, madrid_hour: int
+) -> None:
+    """La hora ET del comunicado no se mueve; la de Madrid si (con `zoneinfo`, no un offset)."""
+    store = _macro_store(tmp_path, series_id="CPIAUCSL", session=session)
+    published = publications_on(store=store, session=session, as_of=_as_of_et(session, time(8, 45)))
+
+    assert len(published) == 1
+    (entry,) = published
+    assert entry.series_id == "CPIAUCSL"
+    assert entry.release_at_et is not None and entry.release_at_et.hour == 8
+    assert entry.release_at_utc is not None and entry.release_at_utc.hour == 12
+    assert entry.release_at_madrid is not None and entry.release_at_madrid.hour == madrid_hour
+    assert entry.available_at_as_of is True
+
+
+def test_125_a_publication_after_the_as_of_is_not_available(tmp_path: Path) -> None:
+    """A las 08:00 ET el dato de las 08:30 ET todavia no esta: la disponibilidad lo dice."""
+    session = date(2026, 6, 10)
+    store = _macro_store(tmp_path, series_id="CPIAUCSL", session=session)
+
+    published = publications_on(store=store, session=session, as_of=_as_of_et(session, time(8, 0)))
+
+    assert published[0].available_at_as_of is False
+
+
+def test_125_a_series_without_a_declared_hour_is_published_without_a_hour(tmp_path: Path) -> None:
+    """Una serie que se publico y no declara hora **no la inventa**: declara su ausencia."""
+    session = date(2026, 6, 10)
+    store = _macro_store(tmp_path, series_id="SINHORA", session=session)
+
+    published = publications_on(
+        store=store,
+        session=session,
+        as_of=_as_of_et(session, time(8, 45)),
+        registry=_MISSING_PUBLICATION_HOUR,
+    )
+
+    assert len(published) == 1
+    entry = published[0]
+    assert entry.release_time_et is None
+    assert entry.release_at_utc is None
+    assert entry.available_at_as_of is None
+
+
+def test_125_a_day_without_publications_adds_no_line(tmp_path: Path) -> None:
+    """Un dia sin publicaciones no anade ninguna linea (ni en el lector ni en el informe)."""
+    store = _macro_store(tmp_path, series_id="CPIAUCSL", session=date(2026, 6, 10))
+
+    other = date(2026, 6, 11)
+    assert publications_on(store=store, session=other, as_of=_as_of_et(other, time(8, 45))) == ()
+
+    text = run_daily.render(
+        status=GateStatus.RECOMMENDATION,
+        session=other,
+        as_of=_instant(other),
+        snapshot_session=other,
+        model_source="modelo",
+        message="motivo",
+    )
+    assert "publicacion_macro:" not in text
+
+
+def test_125_the_report_publishes_the_publications_without_blocking() -> None:
+    """La publicacion se lee en el informe y **no** anade ningun bloqueo."""
+    session = date(2026, 6, 10)
+    at_et = datetime.combine(session, time(8, 30), tzinfo=EASTERN)
+    publication = MacroPublication(
+        series_id="CPIAUCSL",
+        name="CPI",
+        unit="index",
+        release_time_et=time(8, 30),
+        release_at_et=at_et,
+        release_at_utc=at_et.astimezone(UTC),
+        release_at_madrid=at_et.astimezone(MADRID),
+        available_at_as_of=True,
+    )
+    without_hour = MacroPublication(series_id="SINHORA", name="serie sin hora declarada")
+
+    without = run_daily.render(
+        status=GateStatus.RECOMMENDATION,
+        session=session,
+        as_of=_instant(session),
+        snapshot_session=session,
+        model_source="modelo",
+        message="motivo",
+        publications=(),
+    )
+    text = run_daily.render(
+        status=GateStatus.RECOMMENDATION,
+        session=session,
+        as_of=_instant(session),
+        snapshot_session=session,
+        model_source="modelo",
+        message="motivo",
+        publications=(publication, without_hour),
+    )
+
+    assert (
+        "publicacion_macro: CPIAUCSL | CPI | 08:30 ET (12:30 UTC / 14:30 Madrid) | "
+        "disponible en el as_of: si" in text
+    )
+    assert (
+        "publicacion_macro: SINHORA | serie sin hora declarada | hora no declarada | "
+        "disponible en el as_of: no evaluable" in text
+    )
+    # Un dia sin publicaciones no anade lineas; con publicaciones, **ninguna** es un bloqueo.
+    assert "publicacion_macro:" not in without
+    assert "bloqueo:" not in text
+    assert "evento_bloqueante:" not in text

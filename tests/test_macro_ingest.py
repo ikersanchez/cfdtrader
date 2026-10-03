@@ -130,13 +130,23 @@ def test_release_times_are_declared_in_eastern_time() -> None:
     """El CPI/PCE/NFP se publican a las 08:30 ET y toman la fecha de la vintage de ALFRED."""
     for series_id in ("CPIAUCSL", "PCEPI", "PAYEMS"):
         spec = _spec(series_id)
+        assert spec.release_time_et is not None
         assert spec.release_time_et.hour == 8
         assert spec.release_time_et.minute == 30
         assert spec.publication_from_realtime_start is True
 
     # Las series que fija el mercado no tienen rueda de prensa: se declara el desplazamiento.
     assert _spec("DFF").publication_offset_days == 1
-    assert _spec("DGS10").release_time_et.hour == 15
+    dgs10 = _spec("DGS10")
+    assert dgs10.release_time_et is not None
+    assert dgs10.release_time_et.hour == 15
+
+
+def test_125_a_series_without_a_declared_release_time_is_not_invented() -> None:
+    """Sin hora declarada, `release_time_et` es `None`: no se inventa una (parte (b) de #114)."""
+    spec = MacroSeriesSpec(series_id="X", name="serie sin hora declarada")
+    assert spec.release_time_et is None
+    assert spec.release_hour_et is None
 
 
 def test_the_european_context_is_declared_as_not_implemented() -> None:
