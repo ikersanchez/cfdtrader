@@ -16,6 +16,7 @@ registro sintetico y la familia LightGBM, puntuada con un **booster real entrena
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib
 import json
@@ -35,6 +36,7 @@ import numpy as np
 import polars as pl
 import pytest
 
+from cfdtrader.agents.news import PROMPT_TEMPLATE_NAME
 from cfdtrader.analysis import experiment_log, model_comparison
 from cfdtrader.analysis.backtest_report import NOTIONAL_USD
 from cfdtrader.analysis.model_comparison import BASELINE_VARIANT_ID, VARIANT_ID
@@ -55,6 +57,7 @@ from cfdtrader.backtest.costs import (
 from cfdtrader.data.calendar import EASTERN, load_calendar
 from cfdtrader.data.store import Store
 from cfdtrader.decision.gate import GateOutput, GateStatus, evaluate_gate, gate_sha256
+from cfdtrader.decision.overlay import OverlayDecision, OverlayState, disabled_overlay
 from cfdtrader.delivery import run_daily
 from cfdtrader.features import store as feature_store
 from cfdtrader.features.store import FEATURE_VERSION_PREFIX
@@ -755,6 +758,204 @@ def test_main_emits_the_recommendation_state(
     assert "gate_sha256: sha256:" in captured.out
     assert "no hay edge demostrado" in captured.out
     assert captured.err == ""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# El overlay en el camino diario (#35): A7, A8, A9, A11 y A12
+# ─────────────────────────────────────────────────────────────────────────────
+JOURNAL_DATE: Final[date] = date(2026, 9, 17)
+
+
+def _daily_run(store_root: Path, runs_root: Path, journal_root: Path) -> int:
+    """Una ejecucion completa del camino diario sobre los fixtures, con su diario propio."""
+    return run_daily.main(
+        [
+            "--as-of",
+            AS_OF_NEXT,
+            "--model-run",
+            RUN_ID,
+            "--journal-root",
+            str(journal_root),
+            "--git-commit",
+            GIT_COMMIT,
+            "--data-root",
+            str(store_root),
+            "--runs-root",
+            str(runs_root),
+        ]
+    )
+
+
+def _journal_row(journal_root: Path) -> dict[str, object]:
+    return Journal(journal_root).read_decision(JOURNAL_DATE)
+
+
+def _stub_overlay(result: OverlayDecision, hashes: Mapping[str, object]) -> object:
+    """Un `_compute_overlay` de mentira: devuelve la decision pautada sin tocar el proveedor."""
+
+    def _fake(
+        *arguments: object, **keywords: object
+    ) -> tuple[OverlayDecision, Mapping[str, object]]:
+        return result, hashes
+
+    return _fake
+
+
+def test_a7_the_journal_records_what_the_overlay_did(
+    store_root: Path,
+    runs_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """El diario deja de mentir por omision: `llm_overlay` y `prompt_hashes` poblados (#35 A7)."""
+    prompt_hash = "sha256:" + "c" * 64
+    monkeypatch.setattr(
+        run_daily,
+        "_compute_overlay",
+        _stub_overlay(
+            OverlayDecision(
+                state=OverlayState.VETO,
+                reasons=("monetary_policy/high: una frase",),
+                prompt_hash=prompt_hash,
+            ),
+            {PROMPT_TEMPLATE_NAME: prompt_hash},
+        ),
+    )
+    journal_root = tmp_path / "journal"
+
+    assert _daily_run(store_root, runs_root, journal_root) == 0
+    capsys.readouterr()
+
+    row = _journal_row(journal_root)
+    assert row["llm_overlay"] == "veto"
+    assert row["prompt_hashes"] == {PROMPT_TEMPLATE_NAME: prompt_hash}
+    assert row["direction"] == "nothing", "un veto convierte el dia en NOTHING"
+    report = cast("str", row["report_text"])
+    assert "bloqueo: 20:overlay_veto" in report, "el veto es trazable como regla 20"
+
+
+def test_a8_without_news_the_recommendation_still_comes_out(
+    store_root: Path,
+    runs_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A8: el overlay es opcional por diseno. Sin titulares, la recomendacion sigue saliendo.
+
+    Se declara una config de LLM valida por entorno para que la prueba **no** dependa del `.env`
+    del desarrollador; no se llama al proveedor porque no hay titulares que enviar.
+    """
+    monkeypatch.setenv("LLM_API_KEY", "clave-solo-para-esta-prueba")
+    monkeypatch.setenv("LLM_MODEL_EXTRACT", "modelo-falso-de-prueba")
+    journal_root = tmp_path / "journal"
+
+    assert _daily_run(store_root, runs_root, journal_root) == 0
+    captured = capsys.readouterr()
+
+    assert "estado: recommendation" in captured.out
+    row = _journal_row(journal_root)
+    assert row["llm_overlay"] == "applied", "sin noticias no hay nada que vetar"
+    assert row["prompt_hashes"] == {}, "sin llamada no hay hash de prompt que registrar"
+
+
+def test_a9_a_spent_budget_never_blocks_the_pipeline(
+    store_root: Path,
+    runs_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """⭐ El criterio B9 de #33, que #33 no podia cerrar: superar un tope **no** bloquea.
+
+    La recomendacion del dia tiene que ser la **misma** con el overlay aplicado y con el overlay
+    desactivado por presupuesto: la decision no depende de que quede dinero.
+    """
+    monkeypatch.setattr(
+        run_daily,
+        "_compute_overlay",
+        _stub_overlay(OverlayDecision(state=OverlayState.APPLIED), {}),
+    )
+    baseline = tmp_path / "baseline"
+    assert _daily_run(store_root, runs_root, baseline) == 0
+    capsys.readouterr()
+
+    monkeypatch.setattr(
+        run_daily,
+        "_compute_overlay",
+        _stub_overlay(
+            disabled_overlay(OverlayState.DISABLED_BUDGET, reasons=("llamadas: 0 >= 0",)), {}
+        ),
+    )
+    stopped = tmp_path / "stopped"
+    assert _daily_run(store_root, runs_root, stopped) == 0, "el tope no puede abortar la ejecucion"
+    capsys.readouterr()
+
+    applied_row = _journal_row(baseline)
+    stopped_row = _journal_row(stopped)
+    for field in ("status", "direction", "tier", "size_notional_eur", "prob_up_calibrated"):
+        assert applied_row[field] == stopped_row[field], (
+            f"{field} no puede depender del presupuesto"
+        )
+    assert applied_row["llm_overlay"] == "applied"
+    assert stopped_row["llm_overlay"] == "disabled_budget"
+
+
+def test_a11_reads_from_store_and_not_from_the_network(
+    store_root: Path,
+    runs_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A11: el camino diario lee `raw.news_headlines`; no ingesta en linea."""
+    seen: list[datetime] = []
+    real = run_daily.load_headlines
+
+    def _spy(store: Store, *, as_of: datetime, window_hours: int = 24) -> tuple[object, ...]:
+        seen.append(as_of)
+        return real(store, as_of=as_of, window_hours=window_hours)
+
+    monkeypatch.setattr(run_daily, "load_headlines", _spy)
+    monkeypatch.setenv("LLM_API_KEY", "clave-solo-para-esta-prueba")
+    monkeypatch.setenv("LLM_MODEL_EXTRACT", "modelo-falso-de-prueba")
+
+    assert _daily_run(store_root, runs_root, tmp_path / "journal") == 0
+    capsys.readouterr()
+
+    assert len(seen) == 1, "los titulares se leen del almacen, una vez, con el instante declarado"
+    assert seen[0] == datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
+
+
+def test_a12_the_daily_path_uses_the_public_bridge() -> None:
+    """A12: el camino diario usa el puente declarado y **no** define el suyo."""
+    source = (REPO_ROOT / "src" / "cfdtrader" / "delivery" / "run_daily.py").read_text(
+        encoding="utf-8"
+    )
+    classes = {node.name for node in ast.walk(ast.parse(source)) if isinstance(node, ast.ClassDef)}
+    assert not [name for name in classes if "Bridge" in name or "Puente" in name]
+    assert "OverlayClient(" in source, "el puente publico de llm.budget es el que se usa"
+
+
+def test_a12_the_cost_layer_still_does_not_touch_the_decision_layer() -> None:
+    """El reparto sigue en pie: #33 prohibe `llm -> decision` y #35 prohibe `decision -> llm`."""
+    budget = (REPO_ROOT / "src" / "cfdtrader" / "llm" / "budget.py").read_text(encoding="utf-8")
+    overlay = (REPO_ROOT / "src" / "cfdtrader" / "decision" / "overlay.py").read_text(
+        encoding="utf-8"
+    )
+    budget_modules = {
+        node.module
+        for node in ast.walk(ast.parse(budget))
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+    overlay_modules = {
+        node.module
+        for node in ast.walk(ast.parse(overlay))
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+    assert not [name for name in budget_modules if name.startswith("cfdtrader.decision")]
+    assert not [name for name in overlay_modules if name.startswith("cfdtrader.llm")]
 
 
 def test_main_reports_a_configuration_error(

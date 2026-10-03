@@ -31,7 +31,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Final
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from cfdtrader.data.news import DEFAULT_WINDOW_HOURS, deduplicate
@@ -123,6 +123,27 @@ class BudgetCaps(BaseSettings):
     monthly_budget_eur: float | None = Field(default=None, ge=0.0)
     max_seconds: float | None = Field(default=None, gt=0.0)
     max_consecutive_failures: int = Field(default=DEFAULT_MAX_CONSECUTIVE_FAILURES, ge=1)
+
+    @field_validator(
+        "max_tokens_per_run",
+        "max_calls_per_run",
+        "daily_budget_eur",
+        "monthly_budget_eur",
+        "max_seconds",
+        mode="before",
+    )
+    @classmethod
+    def _blank_means_no_cap(cls, value: object) -> object:
+        """Una variable declarada y **vacia** significa «sin tope», no un error de parseo.
+
+        ``.env.example`` trae ``LLM_DAILY_BUDGET_EUR=`` en blanco, y ``pydantic-settings``
+        intentaria parsear ``''`` como numero y fallaria: el overlay quedaria desactivado **en
+        silencio** por un fichero de configuracion que es correcto. Lo cazo el cableado de #35,
+        porque la prueba de #33 construia estos topes con ``_env_file=None``.
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     def caps(self) -> Caps:
         """Los topes como valor inmutable, que es lo que consume el guardian."""

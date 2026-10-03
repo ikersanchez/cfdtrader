@@ -200,6 +200,25 @@ def test_b8_the_six_caps_are_declared_and_come_from_the_environment(
     assert caps.max_seconds == 120.0
 
 
+def test_b8_an_empty_variable_means_no_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`.env.example` trae los topes en blanco: vacio es «sin tope», no un error de parseo.
+
+    Lo cazo el cableado de #35: la prueba original construia los topes con `_env_file=None`, asi
+    que nunca veia el `.env` que el repo distribuye.
+    """
+    monkeypatch.setenv("LLM_DAILY_BUDGET_EUR", "")
+    monkeypatch.setenv("LLM_MAX_CALLS_PER_RUN", "")
+    monkeypatch.setenv("LLM_MAX_SECONDS", "")
+    monkeypatch.setenv("LLM_MONTHLY_BUDGET_EUR", "")
+
+    caps = BudgetCaps(_env_file=None).caps()  # pyright: ignore[reportCallIssue]
+
+    assert caps.daily_budget_eur is None
+    assert caps.max_calls_per_run is None
+    assert caps.max_seconds is None
+    assert caps.monthly_budget_eur is None
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # B9 · Superar un tope desactiva; nunca lanza
 # ─────────────────────────────────────────────────────────────────────────────
