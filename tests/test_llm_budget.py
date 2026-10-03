@@ -173,6 +173,38 @@ def test_b7_the_metered_client_builds_a_unique_id_per_call(tmp_path: Path) -> No
     assert rows == ["20261003T124500Z-0001.json", "20261003T124500Z-0002.json"]
 
 
+def test_b7_a_cache_hit_row_declares_no_tokens(tmp_path: Path) -> None:
+    """#119: la fila y el guardian dicen lo mismo, y antes de este criterio no lo decian.
+
+    La segunda llamada es identica, asi que la absorbe la cache. Su fila declara
+    ``cache_hit: true`` y **ningun** token: no se gasto ninguno. Copiar los tokens de la respuesta
+    cacheada inflaba el agregado de ``ops.llm_calls`` justo en la direccion contraria a la util,
+    porque cuanto mejor funciona la cache mas mentiria el informe mensual.
+    """
+    guard = BudgetGuard()
+    with ResponseCache(tmp_path / "cache") as cache:
+        metered = MeteredLLMClient(
+            _CountingClient(_response()),
+            cache=cache,
+            guard=guard,
+            as_of=NOW,
+            provider="deepseek",
+            journal=tmp_path,
+        )
+        metered.call(_request())
+        metered.call(_request())
+
+    handle = Journal(tmp_path)
+    real = handle.read("llm_calls", "20261003T124500Z-0001")
+    cached = handle.read("llm_calls", "20261003T124500Z-0002")
+
+    assert real["cache_hit"] is False
+    assert (real["tokens_in"], real["tokens_out"]) == (120, 40)
+    assert cached["cache_hit"] is True
+    assert (cached["tokens_in"], cached["tokens_out"]) == (None, None)
+    assert guard.tokens_used == 160, "el guardian cuenta los tokens una sola vez"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # B8 · Los seis topes de §6.3.4, declarados y configurables por entorno
 # ─────────────────────────────────────────────────────────────────────────────

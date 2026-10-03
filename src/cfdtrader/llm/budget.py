@@ -491,8 +491,13 @@ class MeteredLLMClient:
                 call_id,
                 model=hit.model,
                 fingerprint=hit.system_fingerprint,
-                tokens_in=hit.prompt_tokens,
-                tokens_out=hit.completion_tokens,
+                # Un acierto **no gasta tokens**, asi que la fila declara ``null`` y no los del
+                # ``hit``: es lo que ya asume ``BudgetGuard.record(cache_hit=True)``, que sale sin
+                # tocar ningun contador. Copiarlos aqui inflaba cualquier agregado sobre
+                # ``ops.llm_calls`` en la direccion contraria a la util: cuanto mejor funciona la
+                # cache, mas mentiria el informe (#119).
+                tokens_in=None,
+                tokens_out=None,
                 cache_hit=True,
                 cost=None,
                 ok=True,
