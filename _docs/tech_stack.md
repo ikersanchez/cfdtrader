@@ -2,7 +2,7 @@
 
 | Campo | Valor |
 |---|---|
-| **Versión** | **2.7** · instrumento S&P 500 |
+| **Versión** | **2.8** · instrumento S&P 500 |
 | **Fecha** | 2026-10-03 |
 | **Estado** | ✅ **Especificación cerrada.** Cambios posteriores solo mediante entrada en el registro y motivo medido |
 | **Documento padre** | `plan.md` v2.7 (fuente de verdad funcional) |
@@ -567,6 +567,21 @@ El LLM es el **único componente con coste marginal por ejecución**. Por eso ll
 
 ⚠️ Las tarifas por token varían y los proveedores las cambian: **verificar precios vigentes y recalcular**. Los proveedores con *caché de contexto* (descuento sobre tokens de entrada ya vistos) reducen el coste de forma notable aquí, porque el *system prompt* es fijo y se repite a diario.
 
+**Tabla de precios verificada el 2026-10-03.** El proveedor los publica en **USD** por millón de tokens (`https://api-docs.deepseek.com/quick_start/pricing`); se convierten al tipo de referencia del **BCE del 2026-10-02** (`1 EUR = 1,1225 USD`). La tabla vive en código (`cfdtrader.llm.budget.PRICES_EUR_PER_MTOKENS`) con su fecha en `PRICES_VERIFIED_ON`.
+
+| 1M tokens | `deepseek-flash` | `deepseek-v4-pro` |
+|---|---|---|
+| Entrada (sin caché) | **0,133630 €** | **0,587973 €** |
+| Salida | **0,534521 €** | **1,763920 €** |
+| Entrada (caché del proveedor) | 0,002673 € | 0,019599 € |
+
+Dos precisiones que la tabla no puede callar:
+
+- **Peak / off-peak.** El proveedor cobra el **doble** en horario *peak* (01:00–04:00 y 06:00–10:00 UTC, de lunes a viernes). La tarifa declarada es la **off-peak**, que es la del pipeline diario (12:00–13:00 UTC). Una llamada en *peak* costaría el doble.
+- **La entrada con caché del proveedor** es la palanca 5 de §6.3 y su activación es **#116**: hasta entonces la estimación usa la tarifa **sin** caché, que es la conservadora.
+
+**Identificadores vigentes y por qué no hay *snapshots*.** `deepseek-chat` —el id que aparece en la documentación y en los ejemplos— **no existe**: el endpoint ofrece exactamente `deepseek-flash` y `deepseek-v4-pro`, y los nombres retirados se sirven como Flash y se facturan a precio Flash. La asignación sigue la estrategia de dos modelos: `LLM_MODEL_EXTRACT=deepseek-flash` y `LLM_MODEL_REPORT=deepseek-v4-pro`. Como este proveedor **no** ofrece identificadores con versión concreta —el id **es** un alias móvil, justo lo que §4.9 desaconseja—, la huella `system_fingerprint` se registra y **se vigila**: un cambio avisa, y es lo único verificable que queda.
+
 **2. Palancas para reducir el coste (por orden de impacto)**
 
 | # | Palanca | Efecto |
@@ -971,3 +986,4 @@ Como el sistema decide **una vez al día**, los artefactos de decisión son **un
 | 2026-10-01 | **2.5** | 📌 **§11 bis: las decisiones 4 y 5 siguen abiertas.** La decisión **4** (bróker) pasa a citar **#59** y la **5** (`R`/umbrales) cita **#60**; **ninguna** de las dos se marca resuelta. Contexto: la Fase 2 **no** supera su puerta de salida (decisión del propietario **`reframe`**, `plan.md` §19.6) y la **Fase 3 (`#30`–`#38`) queda bloqueada**. Cabecera a 2.5 y fila `Documento padre` a `plan.md` v2.5 | Alinear el documento con el cierre documental de la Fase 2, dejando constancia de que #59 y #60 siguen **`OPEN`**, sin fijar digests de artefactos regenerables |
 | 2026-10-01 | **2.6** | 🧭 **§11 bis acotada al carril B por el reencuadre.** Las decisiones **4** (**#59**) y **5** (**#60**) siguen sin marca de resuelta; con el reencuadre (`plan.md` §19.7) esas decisiones pendientes **limitan al carril B** y ya no bloquean construir y usar el **carril A** (asistente de decisión, ejecución manual, sin superar §11.6). Cabecera a 2.6 y fila `Documento padre` a `plan.md` v2.6 | Alinear el documento con el reencuadre del objetivo en dos carriles, sin fijar digests de artefactos regenerables |
 | 2026-10-03 | **2.7** | 🚪 **Puntero al documento padre.** La Fase 3 declara su **puerta de salida** (`plan.md` §16 y §19.8): se admite **`not_evaluable`** como veredicto válido con su consecuencia declarada **de antemano**, OPEX y compañía quedan **informativos** (sin regla 21), la primera versión de la orquestación de §4.10 va **sin `interrupt`**, y el calendario externo se ingiere con **`yfinance`** más un calendario declarado. **Sin cambio de contenido en este documento**: sólo la cabecera y el puntero al padre. Cabecera a 2.7 y fila `Documento padre` a `plan.md` v2.7 | Mantener el puntero al padre coherente con `plan.md` v2.7 sin tocar la especificación ya cerrada ni añadir digests de artefactos regenerables |
+| 2026-10-03 | **2.8** | 💰 **§6.3: tabla de precios verificada e identificadores vigentes.** Se publica la tarifa **por id concreto** en EUR/Mtok —`deepseek-flash` y `deepseek-v4-pro`, con entrada (sin caché y con caché) y salida—, **verificada el 2026-10-03** contra la página del proveedor y convertida al tipo de referencia del **BCE del 2026-10-02** (`1 EUR = 1,1225 USD`); se declara la regla **peak/off-peak** (la tarifa publicada es la off-peak, que es la del pipeline a 12:00–13:00 UTC) y que la entrada con caché del proveedor es **#116**. Se corrige el identificador: **`deepseek-chat` no existe** y la asignación de la estrategia de dos modelos pasa a declararse (`LLM_MODEL_EXTRACT`/`LLM_MODEL_REPORT`). Cabecera a 2.8 | #118: las dos filas de `ops.llm_calls` traían `cost_estimate: null` y el guardián cerraba con 0,0 €, así que los topes diario y mensual de §6.3.4 **no podían dispararse nunca** y eran decorativos |

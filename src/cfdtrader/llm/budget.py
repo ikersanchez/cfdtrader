@@ -45,8 +45,10 @@ __all__ = [
     "DEFAULT_MAX_CONSECUTIVE_FAILURES",
     "DEFAULT_TRUNCATE_CHARS",
     "DEFAULT_WINDOW_HOURS",
+    "KNOWN_SYSTEM_FINGERPRINTS",
     "MONTHLY_WARNING",
     "PRICES_EUR_PER_MTOKENS",
+    "PRICES_VERIFIED_ON",
     "BudgetCaps",
     "BudgetDecision",
     "BudgetGuard",
@@ -56,6 +58,7 @@ __all__ = [
     "OverlayClient",
     "OverlayState",
     "estimate_cost",
+    "fingerprint_warning",
     "prepare_headlines",
     "record_call",
 ]
@@ -69,10 +72,62 @@ DEFAULT_TRUNCATE_CHARS: Final[int] = 280
 #: Ventana de noticias que se envia al modelo (palanca 7 de §6.3): se declara con el dato, en
 #: `data.news`, y se reexporta aqui para no tener dos numeros que puedan divergir.
 
-#: Precios por millon de tokens, ``(entrada, salida)`` en euros. **Vacio a proposito**: §6.3 avisa
-#: de que las tarifas cambian y hay que verificarlas, asi que no se inventa ninguna. Sin precio
-#: declarado, el coste de una llamada es ``None`` — que es la verdad — y nunca ``0,0``.
-PRICES_EUR_PER_MTOKENS: Final[dict[str, tuple[float, float]]] = {}
+#: Precios por millon de tokens, ``(entrada sin cache, salida)`` en euros y **por id concreto**.
+#:
+#: Verificados el **2026-10-03** en la pagina de precios del proveedor, que los publica en USD
+#: (``https://api-docs.deepseek.com/quick_start/pricing``), y convertidos al tipo de referencia
+#: del **BCE del 2026-10-02** (``1 EUR = 1.1225 USD``,
+#: ``https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml``). Antes de esto la tabla
+#: estaba vacia **a proposito** —no inventar precios es lo correcto—, pero eso dejaba **inertes**
+#: los dos topes en euros de §6.3.4, que son la unica defensa declarada contra un gasto
+#: descontrolado.
+#:
+#: Dos cosas que la tabla **no** recoge y que hay que saber:
+#:
+#: - **Peak / off-peak.** El proveedor cobra el **doble** en horario *peak* (01:00-04:00 y
+#:   06:00-10:00 UTC, de lunes a viernes). El pipeline diario corre a las 12:00-13:00 UTC, en
+#:   **off-peak**: es el precio declarado aqui. Una llamada en *peak* costaria el doble.
+#: - **Entrada con cache del proveedor.** Existe una tarifa menor para la entrada ya vista; es la
+#:   palanca 5 de §6.3 y su activacion es **#116**, asi que aqui se declara la tarifa **sin** cache.
+#:
+#: Sin tarifa declarada para un modelo, el coste de la llamada es ``None`` — que es la verdad — y
+#: nunca ``0,0``: es lo que mantiene honrado a :func:`estimate_cost`.
+PRICES_EUR_PER_MTOKENS: Final[dict[str, tuple[float, float]]] = {
+    "deepseek-flash": (0.133630, 0.534521),
+    "deepseek-v4-pro": (0.587973, 1.763920),
+}
+
+#: Fecha en que se verificaron **precios e identificadores** (§6.3: «verificar precios vigentes y
+#: recalcular»). Se revisa al menos una vez al trimestre.
+PRICES_VERIFIED_ON: Final[str] = "2026-10-03"
+
+#: ``system_fingerprint`` observado por modelo. Este proveedor **no** ofrece *snapshots* fechados:
+#: el id **es** un alias movil, que es justo lo que §4.9 desaconseja y no hay alternativa
+#: declarada. La via honesta es declarar el alias **y** avisar cuando la huella cambie. Un modelo
+#: ausente del mapa es un modelo **todavia no observado**: no se avisa de lo que no se conoce.
+#:
+#: La huella se declara **cruda**, tal cual la devuelve el proveedor, porque es con eso con lo que
+#: se compara. `detect-secrets` la marca como posible secreto por su entropia: es un **falso
+#: positivo**, y es exactamente lo que declara el ``pragma`` de la linea.
+KNOWN_SYSTEM_FINGERPRINTS: Final[dict[str, str]] = {
+    "deepseek-flash": "aeb56401ca74e127821c4f9126dcb669",  # pragma: allowlist secret
+}
+
+
+def fingerprint_warning(*, model: str, fingerprint: str | None) -> str | None:
+    """El aviso de que el proveedor ha cambiado el modelo detras del alias, o ``None``.
+
+    Es la unica senal verificable que queda cuando el identificador es un alias: un cambio de
+    ``system_fingerprint`` significa que el modelo que responde no es el que se declaro. **No
+    lanza y no bloquea**: avisa, para que quede en el ``run_log`` y en el informe.
+    """
+    expected = KNOWN_SYSTEM_FINGERPRINTS.get(model)
+    if expected is None or fingerprint is None or fingerprint == expected:
+        return None
+    return (
+        f"el modelo {model} responde con system_fingerprint {fingerprint!r} y no con el declarado "
+        f"{expected!r}: el proveedor ha cambiado el modelo detras del alias"
+    )
 
 
 #: Los cinco estados del overlay de §12.5. Vive **también** en :mod:`cfdtrader.decision.overlay`,
@@ -522,6 +577,9 @@ class MeteredLLMClient:
                 started=started,
             )
             raise
+        changed = fingerprint_warning(model=response.model, fingerprint=response.system_fingerprint)
+        if changed is not None:
+            self._warn((changed,))
         cost = estimate_cost(
             model=response.model,
             tokens_in=response.prompt_tokens,

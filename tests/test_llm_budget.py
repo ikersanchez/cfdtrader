@@ -34,7 +34,10 @@ from cfdtrader.journal.decision_log import (
 from cfdtrader.llm.base import ChatMessage, LLMClientConfig, LLMError, LLMRequest, LLMResponse
 from cfdtrader.llm.budget import (
     DEFAULT_MAX_CONSECUTIVE_FAILURES,
+    KNOWN_SYSTEM_FINGERPRINTS,
     MONTHLY_WARNING,
+    PRICES_EUR_PER_MTOKENS,
+    PRICES_VERIFIED_ON,
     BudgetCaps,
     BudgetGuard,
     Caps,
@@ -43,6 +46,7 @@ from cfdtrader.llm.budget import (
     OverlayClient,
     OverlayState,
     estimate_cost,
+    fingerprint_warning,
     prepare_headlines,
     record_call,
 )
@@ -424,6 +428,97 @@ def test_b12_one_call_per_batch_and_the_cache_absorbs_the_second(tmp_path: Path)
     assert first.attempts == 1
     assert second.attempts == 1
     assert client.calls == 1, "tres titulares son una llamada, y la repeticion ninguna"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #118 · La tarifa declarada, el tope en euros y la huella del modelo
+# ─────────────────────────────────────────────────────────────────────────────
+#: La huella declarada, **sin** volver a escribir el literal: la fuente es el mapa del modulo.
+_DECLARED_FINGERPRINT: Final[str] = KNOWN_SYSTEM_FINGERPRINTS["deepseek-flash"]
+
+
+def _priced(
+    model: str = "deepseek-flash",
+    *,
+    fingerprint: str = _DECLARED_FINGERPRINT,
+) -> LLMResponse:
+    """Una respuesta con el modelo que el proveedor **resuelve de verdad**, no el que se pide."""
+    return LLMResponse(
+        content='{"events": []}',
+        model=model,
+        system_fingerprint=fingerprint,
+        prompt_tokens=814,
+        completion_tokens=1730,
+    )
+
+
+def test_118_the_price_table_is_by_concrete_id_and_declares_its_date() -> None:
+    """Sin identificadores de version concreta, la tabla es la unica cifra verificable."""
+    assert set(PRICES_EUR_PER_MTOKENS) == {"deepseek-flash", "deepseek-v4-pro"}
+    for model, (entrada, salida) in PRICES_EUR_PER_MTOKENS.items():
+        assert entrada > 0 and salida > 0, model
+        assert salida > entrada, f"{model}: la salida es la parte cara y debe costar mas"
+    assert PRICES_VERIFIED_ON == "2026-10-03"
+    assert set(KNOWN_SYSTEM_FINGERPRINTS) == {"deepseek-flash"}
+    declared = KNOWN_SYSTEM_FINGERPRINTS["deepseek-flash"]
+    assert len(declared) == 32 and all(char in "0123456789abcdef" for char in declared)
+
+
+def test_118_the_declared_tariff_turns_tokens_into_euros() -> None:
+    """Con tarifa, el coste deja de ser ``null``: es el numero que #117 podra agregar."""
+    cost = estimate_cost(model="deepseek-flash", tokens_in=814, tokens_out=1730)
+    assert cost == pytest.approx((814 * 0.133630 + 1730 * 0.534521) / 1_000_000)
+    assert cost > 0
+    assert estimate_cost(model="modelo-sin-tarifa", tokens_in=814, tokens_out=1730) is None
+    assert estimate_cost(model="deepseek-flash", tokens_in=None, tokens_out=None) is None
+
+
+def test_118_the_eur_cap_bites_and_the_pipeline_never_blocks(tmp_path: Path) -> None:
+    """El B9 de #33 en euros: superar el tope diario desactiva el overlay, **no** el pipeline."""
+    guard = BudgetGuard(caps=Caps(daily_budget_eur=0.0001))
+    with ResponseCache(tmp_path / "cache") as cache:
+        metered = MeteredLLMClient(
+            _CountingClient(_priced(), _priced()),
+            cache=cache,
+            guard=guard,
+            as_of=NOW,
+            provider="deepseek",
+            journal=tmp_path,
+        )
+        assert metered.call(_request()) is not None
+        assert guard.daily_spend_eur > 0.0, "hay tarifa declarada, asi que el gasto se acumula"
+        assert metered.call(_request(inputs="otro lote")) is None, "no lanza: devuelve None"
+        assert metered.state is OverlayState.DISABLED_BUDGET
+
+    assert any("gasto diario" in warning for warning in metered.warnings)
+
+
+def test_118_a_fingerprint_change_warns_and_a_known_one_stays_silent() -> None:
+    """El alias es movil: lo unico verificable es la huella, y solo se avisa de lo conocido."""
+    assert fingerprint_warning(model="deepseek-flash", fingerprint=_DECLARED_FINGERPRINT) is None
+    assert fingerprint_warning(model="deepseek-flash", fingerprint=None) is None
+    assert fingerprint_warning(model="modelo-no-observado", fingerprint="ffff") is None
+    warning = fingerprint_warning(model="deepseek-flash", fingerprint="ffff")
+    assert warning is not None
+    assert "system_fingerprint" in warning
+
+
+def test_118_the_fingerprint_change_reaches_the_warning_sink(tmp_path: Path) -> None:
+    seen: list[str] = []
+    with ResponseCache(tmp_path / "cache") as cache:
+        metered = MeteredLLMClient(
+            _CountingClient(_priced(fingerprint="ffffffffffff")),
+            cache=cache,
+            guard=BudgetGuard(),
+            as_of=NOW,
+            provider="deepseek",
+            journal=tmp_path,
+            warning_sink=seen.append,
+        )
+        assert metered.call(_request()) is not None
+
+    assert seen, "un cambio de huella tiene que llegar al aviso, no quedarse en el codigo"
+    assert "system_fingerprint" in seen[0]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
