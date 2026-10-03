@@ -2,10 +2,10 @@
 
 | Campo | Valor |
 |---|---|
-| **Versión** | **2.6** · instrumento S&P 500 |
-| **Fecha** | 2026-10-01 |
+| **Versión** | **2.7** · instrumento S&P 500 |
+| **Fecha** | 2026-10-03 |
 | **Estado** | ✅ **Especificación cerrada.** Cambios posteriores solo mediante entrada en el registro y motivo medido |
-| **Documento padre** | `plan.md` v2.6 (fuente de verdad funcional) |
+| **Documento padre** | `plan.md` v2.7 (fuente de verdad funcional) |
 | **Ámbito** | Stack técnico del sistema descrito en `plan.md` |
 | **Instrumento** | **SPX500:CFD**, horario definido en `America/New_York` y presentado en `Europe/Madrid` |
 | **Restricciones rectoras** | Ejecución en **PC propio** · prioridad a **software libre y open source** · coste marginal objetivo **≈0 €** |
@@ -970,3 +970,4 @@ Como el sistema decide **una vez al día**, los artefactos de decisión son **un
 | 2026-09-27 | **2.4** | ✅ **§11 bis: la decisión 6 pasa a CERRADA y la 5 sigue abierta.** El precio de entrada queda fijado en el `open` de la subasta de apertura (09:30 ET), decisión del propietario verificada en **#64**/**#61**; el *slippage* de ejecución se declara como **supuesto** (`assumed`, `is_measurement: false`, **20 % de `R`**, pendiente de **#60**, medición real en **#62**, bp ilustrativo). Cabecera a 2.4 y fila `Documento padre` a `plan.md` v2.4 | Cerrar en el documento que las declaraba abiertas las decisiones ya implementadas en **#64**, sin fijar digests de artefactos regenerables |
 | 2026-10-01 | **2.5** | 📌 **§11 bis: las decisiones 4 y 5 siguen abiertas.** La decisión **4** (bróker) pasa a citar **#59** y la **5** (`R`/umbrales) cita **#60**; **ninguna** de las dos se marca resuelta. Contexto: la Fase 2 **no** supera su puerta de salida (decisión del propietario **`reframe`**, `plan.md` §19.6) y la **Fase 3 (`#30`–`#38`) queda bloqueada**. Cabecera a 2.5 y fila `Documento padre` a `plan.md` v2.5 | Alinear el documento con el cierre documental de la Fase 2, dejando constancia de que #59 y #60 siguen **`OPEN`**, sin fijar digests de artefactos regenerables |
 | 2026-10-01 | **2.6** | 🧭 **§11 bis acotada al carril B por el reencuadre.** Las decisiones **4** (**#59**) y **5** (**#60**) siguen sin marca de resuelta; con el reencuadre (`plan.md` §19.7) esas decisiones pendientes **limitan al carril B** y ya no bloquean construir y usar el **carril A** (asistente de decisión, ejecución manual, sin superar §11.6). Cabecera a 2.6 y fila `Documento padre` a `plan.md` v2.6 | Alinear el documento con el reencuadre del objetivo en dos carriles, sin fijar digests de artefactos regenerables |
+| 2026-10-03 | **2.7** | 🚪 **Puntero al documento padre.** La Fase 3 declara su **puerta de salida** (`plan.md` §16 y §19.8): se admite **`not_evaluable`** como veredicto válido con su consecuencia declarada **de antemano**, OPEX y compañía quedan **informativos** (sin regla 21), la primera versión de la orquestación de §4.10 va **sin `interrupt`**, y el calendario externo se ingiere con **`yfinance`** más un calendario declarado. **Sin cambio de contenido en este documento**: sólo la cabecera y el puntero al padre. Cabecera a 2.7 y fila `Documento padre` a `plan.md` v2.7 | Mantener el puntero al padre coherente con `plan.md` v2.7 sin tocar la especificación ya cerrada ni añadir digests de artefactos regenerables |

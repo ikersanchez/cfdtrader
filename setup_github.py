@@ -69,7 +69,7 @@ IGNORED_DIRS = {".git"}
 
 # Marcas transversales que no se deducen del parseo (cuidado si se renumera)
 CRITICAL_TASKS = {6, 8, 17, 39}  # las cuatro de mayor peso sobre el resultado
-GATE_TASKS = {9, 18, 29, 45}  # tareas que actúan de puerta de salida de fase
+GATE_TASKS = {9, 18, 29, 38, 45}  # tareas que actúan de puerta de salida de fase
 MEASUREMENT_TASKS = {6, 7, 8}  # mediciones de la Fase 0
 
 # ─────────────────────────────────────────────────────────────────────────────

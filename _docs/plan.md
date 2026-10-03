@@ -2,8 +2,8 @@
 
 | Campo | Valor |
 |---|---|
-| **Versión** | **2.6** |
-| **Fecha** | 2026-10-01 |
+| **Versión** | **2.7** |
+| **Fecha** | 2026-10-03 |
 | **Estado** | Diseño — pendiente de ejecutar Fase 0 |
 | **Instrumento** | **SPX500:CFD**, cotizando en el horario de la sesión regular estadounidense; las horas se calculan en `America/New_York` y se presentan en `Europe/Madrid` |
 | **Ámbito** | Decisión de apoyo (*decision support*). La ejecución es siempre manual. |
@@ -530,7 +530,7 @@ class Recommendation(BaseModel):
 6. Human-in-the-loop: tú decides. Y registras si anulaste la recomendación y por qué.
 ```
 
-**Uso de LangGraph:** orquesta el *pipeline* (fetch → nodos expertos en paralelo → fan-in → síntesis), con `state` tipado por Pydantic, `checkpointer` para persistencia e `interrupt` para el punto de decisión humana. El paso 4 debe ser **una función pura de Python** invocable en un backtest en milisegundos con resultado idéntico cada vez.
+**Uso de LangGraph:** orquesta el *pipeline* (fetch → nodos expertos en paralelo → fan-in → síntesis), con `state` tipado por Pydantic y `checkpointer` para persistencia. **La primera versión no usa `interrupt`** (decisión del propietario del 2026-10-03, §19.8): el punto de decisión humana de §13 lo ejerce el propietario **fuera** del grafo, porque la ejecución es manual y a demanda y no existe un grafo pausado al que reanudar (`tech_stack.md` §4.11). El paso 4 debe ser **una función pura de Python** invocable en un backtest en milisegundos con resultado idéntico cada vez.
 
 ### 7.4 Guardarraíles del LLM
 
@@ -972,6 +972,10 @@ Motor con purga/embargo, modelo de costes, baselines triviales, métricas netas.
 
 `NewsAgent` con salida estructurada, veto y ±10pp. Evaluación **incremental**: ¿mejora el Brier score y el Sharpe OOS con el veto activo? Si no, el LLM queda solo como redactor del informe.
 
+**Puerta de salida (tarea 38) — registrada el 2026-10-03, antes de ver resultados, y no se modifica después:** **(a)** el overlay está acotado e inofensivo **con pruebas**: el veto no invierte la dirección, el ajuste está topado a **±10 pp** y superar un tope **nunca** bloquea el pipeline; **(b)** el diario registra **qué hizo y por qué se desactivó** cada día, sin inventar los campos ausentes; **(c)** la evaluación incremental está **diseñada, ejecutada y reportada con veredicto explícito**, y **`not_evaluable` es un veredicto válido** —el backtest corre siempre sin overlay porque no hay archivo histórico de noticias (`tech_stack.md` §4.9)— con su consecuencia declarada **de antemano**: el LLM queda **solo como redactor** y la evidencia se traslada al *paper trading* de la Fase 4; **(d)** el camino diario se ejecuta de punta a punta **sin el LLM en el camino crítico**.
+
+> **Esta puerta no es una afirmación de *edge*.** La Fase 3 avanza por el **carril A** (§19.7) y su cierre **no altera §11.6**: el carril B sigue bloqueado y `phase2_ready = false`.
+
 ### Fase 4 · Paper trading (2–3 meses)
 
 Recomendaciones diarias registradas, sin operar (o con importe simbólico). Medir divergencia vs backtest.
@@ -1136,6 +1140,17 @@ El registro debe distinguir con claridad tres situaciones **que no son lo mismo*
 - **Regla de fases.** La regla de `_docs/tasks.md` «no se empieza una fase sin haber pasado la puerta de salida de la anterior» pasa a aplicar **solo al carril B**. El **carril A** puede avanzar: el camino diario, la **Fase 3** como *overlay* de noticias y la Fase 4 de operación.
 - **Valla de honestidad.** Toda salida del asistente declara explícitamente que **no hay edge demostrado** (la Fase 2 no supera su puerta: criterio principal `not_evaluable`, `no_cell_crosses = true`, agregado `fail` y `phase2_ready = false`; decisión `reframe`) y que es **apoyo a la decisión con ejecución manual**, no una estrategia validada.
 
+### 19.8 Decisiones del propietario del 2026-10-03: puerta de la Fase 3 y alcance acotado
+
+✅ **Decisión del propietario (2026-10-03).** Se declara la **puerta de salida de la Fase 3** —la única fase que no la tenía— y se registran cuatro decisiones que acotan su alcance. Ninguna reabre §11.6.
+
+- **La puerta de la Fase 3 no puede ser «el overlay mejora el Brier», y se declara por qué.** El backtest corre **siempre sin overlay** porque **no hay archivo histórico de noticias** (`tech_stack.md` §4.9), así que esa medición **no es obtenible hacia atrás**. La puerta queda en cuatro condiciones verificables —**(a)** acotado e inofensivo **con pruebas**; **(b)** registrado en el diario; **(c)** evaluación incremental **diseñada, ejecutada y reportada con veredicto explícito**; **(d)** camino diario **sin el LLM en el camino crítico**— y admite **`not_evaluable` como veredicto válido**, con su consecuencia declarada **de antemano**: el LLM queda **solo como redactor** y la evidencia se traslada al *paper trading* de la Fase 4 (tarea 45). Se registra el **2026-10-03, antes de ver resultados**, y **no se modifica después**, como exige §11.6.
+- **OPEX, triple *witching* y roll del ES son informativos, no regla dura.** El `EventCalendarAgent` los publica con `blocking = false` (`BLOCKING_KINDS` cubre sólo cierre de mercado y media sesión, reglas 18 y 19). El gate **no gana una regla 21**, y `blocking_events` no se contamina con eventos que no bloquean: lo informativo va al informe y a `agent_signals`.
+- **La primera versión de la orquestación (tarea 36) no usa `interrupt`.** El punto de decisión humana de §7.3 lo ejerce el propietario **fuera** del grafo: la ejecución es **manual y a demanda, sin scheduler** (§13 y `tech_stack.md` §4.11), así que no existe un grafo pausado al que reanudar. Es una **decisión registrada, no una omisión**. El `checkpointer` que nombra §7.3 queda pendiente de decidir al *groomear* esa tarea.
+- **Fuente del calendario externo:** `yfinance` para los resultados de mega-caps (ya es dependencia) y un **calendario declarado y versionado** para FOMC y macro, con URL de procedencia y fecha de verificación por entrada. Una fecha **estimada no bloquea**: el evento declara su certeza y su instante de observación.
+
+- **Valla de honestidad (se mantiene).** Cerrar la Fase 3 **no** es una afirmación de *edge*: el carril B sigue bloqueado por §11.6 (`phase2_ready = false`) y la ejecución es **manual**.
+
 ---
 
 ## 20. Marco regulatorio y fiscal (España) — resumen, no asesoramiento
@@ -1245,3 +1260,4 @@ El registro debe distinguir con claridad tres situaciones **que no son lo mismo*
 | 2026-09-27 | **2.4** | ✅ **Las dos decisiones del propietario del 2026-09-18 dejan de declararse abiertas.** **§4.1:** el aviso del calendario pasa a declarar el **precio de entrada decidido** (el `open` de la subasta de apertura, 09:30 ET), con procedencia del propietario, enlaces **#64**/**#61** y evidencia medida (**59/59** sesiones, `max_abs_diff_bp` **0,0**). **§3.3:** entrada nueva del *slippage* como **supuesto declarado** (`assumed`, `is_measurement: false`, **20 % de `R`**, pendiente de **#60**, medición real en **#62**, bp ilustrativo). **§21 pregunta 7 resuelta** en el formato de la 14. Todo verificado en **#64** (commits `7a35db0` y `ed5981a`) | Cerrar el registro que mandatan `plan.md` §17 y la regla de `tech_stack.md` §11 bis: una decisión del propietario se anota en el documento que la declaraba abierta, con procedencia por commit y evidencia medida, sin fijar digests de artefactos regenerables |
 | 2026-10-01 | **2.5** | 🛑 **La Fase 2 no supera su puerta de salida (tarea 29 / §11.6).** Nuevo **§19.6** con la decisión del propietario (**`reframe`**) y la evidencia medida: Fase 0 en **`fail`** con el drift en el tramo **nocturno** (intradía limpio **no significativo**), Fase 2 con criterio principal **`not_evaluable`**, **`no_cell_crosses = true`**, agregado **`fail`** y **`phase2_ready = false`**; potencia de §11.5 (**~4.900** operaciones frente a las **150** del S1) ⇒ **no concluyente**. La **Fase 3 (`#30`–`#38`) queda bloqueada**. Cabecera a 2.5 | No se empieza una fase sin superar la puerta de salida de la anterior: registrar la decisión del propietario del 2026-10-01, sin fijar digests de artefactos regenerables |
 | 2026-10-01 | **2.6** | 🧭 **Reencuadre del objetivo en dos carriles.** Nuevo **§19.7**: el **carril A** (asistente de decisión, ejecución manual) puede construirse y usarse **sin superar §11.6**; el **carril B** (estrategia validada) **sigue gated** por §11.6. La regla de fases de `_docs/tasks.md` y la viñeta de bloqueo de §19.6 quedan **acotadas al carril B**, y se registra la **valla de honestidad** (toda salida del asistente avisa de que **no hay edge demostrado**). Cabecera a 2.6 | Registrar la decisión del propietario del 2026-10-01 sin reabrir §11.6 ni fijar digests de artefactos regenerables |
+| 2026-10-03 | **2.7** | 🚪 **Puerta de salida de la Fase 3 declarada, antes de ver resultados.** **§16** (Fase 3) gana la puerta de la tarea 38 con sus cuatro condiciones —acotado e inofensivo **con pruebas**; registrado en el diario; evaluación incremental **diseñada, ejecutada y reportada**; y camino diario **sin el LLM en el camino crítico**— y la advertencia de que **no es una afirmación de *edge*** (carril A). Nuevo **§19.8** con las cuatro decisiones del propietario del 2026-10-03: la puerta admite **`not_evaluable`** con su consecuencia declarada **de antemano**; OPEX, triple *witching* y roll del ES **informativos**, sin regla 21; la primera versión de la orquestación **sin `interrupt`**; y fuente del calendario externo (**`yfinance`** + calendario declarado). **§7.3** ajusta el párrafo de LangGraph a la decisión. Cabecera a 2.7 | §11.6 exige **pre-registrar** los criterios y no modificarlos tras ver los resultados —declarar la puerta al final sería mover la portería—, y §17 prohíbe dar por resuelta una decisión sin registrarla antes. Decisión del propietario del 2026-10-03 |
