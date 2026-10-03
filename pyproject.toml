@@ -38,11 +38,14 @@ dependencies = [
     # El SDK `openai` cubre OpenAI y DeepSeek (solo cambia `base_url`); `feedparser` lee RSS.
     "openai>=1.40,<4",
     "feedparser>=6.0,<7",
+    # Plantillas de prompt **versionadas en git** (tech_stack.md §12.8): el texto del
+    # prompt vive en el repositorio y solo se persiste su hash. Autorizado para #32.
+    "jinja2>=3.1,<4",
 ]
 
 # Fase 0–2: stack mínimo viable (tech_stack.md §5.1).
-# La Fase 3 (carril A) ya añade el SDK `openai` y `feedparser`; el resto de §5.2
-# (langgraph, diskcache, tiktoken, jinja2, gdeltdoc, streamlit, …) sigue fuera
+# La Fase 3 (carril A) ya añade el SDK `openai`, `feedparser` y `jinja2`; el resto
+# de §5.2 (langgraph, diskcache, tiktoken, gdeltdoc, streamlit, …) sigue fuera
 # hasta que lo pida su tarea.
 [dependency-groups]
 dev = [
