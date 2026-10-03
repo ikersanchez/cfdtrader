@@ -142,6 +142,7 @@ from cfdtrader.features.store import FEATURE_VERSION_PREFIX
 from cfdtrader.journal.decision_log import DecisionLogError, Journal, build_decision
 from cfdtrader.models.baseline import BASELINE_FEATURES
 from cfdtrader.models.calibration import Calibration, sigmoid
+from cfdtrader.orchestration.observability import RunObserver
 
 __all__ = [
     "DeliveryError",
@@ -174,6 +175,10 @@ _LINEAR_FOLD_KEYS: Final[tuple[str, ...]] = ("mean", "scale", "coefficients", "i
 #: ``features_version`` declarada cuando el almacen **no** pudo construir la matriz (estado
 #: ``error``): una ausencia declarada, nunca un digest inventado.
 FEATURES_VERSION_UNAVAILABLE: Final[str] = "unavailable"
+
+#: Subdirectorio de la traza estructurada (#43) cuando no se pasa `--observability-root`:
+#: ``<journal-root>/ops``. La guardia lee ``decisions/``, asi que ``ops/`` no la contamina.
+OBSERVABILITY_DIRNAME: Final[str] = "ops"
 
 #: Las dos familias del payload: la lineal de #110 (sin `library`) y la LightGBM de #111.
 _LINEAR_FAMILY: Final[str] = "linear"
@@ -717,6 +722,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     ``--git-commit`` ausentes o invalidos, fallo del pipeline (``error``) o diario no escribible,
     con el motivo por ``stderr`` y sin *traceback*. Cada ejecucion registra la fila del diario
     (§19.3) antes de devolver, tambien en un dia de mercado cerrado.
+
+    Ademas escribe su **traza estructurada** (#43) bajo ``--observability-root`` (por defecto
+    ``<journal-root>/ops``): ``<session>/run_log.jsonl`` (una linea por etapa) y
+    ``<session>/manifest.json`` (versiones y hashes). Un fallo de una etapa queda en la traza
+    con su *traceback* completo y no se pierde.
     """
     parser = argparse.ArgumentParser(
         prog="cfdtrader.delivery.run_daily",
@@ -748,6 +758,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--calendar", type=Path, default=None, help="ruta de calendar.yaml")
     parser.add_argument(
         "--runs-root", type=Path, default=Path("runs"), help="raiz del registro de experimentos"
+    )
+    parser.add_argument(
+        "--observability-root",
+        type=Path,
+        default=None,
+        help="raiz de la traza estructurada (run_log/manifest); por defecto `<journal-root>/ops`",
     )
     args = parser.parse_args(argv)
 
@@ -790,16 +806,65 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
 
+    journal_root = Path(journal_root_arg)
+    # La traza estructurada (#43) vive bajo el diario por defecto. La guardia de obsolescencia
+    # lee `decisions/` con `read_decisions`, asi que `ops/` no la contamina.
+    observability_root_arg = cast("Path | None", args.observability_root)
+    observability_root = (
+        observability_root_arg
+        if observability_root_arg is not None
+        else journal_root / OBSERVABILITY_DIRNAME
+    )
+    session = moment.astimezone(EASTERN).date()
+    observer = RunObserver(
+        observability_root,
+        run_id=session.isoformat(),
+        as_of=moment,
+        git_commit=git_commit,
+    )
+    with observer:
+        return _deliver(
+            observer,
+            moment=moment,
+            declared_run=declared_run,
+            declared_variant=declared_variant,
+            journal_root=journal_root,
+            git_commit=git_commit,
+            settings_path=cast("Path | None", args.settings),
+            calendar_path=cast("Path | None", args.calendar),
+            data_root_arg=cast("Path | None", args.data_root),
+            runs_root=Path(args.runs_root),
+        )
+
+
+def _deliver(
+    observer: RunObserver,
+    *,
+    moment: datetime,
+    declared_run: str | None,
+    declared_variant: str | None,
+    journal_root: Path,
+    git_commit: str,
+    settings_path: Path | None,
+    calendar_path: Path | None,
+    data_root_arg: Path | None,
+    runs_root: Path,
+) -> int:
+    """Ejecuta el pipeline de una sesion y devuelve su codigo de salida (ver ``main``).
+
+    Los parametros ya vienen validados por ``main``. ``observer`` registra las etapas y, al
+    salir, escribe el ``run_log`` y el ``manifest`` **tambien si una etapa lanza** (#43).
+    """
+
     try:
-        settings = load_settings(args.settings)
-        calendar: MarketCalendar = load_calendar(args.calendar)
+        settings = load_settings(settings_path)
+        calendar: MarketCalendar = load_calendar(calendar_path)
     except ConfigurationError as error:
+        observer.record("config", ok=False, error=str(error))
         print(f"no se puede emitir la pista diaria: {error}", file=sys.stderr)
         return 2
 
-    data_root = Path(args.data_root) if args.data_root is not None else Path(settings.data.root)
-    runs_root = Path(args.runs_root)
-    journal_root = Path(journal_root_arg)
+    data_root = Path(data_root_arg) if data_root_arg is not None else Path(settings.data.root)
     # La ruta se conoce de antemano con `--model-run`; con `--variant-id` la decide el registro, y
     # hasta entonces el informe declara el selector sin resolver (nunca un digest inventado).
     model_path = (
@@ -826,19 +891,23 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         if declared_variant is not None:
-            entry = resolve_run(runs_root=runs_root, variant_id=declared_variant)
+            with observer.stage("resolve-model"):
+                entry = resolve_run(runs_root=runs_root, variant_id=declared_variant)
             model_version = entry.run_sha256
             model_path = runs_root / entry.run_sha256 / MODEL_FILE
             model_source = f"{model_path} (variant_id: {entry.variant_id})"
-        matrix = build_feature_matrix(Store(data_root))
-        features_version = FEATURE_VERSION_PREFIX + matrix.matrix_sha256
-        snapshot_session = matrix.last_session
-        guard = session_guard(
-            as_of=moment,
-            calendar=calendar,
-            snapshot_session=snapshot_session,
-            executions=execution_dates(journal_root),
-        )
+        with observer.stage("features"):
+            matrix = build_feature_matrix(Store(data_root))
+            features_version = FEATURE_VERSION_PREFIX + matrix.matrix_sha256
+            snapshot_session = matrix.last_session
+            guard = session_guard(
+                as_of=moment,
+                calendar=calendar,
+                snapshot_session=snapshot_session,
+                executions=execution_dates(journal_root),
+            )
+        observer.add_version("features_version", features_version)
+        observer.add_version("model_version", model_version)
         if guard.blocks and guard.verdict is not GuardVerdict.MARKET_CLOSED:
             # Aqui solo llegan los dos "no se" de frescura. La clausura (#113, MARKET_CLOSED) **no**
             # para el camino: el gate la convierte en un `NOTHING` justificado (regla 19) que si se
@@ -851,16 +920,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 model_source=model_source,
                 message=_guard_message(guard),
             )
-            failure = _record_or_report(
-                journal_root,
-                session=session,
-                as_of=moment,
-                status=GateStatus.NO_RECOMMENDATION_STALE_DATA,
-                features_version=features_version,
-                model_version=model_version,
-                git_commit=git_commit,
-                report_text=text,
-            )
+            with observer.stage("journal"):
+                failure = _record_or_report(
+                    journal_root,
+                    session=session,
+                    as_of=moment,
+                    status=GateStatus.NO_RECOMMENDATION_STALE_DATA,
+                    features_version=features_version,
+                    model_version=model_version,
+                    git_commit=git_commit,
+                    report_text=text,
+                )
             if failure is not None:
                 return failure
             print(text)
@@ -876,22 +946,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                 model_source=model_source,
                 message=f"calidad de datos (tech_stack.md §8.4): {problem}; no se emite pista",
             )
-            failure = _record_or_report(
-                journal_root,
-                session=session,
-                as_of=moment,
-                status=GateStatus.NO_RECOMMENDATION_DATA_QUALITY,
-                features_version=features_version,
-                model_version=model_version,
-                git_commit=git_commit,
-                report_text=text,
-            )
+            with observer.stage("journal"):
+                failure = _record_or_report(
+                    journal_root,
+                    session=session,
+                    as_of=moment,
+                    status=GateStatus.NO_RECOMMENDATION_DATA_QUALITY,
+                    features_version=features_version,
+                    model_version=model_version,
+                    git_commit=git_commit,
+                    report_text=text,
+                )
             if failure is not None:
                 return failure
             print(text)
             return 0
         features = {name: float(cast("float", row[name])) for name in BASELINE_FEATURES}
-        prob_up_raw, probability = _predictions(model_path, features)
+        with observer.stage("predict"):
+            prob_up_raw, probability = _predictions(model_path, features)
         move = _expected_move_pct(row)
         cost = cost_breakdown(
             model=declared_cost_model(),
@@ -902,52 +974,56 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         params = scenario_parameters(cost_pct=cost.c_declared_pct)
         stop_pct = SCENARIO_STOP_SIGMA_MULTIPLE * move
-        output = evaluate_gate(
-            session=session,
-            as_of=as_of_et,
-            today=session,
-            calendar=calendar,
-            prob_up_calibrated=probability,
-            expected_move_pct=move,
-            expected_move_basis=EXPECTED_MOVE_BASIS,
-            cost=cost,
-            capital_usd=NOTIONAL_USD,
-            snapshot_ok=True,
-            stop_pct=stop_pct,
-            target_pct=SCENARIO_TARGET_STOP_MULTIPLE * stop_pct,
-            fomc_dates=(),
-            params=params,
-            trades_today=0,
-            daily_pnl_pct=None,
-            weekly_pnl_pct=None,
-            monthly_pnl_pct=None,
-            observation_sessions_remaining=guard.observation_sessions_remaining,
-        )
+        with observer.stage("gate"):
+            output = evaluate_gate(
+                session=session,
+                as_of=as_of_et,
+                today=session,
+                calendar=calendar,
+                prob_up_calibrated=probability,
+                expected_move_pct=move,
+                expected_move_basis=EXPECTED_MOVE_BASIS,
+                cost=cost,
+                capital_usd=NOTIONAL_USD,
+                snapshot_ok=True,
+                stop_pct=stop_pct,
+                target_pct=SCENARIO_TARGET_STOP_MULTIPLE * stop_pct,
+                fomc_dates=(),
+                params=params,
+                trades_today=0,
+                daily_pnl_pct=None,
+                weekly_pnl_pct=None,
+                monthly_pnl_pct=None,
+                observation_sessions_remaining=guard.observation_sessions_remaining,
+            )
     except (MissingModelError, UnsupportedModelError) as error:
-        return _fail_with_error(
-            journal_root,
-            session=session,
-            as_of=moment,
-            snapshot_session=snapshot_session,
-            model_source=model_source,
-            features_version=features_version,
-            model_version=model_version,
-            git_commit=git_commit,
-            message=str(error),
-        )
+        with observer.stage("journal"):
+            return _fail_with_error(
+                journal_root,
+                session=session,
+                as_of=moment,
+                snapshot_session=snapshot_session,
+                model_source=model_source,
+                features_version=features_version,
+                model_version=model_version,
+                git_commit=git_commit,
+                message=str(error),
+            )
     except (DeliveryError, FeatureFrameError, ConfigurationError) as error:
-        return _fail_with_error(
-            journal_root,
-            session=session,
-            as_of=moment,
-            snapshot_session=snapshot_session,
-            model_source=model_source,
-            features_version=features_version,
-            model_version=model_version,
-            git_commit=git_commit,
-            message=str(error),
-        )
+        with observer.stage("journal"):
+            return _fail_with_error(
+                journal_root,
+                session=session,
+                as_of=moment,
+                snapshot_session=snapshot_session,
+                model_source=model_source,
+                features_version=features_version,
+                model_version=model_version,
+                git_commit=git_commit,
+                message=str(error),
+            )
 
+    observer.add_hash("gate_sha256", output.gate_sha256)
     text = render(
         status=output.status,
         session=session,
@@ -957,18 +1033,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         message=_guard_message(guard),
         output=output,
     )
-    failure = _record_or_report(
-        journal_root,
-        session=session,
-        as_of=moment,
-        status=output.status,
-        features_version=features_version,
-        model_version=model_version,
-        git_commit=git_commit,
-        report_text=text,
-        output=output,
-        prob_up_raw=prob_up_raw,
-    )
+    with observer.stage("journal"):
+        failure = _record_or_report(
+            journal_root,
+            session=session,
+            as_of=moment,
+            status=output.status,
+            features_version=features_version,
+            model_version=model_version,
+            git_commit=git_commit,
+            report_text=text,
+            output=output,
+            prob_up_raw=prob_up_raw,
+        )
     if failure is not None:
         return failure
     print(text)

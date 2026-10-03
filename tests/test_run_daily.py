@@ -2025,3 +2025,114 @@ def test_the_guard_paths_are_deterministic_across_hash_seeds(
 
         assert outputs[0] == outputs[1], as_of
         assert digests[0] == digests[1], as_of
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #43: la traza estructurada del camino diario (run_log + manifest)
+# ─────────────────────────────────────────────────────────────────────────────
+def test_the_run_writes_the_observability_trace_under_the_journal_root(
+    store_root: Path, runs_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A15 (#43): la ejecución deja su traza (`run_log.jsonl` + `manifest.json`)."""
+    journal_root = tmp_path / "journal"
+    code = run_daily.main(
+        [
+            "--as-of",
+            AS_OF_NEXT,
+            "--model-run",
+            RUN_ID,
+            "--journal-root",
+            str(journal_root),
+            "--git-commit",
+            GIT_COMMIT,
+            "--data-root",
+            str(store_root),
+            "--runs-root",
+            str(runs_root),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 0, captured.err
+
+    run_dir = journal_root / "ops" / NEXT_SESSION.isoformat()
+    log_path = run_dir / "run_log.jsonl"
+    manifest_path = run_dir / "manifest.json"
+    assert log_path.is_file() and manifest_path.is_file()
+
+    entries = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    stages = [entry["stage"] for entry in entries]
+    assert {"features", "predict", "gate", "journal"} <= set(stages)
+    assert all(entry["ok"] is True for entry in entries)
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["run_id"] == NEXT_SESSION.isoformat()
+    assert manifest["git_commit"] == GIT_COMMIT
+    assert manifest["ok"] is True
+    assert cast("str", manifest["hashes"]["gate_sha256"]).startswith("sha256:")
+    assert cast("str", manifest["versions"]["features_version"]).startswith(FEATURE_VERSION_PREFIX)
+    assert manifest["versions"]["model_version"] == RUN_ID
+
+
+def test_observability_root_overrides_the_default_location(
+    store_root: Path, runs_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A16 (#43): `--observability-root` desvía la traza fuera del diario."""
+    journal_root = tmp_path / "journal"
+    observability_root = tmp_path / "trace"
+    code = run_daily.main(
+        [
+            "--as-of",
+            AS_OF_NEXT,
+            "--model-run",
+            RUN_ID,
+            "--journal-root",
+            str(journal_root),
+            "--git-commit",
+            GIT_COMMIT,
+            "--data-root",
+            str(store_root),
+            "--runs-root",
+            str(runs_root),
+            "--observability-root",
+            str(observability_root),
+        ]
+    )
+    assert code == 0, capsys.readouterr().err
+
+    assert (observability_root / NEXT_SESSION.isoformat() / "run_log.jsonl").is_file()
+    assert not (journal_root / "ops").exists()
+
+
+def test_a_pipeline_failure_is_recorded_in_the_trace(
+    store_root: Path, runs_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A17 (#43): un modelo ausente deja la etapa fallida con su traza y `manifest.ok = False`."""
+    journal_root = tmp_path / "journal"
+    code = run_daily.main(
+        [
+            "--as-of",
+            AS_OF_NEXT,
+            "--model-run",
+            "0" * 64,  # no existe en `runs_root`: el modelo falta
+            "--journal-root",
+            str(journal_root),
+            "--git-commit",
+            GIT_COMMIT,
+            "--data-root",
+            str(store_root),
+            "--runs-root",
+            str(runs_root),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 2, captured.out
+
+    run_dir = journal_root / "ops" / NEXT_SESSION.isoformat()
+    log_text = (run_dir / "run_log.jsonl").read_text(encoding="utf-8")
+    entries = [json.loads(line) for line in log_text.splitlines()]
+    failed = [entry for entry in entries if entry["ok"] is False]
+    assert failed, entries
+    assert any("Traceback" in cast("str", entry["error"]) for entry in failed)
+
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["ok"] is False
