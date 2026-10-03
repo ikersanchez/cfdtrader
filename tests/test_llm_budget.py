@@ -40,6 +40,7 @@ from cfdtrader.llm.budget import (
     Caps,
     LLMCall,
     MeteredLLMClient,
+    OverlayClient,
     OverlayState,
     estimate_cost,
     prepare_headlines,
@@ -313,6 +314,40 @@ def test_the_cost_is_none_without_a_declared_price() -> None:
         model="deepseek-chat", tokens_in=1_000_000, tokens_out=1_000_000, prices=prices
     ) == pytest.approx(2.0)
     assert estimate_cost(model="otro", tokens_in=1, tokens_out=1, prices=prices) is None
+
+
+def test_a12_the_overlay_client_bridge_is_public(tmp_path: Path) -> None:
+    """El puente que el agente necesita: `call()` de la capa metrada -> `complete()` del agente.
+
+    Antes de #35 este adaptador no existia y hubo que escribirlo en un script de un solo uso para
+    poder ejecutar la cadena de punta a punta.
+    """
+    with ResponseCache(tmp_path / "cache") as cache:
+        bridge = OverlayClient(
+            MeteredLLMClient(
+                _CountingClient(_response("vale")),
+                cache=cache,
+                guard=BudgetGuard(),
+                as_of=NOW,
+                provider="deepseek",
+            )
+        )
+        assert bridge.state is OverlayState.APPLIED
+        assert bridge.complete(_request()).content == "vale"
+        assert bridge.last_cache_hit is False
+
+        stopped = OverlayClient(
+            MeteredLLMClient(
+                _CountingClient(_response()),
+                cache=cache,
+                guard=BudgetGuard(caps=Caps(max_calls_per_run=0)),
+                as_of=NOW,
+                provider="deepseek",
+            )
+        )
+        with pytest.raises(LLMError, match="no puede responder"):
+            stopped.complete(_request(inputs="otra peticion"))
+        assert stopped.state is OverlayState.DISABLED_BUDGET
 
 
 # ─────────────────────────────────────────────────────────────────────────────

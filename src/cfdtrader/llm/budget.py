@@ -53,6 +53,7 @@ __all__ = [
     "Caps",
     "LLMCall",
     "MeteredLLMClient",
+    "OverlayClient",
     "OverlayState",
     "estimate_cost",
     "prepare_headlines",
@@ -302,6 +303,47 @@ class LLMCall:
             "latency_ms": self.latency_ms,
             "ok": self.ok,
         }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# El puente hacia el agente (#35)
+# ─────────────────────────────────────────────────────────────────────────────
+class OverlayClient:
+    """Adapta la capa metrada al contrato ``LLMClient`` que consume el agente (#32).
+
+    Existe porque los dos contratos son **distintos a propósito**: ``NewsAgent`` pide ``complete``
+    (siempre hay respuesta o hay error), y la capa metrada expone :meth:`MeteredLLMClient.call`,
+    que ademas puede devolver ``None`` cuando el overlay esta cortado (presupuesto, fallos, tiempo).
+    Ese ``None`` es una **decision**, no un fallo, y aqui se traduce a :class:`LLMError` para que el
+    agente no tenga que saber de presupuestos.
+
+    El camino diario **consulta el estado antes** de invocar al agente, asi que en uso correcto
+    nunca se llega aqui con el overlay cortado; si se llega, es un fallo del llamante y prefiero un
+    error tipado a un dato inventado.
+    """
+
+    def __init__(self, metered: MeteredLLMClient) -> None:
+        self._metered = metered
+
+    @property
+    def state(self) -> OverlayState:
+        """El estado del overlay, tal cual lo dejo la ultima comprobacion."""
+        return self._metered.state
+
+    @property
+    def last_cache_hit(self) -> bool:
+        """Si la ultima peticion se resolvio con la cache."""
+        return self._metered.last_cache_hit
+
+    def complete(self, request: LLMRequest) -> LLMResponse:
+        """La respuesta del agente, o ``LLMError`` si el overlay esta cortado."""
+        response = self._metered.call(request)
+        if response is None:
+            raise LLMError(
+                f"el overlay no puede responder (estado {self._metered.state.value}); el llamante "
+                "debe haber consultado el estado antes de invocar al agente"
+            )
+        return response
 
 
 def record_call(journal: Journal | Path | str, call: LLMCall) -> WriteOutcome:
