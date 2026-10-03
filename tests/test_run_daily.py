@@ -144,7 +144,9 @@ FROZEN: Final[frozenset[str]] = frozenset(
         "src/cfdtrader/backtest/metrics.py",
         "src/cfdtrader/backtest/baselines.py",
         "src/cfdtrader/data/store.py",
-        "src/cfdtrader/data/calendar.py",
+        # #124 retira `data/calendar.py` de este conjunto: el esquema y el cargador del calendario
+        # de FOMC declarado viven en ese modulo, el mismo criterio que #113 aplico con el gate
+        # (`decision/gate.py`) y con el informe (`analysis/pipeline_report.py`).
         "src/cfdtrader/data/settings.py",
     }
 )
@@ -517,9 +519,9 @@ def test_a_stale_store_has_no_hint(
     assert f"snapshot_sesion: {SNAPSHOT_SESSION.isoformat()}" in captured.out
     assert "direccion:" not in captured.out
     assert "no hay edge demostrado" in captured.out
-    # 2026 no esta declarado en `config/fomc_calendar.yaml`: el camino diario lo dice en voz alta
-    # en vez de pasar un conjunto vacio en silencio (#124). Era `captured.err == ""` antes.
-    assert "no esta declarado en el calendario de FOMC" in captured.err
+    # Este camino sale **antes** de la etapa del calendario, asi que el aviso de FOMC de #124 no
+    # llega a imprimirse: aqui el `stderr` sigue vacio.
+    assert captured.err == ""
 
 
 def test_a_null_feature_row_is_a_data_quality_state(
@@ -2017,7 +2019,7 @@ def _write_calendar(
 
     Es el mecanismo del proyecto para lo que ninguna regla deduce ("cierres por luto nacional o
     medias sesiones anunciadas a la ultima hora"): asi la prueba declara un festivo o una media
-    sesion sin tocar `data/calendar.py`, que esta congelado para esta entrega.
+    sesion sin tocar el calendario de mercado (`MarketCalendar`).
     """
     lines: list[str] = []
     for key, days in (("extra_holidays", holidays), ("extra_half_days", half_days)):
@@ -2086,7 +2088,8 @@ def test_a3_a_market_closed_day_is_a_justified_nothing_in_the_journal(
         assert "no_recommendation" not in captured.out, session
         assert "direccion: LONG" not in captured.out, session
         assert "direccion: SHORT" not in captured.out, session
-        assert captured.err == ""
+        # 2026 no esta declarado en `config/fomc_calendar.yaml`: el aviso sale en voz alta (#124).
+        assert "no esta declarado en el calendario de FOMC" in captured.err, session
 
         record = read_decision(journal_root, session)
         assert record["status"] == "recommendation"
@@ -2194,7 +2197,8 @@ def test_a6_a_half_session_is_a_justified_nothing(
     assert "direccion: NOTHING" in captured.out
     assert "bloqueo: 18:media_sesion" in captured.out
     assert "no_recommendation" not in captured.out
-    assert captured.err == ""
+    # 2026 no esta declarado en `config/fomc_calendar.yaml`: el aviso sale en voz alta (#124).
+    assert "no esta declarado en el calendario de FOMC" in captured.err
 
     record = read_decision(journal_root, STALE_SESSION)
     assert record["status"] == "recommendation"
@@ -2233,7 +2237,8 @@ def test_a8_observation_mode_is_not_an_actionable_hint(
     assert "reincorporacion" in captured.out
     assert "5 de 5" in captured.out
     assert "no_recommendation" not in captured.out
-    assert captured.err == ""
+    # 2026 no esta declarado en `config/fomc_calendar.yaml`: el aviso sale en voz alta (#124).
+    assert "no esta declarado en el calendario de FOMC" in captured.err
 
     record = read_decision(journal_root, NEXT_SESSION)
     assert record["status"] == "recommendation"
