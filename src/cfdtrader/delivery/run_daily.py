@@ -102,7 +102,9 @@ from typing import Final, cast
 import numpy as np
 from lightgbm import Booster
 from lightgbm.basic import LightGBMError
+from pydantic import ValidationError
 
+from cfdtrader.agents.news import PROMPT_TEMPLATE_NAME, NewsAgent, NewsAgentError
 from cfdtrader.analysis.backtest_report import NOTIONAL_USD
 from cfdtrader.analysis.experiment_log import (
     ExperimentLogError,
@@ -129,9 +131,16 @@ from cfdtrader.backtest.costs import (
     declared_slippage_assumption,
 )
 from cfdtrader.data.calendar import EASTERN, MarketCalendar, load_calendar
+from cfdtrader.data.news import load_headlines
 from cfdtrader.data.settings import ConfigurationError, load_settings
 from cfdtrader.data.store import Store
 from cfdtrader.decision.gate import GateOutput, GateStatus, evaluate_gate
+from cfdtrader.decision.overlay import (
+    OverlayDecision,
+    OverlayState,
+    disabled_overlay,
+    overlay_from_extraction,
+)
 from cfdtrader.delivery.staleness import (
     GuardVerdict,
     SessionGuard,
@@ -140,6 +149,15 @@ from cfdtrader.delivery.staleness import (
 )
 from cfdtrader.features.store import FEATURE_VERSION_PREFIX
 from cfdtrader.journal.decision_log import DecisionLogError, Journal, build_decision
+from cfdtrader.llm.base import LLMClientConfig, LLMError, build_client
+from cfdtrader.llm.budget import (
+    BudgetCaps,
+    BudgetGuard,
+    MeteredLLMClient,
+    OverlayClient,
+    prepare_headlines,
+)
+from cfdtrader.llm.cache import ResponseCache
 from cfdtrader.models.baseline import BASELINE_FEATURES
 from cfdtrader.models.calibration import Calibration, sigmoid
 from cfdtrader.orchestration.observability import RunObserver
@@ -179,6 +197,9 @@ FEATURES_VERSION_UNAVAILABLE: Final[str] = "unavailable"
 #: Subdirectorio de la traza estructurada (#43) cuando no se pasa `--observability-root`:
 #: ``<journal-root>/ops``. La guardia lee ``decisions/``, asi que ``ops/`` no la contamina.
 OBSERVABILITY_DIRNAME: Final[str] = "ops"
+
+#: La cache de respuestas del LLM vive dentro de `ops/` (§12.6, `ops.llm_cache`).
+LLM_CACHE_DIRNAME: Final[str] = "llm_cache"
 
 #: Las dos familias del payload: la lineal de #110 (sin `library`) y la LightGBM de #111.
 _LINEAR_FAMILY: Final[str] = "linear"
@@ -555,6 +576,68 @@ def _expected_move_pct(row: Mapping[str, object]) -> Decimal:
     return Decimal(str(math.sqrt(variance) * 100.0))
 
 
+def _compute_overlay(
+    data_root: Path,
+    ops_root: Path,
+    moment: datetime,
+) -> tuple[OverlayDecision, Mapping[str, object]]:
+    """El overlay del dia: titulares del almacen -> `NewsAgent` -> `OverlayDecision`.
+
+    **Nunca lanza.** El overlay es opcional por diseno (`tech_stack.md` §4.9): si falta la clave,
+    el modelo, la plantilla o el presupuesto, devuelve el estado **desactivado** que corresponda y
+    el camino diario sigue produciendo su recomendacion. Devuelve tambien el ``prompt_hashes`` que
+    va al diario (``{}`` si no se llego a llamar al modelo).
+
+    El guardian se consulta **antes** de invocar al agente: con el presupuesto agotado no se paga
+    una llamada para nada. Los titulares se **leen del almacen** (la ingesta es el CLI de #30), no
+    se descargan aqui: el camino diario no debe caer porque GDELT o un RSS esten lentos.
+
+    La cache vive bajo ``ops_root`` —la raiz de observabilidad, no la del diario— porque es donde
+    ``tech_stack.md`` §12.6 situa ``ops.llm_cache``, y porque ``--observability-root`` tiene que
+    desviarla igual que desvia el ``run_log`` (#43).
+    """
+    cache: ResponseCache | None = None
+    metered: MeteredLLMClient | None = None
+    try:
+        settings = LLMClientConfig()
+        model = settings.model_for("extract")
+        cache = ResponseCache(ops_root / LLM_CACHE_DIRNAME)
+        metered = MeteredLLMClient(
+            build_client(settings),
+            cache=cache,
+            guard=BudgetGuard(caps=BudgetCaps().caps()),
+            as_of=moment,
+            provider=settings.provider,
+            purpose="extract",
+            journal=ops_root,
+        )
+        prepared = prepare_headlines(load_headlines(Store(data_root), as_of=moment), now=moment)
+        if not prepared:
+            return (
+                OverlayDecision(
+                    state=OverlayState.APPLIED, reasons=("sin titulares en la ventana",)
+                ),
+                {},
+            )
+        extraction = NewsAgent(OverlayClient(metered), model=model).extract(prepared)
+    except (LLMError, NewsAgentError, ValidationError, ConfigurationError) as failure:
+        # `metered.state` habla el vocabulario de la capa de coste (#33) y `disabled_overlay` el de
+        # la decision (#35). Los dos modulos declaran los MISMOS cinco estados de §12.5 pero **no**
+        # comparten clase — el reparto de capas esta probado en los dos sentidos —, asi que aqui se
+        # traduce **por valor**, que es el unico punto donde los dos vocabularios se cruzan.
+        if metered is not None and metered.state != OverlayState.APPLIED:
+            state = OverlayState(metered.state.value)
+            reasons = metered.warnings
+        else:
+            state = OverlayState.DISABLED_ERROR
+            reasons = ()
+        return disabled_overlay(state, reasons=(*reasons, str(failure))), {}
+    finally:
+        if cache is not None:
+            cache.close()
+    return overlay_from_extraction(extraction), {PROMPT_TEMPLATE_NAME: extraction.prompt_hash}
+
+
 def _record(
     journal_root: Path,
     *,
@@ -567,12 +650,16 @@ def _record(
     report_text: str,
     output: GateOutput | None = None,
     prob_up_raw: float | None = None,
+    overlay: OverlayDecision | None = None,
+    prompt_hashes: Mapping[str, object] | None = None,
 ) -> None:
     """Escribe la fila de ``journal.decisions`` con la capa de #39 (esquema cerrado, inmutable).
 
     ``report_text`` es el informe **tal cual se emitio** (el mismo texto que va a stdout/stderr),
     persistido verbatim (§19.3). ``prob_up_raw`` solo lo aporta el estado ``recommendation`` (el
-    gate no lo calcula); en los estados "no se" y ``error`` va ``null``.
+    gate no lo calcula); en los estados "no se" y ``error`` va ``null``. ``overlay`` y
+    ``prompt_hashes`` son lo que hizo el overlay del LLM ese dia (#35): sin overlay declarado, la
+    columna va ``null`` y el mapa vacio, nunca un valor inventado.
     """
     payload = build_decision(
         trade_date=session,
@@ -584,6 +671,8 @@ def _record(
         status=status,
         output=output,
         prob_up_raw=prob_up_raw,
+        llm_overlay=None if overlay is None else overlay.state.value,
+        prompt_hashes=prompt_hashes,
     )
     Journal(journal_root).write("decisions", payload)
 
@@ -600,6 +689,8 @@ def _record_or_report(
     report_text: str,
     output: GateOutput | None = None,
     prob_up_raw: float | None = None,
+    overlay: OverlayDecision | None = None,
+    prompt_hashes: Mapping[str, object] | None = None,
 ) -> int | None:
     """Registra la fila; si el diario no la acepta, publica el motivo y devuelve ``2``.
 
@@ -619,6 +710,8 @@ def _record_or_report(
             report_text=report_text,
             output=output,
             prob_up_raw=prob_up_raw,
+            overlay=overlay,
+            prompt_hashes=prompt_hashes,
         )
     except DecisionLogError as error:
         print(f"no se puede registrar la decision en el diario: {error}", file=sys.stderr)
@@ -829,6 +922,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             declared_run=declared_run,
             declared_variant=declared_variant,
             journal_root=journal_root,
+            observability_root=observability_root,
             git_commit=git_commit,
             settings_path=cast("Path | None", args.settings),
             calendar_path=cast("Path | None", args.calendar),
@@ -844,6 +938,7 @@ def _deliver(
     declared_run: str | None,
     declared_variant: str | None,
     journal_root: Path,
+    observability_root: Path,
     git_commit: str,
     settings_path: Path | None,
     calendar_path: Path | None,
@@ -974,6 +1069,8 @@ def _deliver(
         )
         params = scenario_parameters(cost_pct=cost.c_declared_pct)
         stop_pct = SCENARIO_STOP_SIGMA_MULTIPLE * move
+        with observer.stage("overlay"):
+            overlay, prompt_hashes = _compute_overlay(data_root, observability_root, moment)
         with observer.stage("gate"):
             output = evaluate_gate(
                 session=session,
@@ -995,6 +1092,7 @@ def _deliver(
                 weekly_pnl_pct=None,
                 monthly_pnl_pct=None,
                 observation_sessions_remaining=guard.observation_sessions_remaining,
+                overlay=overlay,
             )
     except (MissingModelError, UnsupportedModelError) as error:
         with observer.stage("journal"):
@@ -1045,6 +1143,8 @@ def _deliver(
             report_text=text,
             output=output,
             prob_up_raw=prob_up_raw,
+            overlay=overlay,
+            prompt_hashes=prompt_hashes,
         )
     if failure is not None:
         return failure
