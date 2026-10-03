@@ -34,11 +34,16 @@ dependencies = [
     "quantstats>=0.0.60,<0.1",
     # ── Observabilidad ──────────────────────────────────────────────────────
     "loguru>=0.7,<1",
+    # ── Capa LLM y noticias (Fase 3, carril A) ──────────────────────────────
+    # El SDK `openai` cubre OpenAI y DeepSeek (solo cambia `base_url`); `feedparser` lee RSS.
+    "openai>=1.40,<4",
+    "feedparser>=6.0,<7",
 ]
 
 # Fase 0–2: stack mínimo viable (tech_stack.md §5.1).
-# Nada de §5.2 (openai, langgraph, feedparser, gdeltdoc, streamlit, …) hasta que
-# la fase que lo pide lo requiera.
+# La Fase 3 (carril A) ya añade el SDK `openai` y `feedparser`; el resto de §5.2
+# (langgraph, diskcache, tiktoken, jinja2, gdeltdoc, streamlit, …) sigue fuera
+# hasta que lo pida su tarea.
 [dependency-groups]
 dev = [
     "ruff>=0.6",
