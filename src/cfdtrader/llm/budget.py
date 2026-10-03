@@ -74,8 +74,14 @@ DEFAULT_WINDOW_HOURS: Final[int] = 24
 PRICES_EUR_PER_MTOKENS: Final[dict[str, tuple[float, float]]] = {}
 
 
+#: Los cinco estados del overlay de §12.5. Vive **también** en :mod:`cfdtrader.decision.overlay`,
+#: y no es un descuido: el reparto de capas está **probado en los dos sentidos** — #33 comprueba
+#: que esta capa de coste no importa `cfdtrader.decision`, y #35 comprueba que la decisión no
+#: importa `cfdtrader.llm`. Compartir el enum obligaría a romper una de las dos. El origen de
+#: verdad es ``journal.decision_log.LLM_OVERLAYS`` (#39) y **cada** módulo tiene su prueba que
+#: compara su vocabulario con él: una sexta variante hace fallar las dos.
 class OverlayState(StrEnum):
-    """Los cinco estados del overlay de §12.5, declarados por #39; aqui no se inventa ninguno."""
+    """Los cinco estados de §12.5, declarados por #39. Aqui no se inventa ninguno."""
 
     APPLIED = "applied"
     VETO = "veto"
