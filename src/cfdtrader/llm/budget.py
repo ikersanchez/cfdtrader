@@ -34,7 +34,7 @@ from typing import Final
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from cfdtrader.data.news import deduplicate
+from cfdtrader.data.news import DEFAULT_WINDOW_HOURS, deduplicate
 from cfdtrader.data.settings import REPO_ROOT
 from cfdtrader.data.sources.news import Headline
 from cfdtrader.journal.decision_log import Journal, WriteOutcome
@@ -66,8 +66,8 @@ DEFAULT_MAX_CONSECUTIVE_FAILURES: Final[int] = 3
 #: Longitud maxima del titular que se envia al modelo (palanca 6 de §6.3).
 DEFAULT_TRUNCATE_CHARS: Final[int] = 280
 
-#: Ventana de noticias que se envia al modelo (palanca 7 de §6.3).
-DEFAULT_WINDOW_HOURS: Final[int] = 24
+#: Ventana de noticias que se envia al modelo (palanca 7 de §6.3): se declara con el dato, en
+#: `data.news`, y se reexporta aqui para no tener dos numeros que puedan divergir.
 
 #: Precios por millon de tokens, ``(entrada, salida)`` en euros. **Vacio a proposito**: §6.3 avisa
 #: de que las tarifas cambian y hay que verificarlas, asi que no se inventa ninguna. Sin precio

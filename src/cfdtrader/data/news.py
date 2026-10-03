@@ -17,7 +17,7 @@ import difflib
 import json
 import sys
 from collections.abc import Iterable, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Final, cast
 
@@ -37,6 +37,7 @@ from cfdtrader.data.store import Store
 __all__ = [
     "DATASET",
     "DEFAULT_FUZZY_THRESHOLD",
+    "DEFAULT_WINDOW_HOURS",
     "NEWS_VERSION",
     "NewsReport",
     "deduplicate",
@@ -55,6 +56,10 @@ NEWS_VERSION: Final[int] = 1
 #: Umbral de similitud difusa: por encima, dos titulares son "la misma noticia" (§4.9).
 DEFAULT_FUZZY_THRESHOLD: Final[float] = 0.9
 
+#: Ventana de noticias que se considera "de hoy": la usan el lector del almacen y la palanca 7 de
+#: §6.3. Vive aqui, con el dato, y no en la capa que la consume.
+DEFAULT_WINDOW_HOURS: Final[int] = 24
+
 
 class NewsReport(BaseModel):
     """Resumen declarado de una ingesta: qué se recogió, qué se descartó y qué se escribió."""
@@ -68,6 +73,44 @@ class NewsReport(BaseModel):
     new: int
     outcome: str
     headline_hashes: tuple[str, ...] = ()
+
+
+def load_headlines(
+    store: Store, *, as_of: datetime, window_hours: int = DEFAULT_WINDOW_HOURS
+) -> tuple[Headline, ...]:
+    """Los titulares del almacen dentro de la ventana, en orden de emision y con su procedencia.
+
+    Es el lado de **lectura** de #30, y lo consume el overlay (#35). Aplica la misma regla
+    point-in-time que la ingesta: nada con ``published_at`` **posterior** a ``as_of`` entra, porque
+    seria un dato del futuro. La ventana se acota por abajo para no pagar por noticias viejas
+    (§6.3, palanca 7).
+
+    Un almacen sin el dataset devuelve ``()``: no tener noticias no es un error, es un dia sin
+    noticias, y el overlay lo trata como "nada que vetar" en vez de como un fallo.
+    """
+    if as_of.utcoffset() is None:
+        raise ConfigurationError("as_of: se espera un datetime con zona (TZ-aware)")
+    if DATASET not in store.datasets("raw"):
+        return ()
+    moment = as_of.astimezone(UTC)
+    floor = moment - timedelta(hours=window_hours)
+    frame = store.sql(
+        # Justificacion del silencio de S608: los dos literales son instantes ISO construidos aqui.
+        "SELECT source, series_id, title, url, published_at FROM raw.news_headlines "  # noqa: S608
+        f"WHERE published_at <= CAST('{moment.isoformat()}' AS TIMESTAMPTZ) "
+        f"AND published_at >= CAST('{floor.isoformat()}' AS TIMESTAMPTZ) "
+        "ORDER BY published_at, headline_hash"
+    )
+    return tuple(
+        Headline(
+            source=str(row["source"]),
+            feed=str(row["series_id"]),
+            title=str(row["title"]),
+            url=str(row["url"]),
+            published_at=cast("datetime", row["published_at"]),
+        )
+        for row in frame.iter_rows(named=True)
+    )
 
 
 def _too_similar(candidate: str, existing: Sequence[str], threshold: float) -> bool:

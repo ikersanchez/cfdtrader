@@ -16,7 +16,7 @@ import httpx
 import pytest
 
 from cfdtrader.data import news
-from cfdtrader.data.news import deduplicate, existing_headlines, ingest
+from cfdtrader.data.news import deduplicate, existing_headlines, ingest, load_headlines
 from cfdtrader.data.settings import ConfigurationError
 from cfdtrader.data.sources.http import CachedHttpClient, CachedResponse
 from cfdtrader.data.sources.news import (
@@ -211,6 +211,40 @@ def test_a8_the_cli_requires_as_of_and_a_source(capsys: pytest.CaptureFixture[st
 # ─────────────────────────────────────────────────────────────────────────────
 # A9 · Adaptadores sobre un cliente HTTP inyectado (sin red)
 # ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# A13 (#35) · El lector del almacen: point-in-time y sin sorpresas
+# ─────────────────────────────────────────────────────────────────────────────
+def test_a13_load_headlines_reads_the_store_and_drops_the_future(tmp_path: Path) -> None:
+    """El lado de lectura de #30: lo guardado vuelve, y nada posterior a `as_of` entra."""
+    store = Store(tmp_path)
+    past = _headline("Titular del pasado", offset_minutes=-10)
+    future = _headline("Titular del futuro", offset_minutes=+10)
+    ingest(store=store, headlines=[past, future], now=NOW)
+
+    loaded = load_headlines(store, as_of=NOW)
+
+    assert [item.title for item in loaded] == ["Titular del pasado"]
+    assert loaded[0].feed == past.feed
+    assert loaded[0].published_at == past.published_at
+    assert loaded[0].url == past.url
+
+
+def test_a13_load_headlines_respects_the_window_and_an_empty_store(tmp_path: Path) -> None:
+    store = Store(tmp_path)
+    ingest(
+        store=store,
+        headlines=[_headline("De hace dos dias", offset_minutes=-60 * 48)],
+        now=NOW,
+    )
+
+    assert load_headlines(store, as_of=NOW) == (), "fuera de la ventana de 24 h"
+    assert load_headlines(store, as_of=NOW, window_hours=72) != ()
+    assert load_headlines(Store(tmp_path / "vacio"), as_of=NOW) == (), "sin dataset, sin noticias"
+
+    with pytest.raises(ConfigurationError, match="zona"):
+        load_headlines(store, as_of=datetime(2026, 10, 3, 12, 45))
+
+
 def _cached(*, text: str = "", content: bytes | None = None) -> CachedResponse:
     request = httpx.Request("GET", "https://example.invalid/feed")
     response = (
