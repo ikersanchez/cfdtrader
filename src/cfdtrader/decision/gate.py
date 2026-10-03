@@ -119,7 +119,9 @@ Que **no** hace este modulo (fronteras declaradas, con su issue)
 - **No** es #28: no se cablea al motor, no ejecuta el *backtest* y no mide la regla 11 (ni el
   limite de riesgo en su lectura de **cartera**).
 - **No** es #34: no ingiere el calendario de FOMC; recibe el conjunto de fechas declarado.
-- **No** es #35: no aplica el *overlay* del LLM (veto ni ajuste de +-10 pp).
+- **No** ejecuta el `NewsAgent` ni habla con el proveedor: el *overlay* entra como **dato
+  declarado** (``OverlayDecision``, #35) y aquí solo se **aplica** — el veto es la regla 20 y el
+  ajuste a la probabilidad viene acotado a ±10 pp desde ``overlay.apply_overlay``.
 - **No** es #39/#40: no persiste nada en el diario, no implementa la guardia completa de
   obsolescencia ni el contador del modo observacion.
 - **No** es #62: no mide el *slippage*; consume el estado que #11 le entrega.
@@ -147,6 +149,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from cfdtrader.backtest.costs import CostBreakdown
 from cfdtrader.backtest.engine import Decision, Direction, canonical_text
 from cfdtrader.data.calendar import MarketCalendar
+from cfdtrader.decision.overlay import OverlayDecision, OverlayState, apply_overlay, vetoes
 
 __all__ = [
     "DECISION_THRESHOLD",
@@ -227,6 +230,7 @@ CODE_OBSERVATION_MODE: Final[str] = "modo_observacion"
 CODE_FOMC_DAY: Final[str] = "dia_de_fomc"
 CODE_HALF_SESSION: Final[str] = "media_sesion"
 CODE_MARKET_CLOSED: Final[str] = "mercado_cerrado"
+CODE_OVERLAY_VETO: Final[str] = "overlay_veto"
 CODE_BRACKET_TARGET_MISSING: Final[str] = "bracket_sin_objetivo"
 CODE_TARGET_BELOW_COST: Final[str] = "objetivo_bajo_el_coste"
 CODE_EV_NET_NOT_COMPUTABLE: Final[str] = "ev_neto_no_calculable"
@@ -403,6 +407,18 @@ RULES: Final[tuple[dict[str, str], ...]] = (
             "semana; la rama 'no se ejecuta' de tech_stack.md §8.4 fue #40 y esta es su alternativa"
         ),
     },
+    {
+        "rule": "20",
+        "title": "El overlay del NewsAgent veta la sesion",
+        "owner": "gate",
+        "issue": "#35",
+        "note": (
+            "veto binario de tech_stack.md §4.9: un evento de magnitud alta y confianza alta "
+            "convierte el dia en NOTHING. Es incertidumbre, no direccion: el overlay no crea una "
+            "direccion donde no la habia ni puede invertirla. El ajuste acotado a +-10 pp sobre la "
+            "probabilidad calibrada entra por `overlay.adjustment_pct`, no por esta regla"
+        ),
+    },
 )
 
 #: Que **no** hace este modulo, legible por maquina (A8, A11). Cada frontera con su issue.
@@ -467,11 +483,6 @@ LIMITATIONS: Final[tuple[dict[str, str], ...]] = (
             "la probabilidad calibrada. El 'regimen de volatilidad favorable' no tiene entrada "
             "declarada y no se evalua aqui: queda declarado para #28"
         ),
-    },
-    {
-        "id": "overlay_llm",
-        "issue": "#35",
-        "statement": "el veto y el ajuste de +-10 pp del LLM son #35: el gate no los aplica",
     },
     {
         "id": "diario",
@@ -773,6 +784,19 @@ class GateOutput(BaseModel):
     is_fomc_session: bool = Field(description="regla 17: la sesion esta en el calendario de FOMC")
     is_half_session: bool = Field(description="regla 18: media sesion segun el MarketCalendar")
     fomc_dates_count: int = Field(description="tamano del conjunto de FOMC declarado")
+    overlay_state: OverlayState | None = Field(
+        default=None,
+        description=(
+            "estado del overlay (#35): uno de los cinco de §12.5, o None si no se declaro ninguno"
+        ),
+    )
+    overlay_adjustment_pct: float = Field(
+        default=0.0,
+        description=(
+            "puntos porcentuales que el overlay movio `prob_up_calibrated`; 0.0 si no hay overlay, "
+            "si esta desactivado o si veta (el veto no empuja el numero, bloquea)"
+        ),
+    )
     params: dict[str, str | None] = Field(
         description="parametros declarados en forma exacta (Decimal como cadena), tal cual"
     )
@@ -784,7 +808,7 @@ class GateOutput(BaseModel):
         default=(), description="parametros sin decidir con su issue (#59/#60)"
     )
     rules: tuple[dict[str, str], ...] = Field(
-        default=(), description="resultado de cada una de las 19 reglas de §12"
+        default=(), description="resultado de cada una de las 20 reglas declaradas en `RULES`"
     )
     gate_sha256: str = Field(description=f"{GATE_HASH_PREFIX}<64 hex>; ver GATE_HASH_FORMAT")
 
@@ -1036,7 +1060,20 @@ class _Context:
     is_session: bool
     closure_reason: str | None
     fomc_dates_count: int
+    overlay: OverlayDecision | None = None
     ledger: _RuleLedger = field(default_factory=_RuleLedger)
+
+    @property
+    def overlay_state(self) -> OverlayState | None:
+        """El estado del overlay: ``None`` si no se declaró ninguno (ausente, no inventado)."""
+        return None if self.overlay is None else self.overlay.state
+
+    @property
+    def overlay_adjustment_pct(self) -> float:
+        """Los puntos porcentuales que el overlay movio la probabilidad (0.0 en veto)."""
+        if self.overlay is None or self.overlay.state is not OverlayState.APPLIED:
+            return 0.0
+        return self.overlay.adjustment_pct
 
 
 def _require_decimal(value: object, *, field_name: str) -> Decimal:
@@ -1174,6 +1211,7 @@ def _context(
     weekly_pnl_pct: object,
     monthly_pnl_pct: object,
     observation_sessions_remaining: object,
+    overlay: object = None,
 ) -> _Context:
     """Valida las entradas, aplica las reglas 6 y 7 y deriva lo comun (direccion, EV, calendario).
 
@@ -1199,7 +1237,14 @@ def _context(
             f"cost.nights = {cost.nights}: la regla 6 no admite una posicion overnight; el coste "
             "tiene que llegar con nights = 0"
         )
-    probability = _require_probability(prob_up_calibrated, field_name="prob_up_calibrated")
+    if overlay is not None and not isinstance(overlay, OverlayDecision):
+        raise GateInputError(
+            f"overlay: se espera la OverlayDecision de #35 (o None), no {type(overlay).__name__}"
+        )
+    declared_overlay: OverlayDecision | None = overlay  # ya estrechado por el isinstance de arriba
+    probability = apply_overlay(
+        _require_probability(prob_up_calibrated, field_name="prob_up_calibrated"), declared_overlay
+    )
     move = _require_decimal(expected_move_pct, field_name="expected_move_pct")
     if move < 0:
         raise GateInputError(
@@ -1277,6 +1322,7 @@ def _context(
         is_session=info.is_session,
         closure_reason=info.reason,
         fomc_dates_count=len(declared_fomc),
+        overlay=declared_overlay,
     )
 
 
@@ -1544,6 +1590,8 @@ def _output(
         is_fomc_session=context.is_fomc_session,
         is_half_session=context.is_half_session,
         fomc_dates_count=context.fomc_dates_count,
+        overlay_state=context.overlay_state,
+        overlay_adjustment_pct=context.overlay_adjustment_pct,
         params=_parameters_payload(context.params),
         blockers=blockers,
         undecided=context.missing,
@@ -1657,6 +1705,33 @@ def _quality_output(context: _Context) -> GateOutput | None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Regla 20 (#35): el overlay del NewsAgent veta la sesion
+# ─────────────────────────────────────────────────────────────────────────────
+def _veto_output(context: _Context) -> GateOutput | None:
+    """Regla 20: un veto del overlay convierte el dia en ``NOTHING`` justificado.
+
+    Es **incertidumbre, no direccion**: el overlay no sabe si el gate iba a decir ``LONG`` o
+    ``SHORT``, asi que veta la sesion entera. Por eso se evalua **despues** de la clausura
+    (regla 19) y de los estados "no se" (13 y 14): un veto no puede convertir un "no se" en un
+    ``NOTHING``, porque eso fundiria estados que ``plan.md`` §19.2 mantiene separados.
+    """
+    if not vetoes(context.overlay):
+        context.ledger.mark("20", _RULE_OK, "sin veto del overlay: la sesion sigue su curso")
+        return None
+    reasons = "; ".join(context.overlay.reasons) if context.overlay is not None else ""
+    detail = (
+        "el overlay de #35 veta la sesion (evento de magnitud alta con confianza alta): "
+        f"{reasons}; el veto es de incertidumbre, no de direccion (tech_stack.md §4.9)"
+    )
+    context.ledger.block("20", detail)
+    return _nothing(
+        context,
+        tier=TIER_C,
+        blockers=({"rule": "20", "code": CODE_OVERLAY_VETO, "detail": detail},),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # El gate (A1): decide, bloquea o declara que no sabe
 # ─────────────────────────────────────────────────────────────────────────────
 def evaluate_gate(
@@ -1680,6 +1755,7 @@ def evaluate_gate(
     weekly_pnl_pct: Decimal | None = None,
     monthly_pnl_pct: Decimal | None = None,
     observation_sessions_remaining: int = 0,
+    overlay: OverlayDecision | None = None,
 ) -> GateOutput:
     """Decide ``LONG``/``SHORT``/``NOTHING`` y publica stop, objetivo, nocional, tier y reglas.
 
@@ -1693,8 +1769,10 @@ def evaluate_gate(
        justificado, con ese unico bloqueo.
     2. Frescura del dato (regla 13) y calidad del snapshot (regla 14) ⇒ estados "no se".
     3. Decisiones abiertas (#59/#60, ``GateParameters`` con ``None``) ⇒ ``undecided``.
-    4. Bloqueos de sesion: reglas 1, 3, 4, 5, 15, 17 y 18.
-    5. Reglas 16, 8, 9 y 10 y, si nada bloquea, el *sizing* (regla 2).
+    4. Veto del overlay (regla 20) ⇒ ``NOTHING`` justificado; el ajuste de ±10 pp ya se aplicó a la
+       probabilidad al construir el contexto.
+    5. Bloqueos de sesion: reglas 1, 3, 4, 5, 15, 17 y 18.
+    6. Reglas 16, 8, 9 y 10 y, si nada bloquea, el *sizing* (regla 2).
 
     Una entrada inadmisible (un porcentaje en ``float``, un coste con ``nights > 0``, un stop de
     0, un calendario que no es ``MarketCalendar``) lanza ``GateInputError``: nunca un resultado
@@ -1720,6 +1798,7 @@ def evaluate_gate(
         weekly_pnl_pct=weekly_pnl_pct,
         monthly_pnl_pct=monthly_pnl_pct,
         observation_sessions_remaining=observation_sessions_remaining,
+        overlay=overlay,
     )
     closed = _closure_output(context)
     if closed is not None:
@@ -1732,6 +1811,9 @@ def evaluate_gate(
         return quality
     if context.missing:
         return _undecided_output(context)
+    vetoed = _veto_output(context)
+    if vetoed is not None:
+        return vetoed
     decided = _decided(context.params)
     blockers = _blockers(context, decided)
     tier = _tier(context, decided)

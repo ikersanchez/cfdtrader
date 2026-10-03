@@ -225,7 +225,19 @@ GARCH_COLUMN: Final[str] = "garch_forecast"
 EXPECTED_MOVE_BASIS: Final[str] = "garch_forecast_sigma_1s"
 
 #: Reglas **de sesion** del gate: si alguna bloquea, el brazo declarado tampoco opera (A6).
-SESSION_RULES: Final[tuple[str, ...]] = ("13", "14", "1", "3", "4", "5", "15", "17", "18", "19")
+SESSION_RULES: Final[tuple[str, ...]] = (
+    "13",
+    "14",
+    "1",
+    "3",
+    "4",
+    "5",
+    "15",
+    "17",
+    "18",
+    "19",
+    "20",
+)
 
 #: Regla 11 (§12): el sistema debe operar como maximo el 10-30 % de los dias. Se **mide**.
 RULE_11: Final[str] = "11"

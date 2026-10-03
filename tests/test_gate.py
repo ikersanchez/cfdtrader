@@ -79,6 +79,7 @@ DECLARED_SIGNATURE: Final[tuple[str, ...]] = (
     "weekly_pnl_pct",
     "monthly_pnl_pct",
     "observation_sessions_remaining",
+    "overlay",
 )
 
 CALENDAR: Final[MarketCalendar] = MarketCalendar(years=tuple(range(2020, 2030)))
@@ -229,12 +230,14 @@ def test_a1_modulo_y_firma_declarada() -> None:
         "weekly_pnl_pct",
         "monthly_pnl_pct",
         "observation_sessions_remaining",
+        "overlay",
     }
     assert defaults["trades_today"] == 0
     assert defaults["observation_sessions_remaining"] == 0
     assert defaults["daily_pnl_pct"] is None
-    assert len(gate.RULES) == 19
-    assert [entry["rule"] for entry in gate.RULES] == [str(number) for number in range(1, 20)]
+    assert defaults["overlay"] is None, "sin overlay declarado, el gate se comporta como siempre"
+    assert len(gate.RULES) == 20
+    assert [entry["rule"] for entry in gate.RULES] == [str(number) for number in range(1, 21)]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -742,7 +745,7 @@ def test_a11_tiers() -> None:
     limitations = {entry["id"]: entry for entry in gate.LIMITATIONS}
     assert limitations["regla_11"]["issue"] == "#28"
     assert "#28" in limitations["regla_11"]["statement"]
-    assert len(gate.RULES) == 19
+    assert len(gate.RULES) == 20
     assert all({"rule", "title", "owner", "issue", "note"} <= set(entry) for entry in gate.RULES)
 
 
@@ -1042,6 +1045,8 @@ def test_apoyo_payload_y_detalles() -> None:
         "is_fomc_session",
         "is_half_session",
         "fomc_dates_count",
+        "overlay_state",
+        "overlay_adjustment_pct",
         "params",
         "blockers",
         "undecided",
