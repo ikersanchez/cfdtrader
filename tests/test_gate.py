@@ -233,8 +233,8 @@ def test_a1_modulo_y_firma_declarada() -> None:
     assert defaults["trades_today"] == 0
     assert defaults["observation_sessions_remaining"] == 0
     assert defaults["daily_pnl_pct"] is None
-    assert len(gate.RULES) == 18
-    assert [entry["rule"] for entry in gate.RULES] == [str(number) for number in range(1, 19)]
+    assert len(gate.RULES) == 19
+    assert [entry["rule"] for entry in gate.RULES] == [str(number) for number in range(1, 20)]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -742,7 +742,7 @@ def test_a11_tiers() -> None:
     limitations = {entry["id"]: entry for entry in gate.LIMITATIONS}
     assert limitations["regla_11"]["issue"] == "#28"
     assert "#28" in limitations["regla_11"]["statement"]
-    assert len(gate.RULES) == 18
+    assert len(gate.RULES) == 19
     assert all({"rule", "title", "owner", "issue", "note"} <= set(entry) for entry in gate.RULES)
 
 
@@ -786,6 +786,43 @@ def test_a12_estados() -> None:
     assert ayer.direction is not Direction.NOTHING
     assert {ayer.direction, calidad.direction} == {None}
     assert GateStatus.RECOMMENDATION.value not in {ayer.status.value, calidad.status.value}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A14 (#113) — regla 19: un dia de mercado cerrado es un NOTHING justificado
+# ─────────────────────────────────────────────────────────────────────────────
+#: Sabado del calendario real: no es sesion y el motivo lo declara el propio calendario.
+SATURDAY: Final[date] = date(2026, 9, 19)
+SATURDAY_AS_OF: Final[datetime] = datetime(2026, 9, 19, 12, 45, tzinfo=UTC)
+
+
+def test_a14_a_market_closed_day_is_a_justified_nothing() -> None:
+    """A14: sin sesion, el gate devuelve NOTHING con el unico bloqueo de la regla 19 (#113)."""
+    assert CALENDAR.is_session(SESSION) is True
+    assert rule_outcomes(call())["19"] == "pass"
+
+    closed = call(session=SATURDAY, as_of=SATURDAY_AS_OF, today=SATURDAY)
+    assert closed.status is GateStatus.RECOMMENDATION
+    assert closed.direction is Direction.NOTHING
+    assert codes(closed) == {"mercado_cerrado": "19"}
+    assert rule_outcomes(closed)["19"] == "blocked"
+    assert closed.is_half_session is False
+    reason = CALENDAR.session(SATURDAY).reason
+    assert reason is not None
+    assert reason in closed.blockers[0]["detail"]
+
+    # La clausura **corta**: no se suman las demas reglas de sesion (ni la observacion de la 15).
+    dominante = call(
+        session=SATURDAY,
+        as_of=SATURDAY_AS_OF,
+        today=SATURDAY,
+        observation_sessions_remaining=5,
+        trades_today=1,
+    )
+    assert codes(dominante) == {"mercado_cerrado": "19"}
+    assert rule_outcomes(dominante)["19"] == "blocked"
+    assert rule_outcomes(dominante)["15"] == "not_evaluated"
+    assert rule_outcomes(dominante)["1"] == "not_evaluated"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

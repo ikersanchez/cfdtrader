@@ -94,6 +94,10 @@ MONDAY_SESSION: Final[date] = date(2026, 9, 21)
 AS_OF_MONDAY: Final[str] = "2026-09-21T12:00:00+00:00"
 ABSENCE_START: Final[date] = date(2026, 9, 1)
 
+#: #113: un sabado real del calendario (fin de semana sin excepciones declaradas).
+SATURDAY_SESSION: Final[date] = date(2026, 9, 19)
+AS_OF_SATURDAY: Final[str] = "2026-09-19T12:00:00+00:00"
+
 #: Identidad declarada de la corrida sintetica del modelo.
 RUN_ID: Final[str] = "1" * 64
 
@@ -113,9 +117,10 @@ WRITTEN: Final[frozenset[str]] = frozenset(
 FROZEN: Final[frozenset[str]] = frozenset(
     {
         "src/cfdtrader/delivery/__init__.py",
-        "src/cfdtrader/decision/gate.py",
+        # #113 retira `decision/gate.py` y `analysis/pipeline_report.py` de este conjunto: la
+        # entrega del dia de mercado cerrado toca el gate (regla 19) y el informe (SESSION_RULES),
+        # el mismo criterio que #80 aplico en `tests/test_pipeline_report.py`.
         "src/cfdtrader/analysis/feature_frame.py",
-        "src/cfdtrader/analysis/pipeline_report.py",
         "src/cfdtrader/analysis/model_comparison.py",
         "src/cfdtrader/analysis/backtest_report.py",
         "src/cfdtrader/models/baseline.py",
@@ -1742,16 +1747,26 @@ def _seed_journal(root: Path, days: Sequence[date]) -> None:
         Journal(root).write("decisions", payload)
 
 
-def test_a3_a_market_holiday_does_not_run_the_daily_path(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_a3_a_market_closed_day_is_a_justified_nothing_in_the_journal(
+    store_root: Path, runs_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A3: con el mercado cerrado no se lee el almacen, no hay informe y no hay fila."""
-    calendar_path = _write_calendar(tmp_path, holidays=(NEXT_SESSION,))
-    journal_root = tmp_path / "journal"
-    code = run_daily.main(
-        [
+    """A3 (#113): un dia de mercado cerrado se ejecuta y deja un `NOTHING` justificado (regla 19).
+
+    Vale para un festivo de EE. UU. (declarado via ``--calendar`` como ``extra_holidays``) y para
+    un fin de semana real: en los dos, la sesion **no** es sesion, el gate lo justifica y la fila
+    del diario queda con `status: recommendation`, `direction: nothing` y el bloqueo
+    `mercado_cerrado`.
+    """
+    holiday_calendar = _write_calendar(tmp_path, holidays=(NEXT_SESSION,))
+    cases = (
+        (NEXT_SESSION, AS_OF_NEXT, holiday_calendar),
+        (SATURDAY_SESSION, AS_OF_SATURDAY, None),
+    )
+    for session, as_of, calendar_path in cases:
+        journal_root = tmp_path / f"journal-{session.isoformat()}"
+        arguments = [
             "--as-of",
-            AS_OF_NEXT,
+            as_of,
             "--model-run",
             RUN_ID,
             "--journal-root",
@@ -1759,19 +1774,28 @@ def test_a3_a_market_holiday_does_not_run_the_daily_path(
             "--git-commit",
             GIT_COMMIT,
             "--data-root",
-            str(tmp_path / "almacen-que-no-existe"),
-            "--calendar",
-            str(calendar_path),
+            str(store_root),
+            "--runs-root",
+            str(runs_root),
         ]
-    )
-    captured = capsys.readouterr()
-    assert code == 0
-    assert f"sin sesion: {NEXT_SESSION.isoformat()}" in captured.out
-    assert "festivo" in captured.out
-    for token in ("estado:", "direccion:", "gate_sha256:", "modelo:", "no hay edge demostrado"):
-        assert token not in captured.out, token
-    assert captured.err == ""
-    assert not journal_root.exists()
+        if calendar_path is not None:
+            arguments += ["--calendar", str(calendar_path)]
+        code = run_daily.main(arguments)
+        captured = capsys.readouterr()
+        assert code == 0, captured.err
+        assert "estado: recommendation" in captured.out, session
+        assert "direccion: NOTHING" in captured.out, session
+        assert "bloqueo: 19:mercado_cerrado" in captured.out, session
+        assert "no_recommendation" not in captured.out, session
+        assert "direccion: LONG" not in captured.out, session
+        assert "direccion: SHORT" not in captured.out, session
+        assert captured.err == ""
+
+        record = read_decision(journal_root, session)
+        assert record["status"] == "recommendation"
+        assert record["direction"] == "nothing"
+        assert record["blocking_events"] == ["mercado_cerrado"]
+        assert captured.out == cast("str", record["report_text"]) + "\n"
 
 
 def test_a5_three_sessions_off_are_stale_and_journaled(
@@ -1956,11 +1980,11 @@ def test_a9_the_report_shows_the_blockers_only_when_there_are_any() -> None:
 def test_the_guard_paths_are_deterministic_across_hash_seeds(
     store_root: Path, runs_root: Path, tmp_path: Path
 ) -> None:
-    """A11 (#40): el festivo (no escribe) y la media sesion (escribe) son deterministas."""
+    """A11 (#40/#113): el festivo y la media sesion escriben y son deterministas byte a byte."""
     holiday_calendar = _write_calendar(tmp_path, holidays=(NEXT_SESSION,))
     half_calendar = _write_calendar(tmp_path, holidays=(NEXT_SESSION,), half_days=(STALE_SESSION,))
     scenarios = (
-        (AS_OF_NEXT, holiday_calendar, None),
+        (AS_OF_NEXT, holiday_calendar, NEXT_SESSION),
         (AS_OF_STALE, half_calendar, STALE_SESSION),
     )
     for as_of, calendar_path, written in scenarios:
@@ -1997,11 +2021,7 @@ def test_the_guard_paths_are_deterministic_across_hash_seeds(
             )
             assert completed.returncode == 0, completed.stderr
             outputs.append(completed.stdout)
-            if written is None:
-                assert not journal.exists(), "el festivo no deja fila en el diario"
-            else:
-                digests.append((journal / "decisions" / f"{written.isoformat()}.json").read_bytes())
+            digests.append((journal / "decisions" / f"{written.isoformat()}.json").read_bytes())
 
         assert outputs[0] == outputs[1], as_of
-        if written is not None:
-            assert digests[0] == digests[1], as_of
+        assert digests[0] == digests[1], as_of

@@ -819,7 +819,7 @@ def test_a5_blocker_codes_and_undecided_status(real_report: PipelineReport) -> N
 # ─────────────────────────────────────────────────────────────────────────────
 @needs_store
 def test_a6_declared_rule_is_published_literal(real_report: PipelineReport) -> None:
-    """A6: el brazo publica su regla literal, con las nueve reglas de sesion."""
+    """A6: el brazo publica su regla literal, con las diez reglas de sesion."""
     rule = as_str(at(real_report.payload, "arms", ARM_COSTE_DECLARADO, "declared_rule"))
     for token in SESSION_RULES:
         assert token in rule
