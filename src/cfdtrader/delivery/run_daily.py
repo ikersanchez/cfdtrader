@@ -104,6 +104,11 @@ from lightgbm import Booster
 from lightgbm.basic import LightGBMError
 from pydantic import ValidationError
 
+from cfdtrader.agents.event_calendar import (
+    EventCalendarInputError,
+    EventCalendarSignal,
+    calendar_signal,
+)
 from cfdtrader.agents.news import PROMPT_TEMPLATE_NAME, NewsAgent, NewsAgentError
 from cfdtrader.analysis.backtest_report import NOTIONAL_USD
 from cfdtrader.analysis.experiment_log import (
@@ -459,6 +464,23 @@ def _optional_float(value: object) -> float | None:
 # ─────────────────────────────────────────────────────────────────────────────
 # Informe
 # ─────────────────────────────────────────────────────────────────────────────
+def _day_events(
+    calendar: MarketCalendar, session: date, moment: datetime
+) -> EventCalendarSignal | None:
+    """La senal del calendario del dia, o ``None`` si no se puede calcular (#121).
+
+    Es **informativa**: no bloquea nada por si misma, porque las reglas 18 y 19 del gate ya leen
+    el **mismo** `MarketCalendar`. Si falla, el dia se emite **sin** la seccion de eventos en vez
+    de caerse: es la degradacion gracil de §7.4 aplicada a una capa que no esta en el camino
+    critico.
+    """
+    try:
+        return calendar_signal(calendar, session, as_of=moment)
+    except EventCalendarInputError as failure:
+        print(f"no se puede calcular la senal del calendario: {failure}", file=sys.stderr)
+        return None
+
+
 def render(
     *,
     status: GateStatus,
@@ -468,6 +490,7 @@ def render(
     model_source: str,
     message: str,
     output: GateOutput | None = None,
+    calendar_events: EventCalendarSignal | None = None,
 ) -> str:
     """El informe del dia: cabecera, pista (si la hay), bloqueos, motivo y valla (#109, #40).
 
@@ -486,6 +509,8 @@ def render(
     if output is not None:
         lines.extend(_recommendation_lines(output))
         lines.extend(_blocker_lines(output))
+    if calendar_events is not None:
+        lines.extend(_calendar_lines(calendar_events))
     lines.append(f"motivo: {message}")
     lines.append("")
     lines.extend(HONESTY_FENCE)
@@ -514,6 +539,19 @@ def _blocker_lines(output: GateOutput) -> list[str]:
     o por modo observacion (regla 15) se presentaria igual que un ``NOTHING`` sin motivo.
     """
     return [f"bloqueo: {entry['rule']}:{entry['code']}" for entry in output.blockers]
+
+
+def _calendar_lines(signal: EventCalendarSignal) -> list[str]:
+    """Los eventos del dia, **informativos incluidos** (#121).
+
+    `blocking_events` lleva solo lo que bloquea; esta seccion publica el dia entero para que un
+    OPEX o un roll del ES **se lean** y no se confundan con un bloqueo: son informativos por
+    decision declarada (`plan.md` §19.8). El prefijo distingue las dos cosas.
+    """
+    return [
+        f"{'evento_bloqueante' if event.blocking else 'evento'}: {event.kind.value} | {event.name}"
+        for event in signal.events
+    ]
 
 
 def _date_or_null(value: date | None) -> str:
@@ -980,6 +1018,9 @@ def _deliver(
     features_version = FEATURES_VERSION_UNAVAILABLE
     # La probabilidad cruda solo existe si el modelo se pudo puntuar (estado `recommendation`).
     prob_up_raw: float | None = None
+    # Los eventos del dia (informativos incluidos) se publican en el informe; si la senal del
+    # calendario no se puede calcular, el informe sale **sin** su seccion en vez de caerse (#121).
+    calendar_events: EventCalendarSignal | None = None
     # El `model_version` del diario: el `run_sha256` resuelto, o el selector declarado verbatim
     # mientras la resolucion contra el registro no lo haya devuelto (nunca un digest inventado).
     model_version = cast("str", declared_run if declared_run is not None else declared_variant)
@@ -1069,6 +1110,10 @@ def _deliver(
         )
         params = scenario_parameters(cost_pct=cost.c_declared_pct)
         stop_pct = SCENARIO_STOP_SIGMA_MULTIPLE * move
+        with observer.stage("calendar"):
+            calendar_events = _day_events(calendar, session, moment)
+        if calendar_events is not None:
+            observer.add_hash("calendar_sha256", calendar_events.signal_sha256)
         with observer.stage("overlay"):
             overlay, prompt_hashes = _compute_overlay(data_root, observability_root, moment)
         with observer.stage("gate"):
@@ -1130,6 +1175,7 @@ def _deliver(
         model_source=model_source,
         message=_guard_message(guard),
         output=output,
+        calendar_events=calendar_events,
     )
     with observer.stage("journal"):
         failure = _record_or_report(

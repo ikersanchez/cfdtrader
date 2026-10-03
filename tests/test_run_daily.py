@@ -37,6 +37,11 @@ import numpy as np
 import polars as pl
 import pytest
 
+from cfdtrader.agents.event_calendar import (
+    EventCalendarInputError,
+    EventKind,
+    calendar_signal,
+)
 from cfdtrader.agents.news import PROMPT_TEMPLATE_NAME
 from cfdtrader.analysis import experiment_log, model_comparison
 from cfdtrader.analysis.backtest_report import NOTIONAL_USD
@@ -2424,3 +2429,110 @@ def test_a_pipeline_failure_is_recorded_in_the_trace(
 
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["ok"] is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #121 · Los eventos del dia en el informe, sin contaminar `blocking_events`
+# ─────────────────────────────────────────────────────────────────────────────
+_DAY_EVENTS = run_daily._day_events  # pyright: ignore[reportPrivateUsage]
+
+
+def _third_friday(year: int, month: int) -> date:
+    """El tercer viernes del mes: OPEX nominal y triple *witching* (`agents/event_calendar.py`)."""
+    first = date(year, month, 1)
+    return date(year, month, 1 + ((4 - first.weekday()) % 7) + 14)
+
+
+def test_121_the_report_publishes_the_day_events_and_opex_is_not_a_block() -> None:
+    """Un dia de OPEX **se lee** en el informe, y se distingue de un bloqueo.
+
+    Es la decision declarada en `plan.md` §19.8: OPEX, triple *witching* y roll del ES son
+    **informativos**. Si esto fallara con un `evento_bloqueante`, la decision se habria cambiado
+    sin registrarla.
+    """
+    calendar = load_calendar()
+    opex_day = _third_friday(2026, 9)
+    signal = calendar_signal(calendar, opex_day, as_of=_instant(opex_day))
+    kinds = {event.kind for event in signal.events}
+    assert EventKind.OPEX in kinds, f"premisa del test: {opex_day} deberia ser OPEX"
+
+    text = run_daily.render(
+        status=GateStatus.RECOMMENDATION,
+        session=opex_day,
+        as_of=_instant(opex_day),
+        snapshot_session=opex_day,
+        model_source="modelo",
+        message="motivo",
+        calendar_events=signal,
+    )
+
+    assert "evento: opex |" in text
+    assert "evento_bloqueante:" not in text, "OPEX NO bloquea: es informativo (§19.8)"
+    assert "bloqueo:" not in text, "la seccion de eventos no inventa bloqueos"
+
+
+def test_121_a_half_session_is_published_as_blocking() -> None:
+    """La media sesion **si** bloquea (regla 18), y el informe lo publica con su prefijo."""
+    calendar = load_calendar()
+    half = date(2026, 11, 27)  # el dia despues de Accion de Gracias
+    signal = calendar_signal(calendar, half, as_of=_instant(half))
+    kinds = {event.kind for event in signal.events}
+    assert EventKind.HALF_SESSION in kinds, f"premisa del test: {half} deberia ser media sesion"
+
+    text = run_daily.render(
+        status=GateStatus.RECOMMENDATION,
+        session=half,
+        as_of=_instant(half),
+        snapshot_session=half,
+        model_source="modelo",
+        message="motivo",
+        calendar_events=signal,
+    )
+
+    assert "evento_bloqueante: half_session |" in text
+
+
+def test_121_without_a_calendar_signal_the_report_has_no_events_section() -> None:
+    """Sin senal el informe sale igual: la seccion es opcional, no una obligacion del formato."""
+    text = run_daily.render(
+        status=GateStatus.NO_RECOMMENDATION_STALE_DATA,
+        session=date(2026, 9, 17),
+        as_of=_instant(date(2026, 9, 17)),
+        snapshot_session=date(2026, 9, 17),
+        model_source="modelo",
+        message="motivo",
+    )
+
+    assert "evento:" not in text
+    assert "evento_bloqueante:" not in text
+    assert "motivo: motivo" in text
+
+
+def test_121_a_broken_calendar_degrades_and_never_blocks(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Si la senal falla, el dia se emite **sin** su seccion: §7.4, degradacion gracil."""
+
+    def _boom(*args: object, **kwargs: object) -> object:
+        raise EventCalendarInputError("calendario roto")
+
+    monkeypatch.setattr(run_daily, "calendar_signal", _boom)
+    moment = _instant(date(2026, 9, 17))
+
+    assert _DAY_EVENTS(load_calendar(), date(2026, 9, 17), moment) is None
+    assert "no se puede calcular la senal del calendario" in capsys.readouterr().err
+
+
+def test_121_the_journal_row_keeps_only_what_blocks(
+    store_root: Path, runs_root: Path, tmp_path: Path
+) -> None:
+    """El cableado **no** contamina `blocking_events`: lo informativo no entra ahi nunca."""
+    journal_root = tmp_path / "journal"
+    assert _daily_run(store_root, runs_root, journal_root) == 0
+
+    row = _journal_row(journal_root)
+    blockers = cast("list[str]", row["blocking_events"])
+    informative = {EventKind.OPEX.value, EventKind.TRIPLE_WITCHING.value, EventKind.ES_ROLL.value}
+
+    assert blockers, "la sesion de los fixtures trae bloqueos del gate"
+    assert set(blockers).isdisjoint(informative), f"un informativo se colo: {blockers}"
