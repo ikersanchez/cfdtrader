@@ -225,7 +225,7 @@ GARCH_COLUMN: Final[str] = "garch_forecast"
 EXPECTED_MOVE_BASIS: Final[str] = "garch_forecast_sigma_1s"
 
 #: Reglas **de sesion** del gate: si alguna bloquea, el brazo declarado tampoco opera (A6).
-SESSION_RULES: Final[tuple[str, ...]] = ("13", "14", "1", "3", "4", "5", "15", "17", "18")
+SESSION_RULES: Final[tuple[str, ...]] = ("13", "14", "1", "3", "4", "5", "15", "17", "18", "19")
 
 #: Regla 11 (§12): el sistema debe operar como maximo el 10-30 % de los dias. Se **mide**.
 RULE_11: Final[str] = "11"
@@ -835,7 +835,7 @@ def _declared_cost_decision(
     """La regla **literal** del brazo de coste declarado (A6), sesion a sesion.
 
     Se opera sii (i) ningun *blocker* del gate trae una regla de sesion (13, 14, 1, 3, 4, 5, 15,
-    17, 18), (ii) ``ev_declared_pct > ev_threshold_pct``, (iii) ``target_pct >= 2 x
+    17, 18, 19), (ii) ``ev_declared_pct > ev_threshold_pct``, (iii) ``target_pct >= 2 x
     c_declared_pct`` y (iv) el tier re-derivado sobre el EV declarado esta autorizado. Entonces la
     direccion sale de ``p_up_calibrated >= DECISION_THRESHOLD`` (constante **del gate**), el
     nocional de ``capital x riesgo / stop`` y los precios del ``open`` de la subasta (#64).
@@ -1821,7 +1821,7 @@ def _scenario_payload(params: GateParameters, *, cost: CostBreakdown) -> dict[st
 
 
 def _rule_outcomes(outputs: Mapping[date, GateOutput]) -> dict[str, dict[str, int]]:
-    """Resultado de las 18 reglas, agregado: ``{regla: {resultado: recuento}}`` (A11)."""
+    """Resultado de las 19 reglas, agregado: ``{regla: {resultado: recuento}}`` (A11)."""
     aggregated: dict[str, dict[str, int]] = {}
     for output in outputs.values():
         for entry in output.rules:

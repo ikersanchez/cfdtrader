@@ -2,8 +2,9 @@
 
 Este modulo es el **unico** sitio del proyecto donde una probabilidad calibrada se convierte
 en una decision operativa: ``LONG``, ``SHORT`` o ``NOTHING``, con su stop, su objetivo, su
-nocional, su tier y el detalle de **cada una de las 18 reglas duras** de ``plan.md`` §12 que
-le toca aplicar aqui.
+nocional, su tier y el detalle de **cada una de las 19 reglas duras** de ``plan.md`` §12 que
+le toca aplicar aqui (las 18 originales y la regla 19 de ``tech_stack.md`` §8.4, el dia de
+mercado cerrado como ``NOTHING`` justificado, #113).
 
 Funcion **pura y determinista**
 
@@ -69,7 +70,7 @@ gate devuelve ``no_recommendation_undecided`` y ``undecided[]`` nombra cada para
 falta **con su issue**. Las cifras del enunciado (1 %, 2 %, 3c, 0,58, el tamano de ``R``) no
 estan cableadas en ninguna parte: son valores que el llamante declara.
 
-Las 18 reglas de §12 y quien las aplica
+Las 19 reglas de §12 y quien las aplica
 ---------------------------------------
 
 ===========  ==================================================  ==============================
@@ -93,13 +94,16 @@ Regla        Enunciado                                           Quien la aplica
 16           Cierre obligatorio (orden *bracket*)                gate: ``bracket_required``; #84
 17           Dias de FOMC ⇒ ``NOTHING``                          gate: input; ingesta #34
 18           Medias sesiones ⇒ ``NOTHING``                       gate: ``is_half_day``; flujo #40
+19           Dia de mercado cerrado ⇒ ``NOTHING``                gate: ``session()``; flujo #113
 ===========  ==================================================  ==============================
 
 Precedencia declarada de los estados: primero la **frescura** y la **calidad** de los datos
 ("no se" sobre el dato), despues las **decisiones abiertas** (``undecided``, "no se" sobre la
 politica) y solo entonces los **bloqueos** de §12. Los bloqueos se evaluan **todos** (no se
 corta en el primero) y se publican juntos: un dia de FOMC con una operacion ya hecha trae los
-dos motivos, no uno.
+dos motivos, no uno. **La unica excepcion es la regla 19**: un dia sin sesion no tiene nada que
+evaluar, asi que la clausura **corta antes** que cualquier otra regla y produce un ``NOTHING``
+con ese unico bloqueo.
 
 ``gate_sha256``
 ---------------
@@ -222,6 +226,7 @@ CODE_MONTHLY_LOSS: Final[str] = "perdida_mensual"
 CODE_OBSERVATION_MODE: Final[str] = "modo_observacion"
 CODE_FOMC_DAY: Final[str] = "dia_de_fomc"
 CODE_HALF_SESSION: Final[str] = "media_sesion"
+CODE_MARKET_CLOSED: Final[str] = "mercado_cerrado"
 CODE_BRACKET_TARGET_MISSING: Final[str] = "bracket_sin_objetivo"
 CODE_TARGET_BELOW_COST: Final[str] = "objetivo_bajo_el_coste"
 CODE_EV_NET_NOT_COMPUTABLE: Final[str] = "ev_neto_no_calculable"
@@ -229,9 +234,9 @@ CODE_EV_BELOW_THRESHOLD: Final[str] = "ev_bajo_el_umbral"
 CODE_TIER_NOT_AUTHORIZED: Final[str] = "tier_no_autorizado"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Las 18 reglas de §12 (una por una, con quien las aplica)
+# Las 19 reglas de §12 (una por una, con quien las aplica)
 # ─────────────────────────────────────────────────────────────────────────────
-#: Las 18 reglas duras de ``plan.md`` §12. ``owner`` dice quien las aplica en esta tarea
+#: Las 19 reglas duras de ``plan.md`` §12. ``owner`` dice quien las aplica en esta tarea
 #: (``gate`` o la issue que las completa, ``issue``). El gate **no** las salta en silencio:
 #: publica el resultado de cada una en ``GateOutput.rules``.
 RULES: Final[tuple[dict[str, str], ...]] = (
@@ -386,6 +391,16 @@ RULES: Final[tuple[dict[str, str], ...]] = (
         "note": (
             "reutiliza MarketCalendar.is_half_day, sin re-derivar festivos ni medias sesiones; "
             "el flujo completo es #40"
+        ),
+    },
+    {
+        "rule": "19",
+        "title": "Dia de mercado cerrado: NOTHING justificado",
+        "owner": "gate",
+        "issue": "#113",
+        "note": (
+            "reutiliza MarketCalendar.session(...).reason, sin re-derivar festivos ni fines de "
+            "semana; la rama 'no se ejecuta' de tech_stack.md §8.4 fue #40 y esta es su alternativa"
         ),
     },
 )
@@ -769,7 +784,7 @@ class GateOutput(BaseModel):
         default=(), description="parametros sin decidir con su issue (#59/#60)"
     )
     rules: tuple[dict[str, str], ...] = Field(
-        default=(), description="resultado de cada una de las 18 reglas de §12"
+        default=(), description="resultado de cada una de las 19 reglas de §12"
     )
     gate_sha256: str = Field(description=f"{GATE_HASH_PREFIX}<64 hex>; ver GATE_HASH_FORMAT")
 
@@ -923,10 +938,10 @@ def _decision_reason(output: GateOutput) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Registro de las 18 reglas
+# Registro de las 19 reglas
 # ─────────────────────────────────────────────────────────────────────────────
 class _RuleLedger:
-    """El paso de cada una de las 18 reglas de §12, en el orden declarado en ``RULES``.
+    """El paso de cada una de las 19 reglas de §12, en el orden declarado en ``RULES``.
 
     Es estado **local** de una llamada: el registro nace y muere dentro de ``evaluate_gate``
     (la funcion sigue siendo pura) y el resultado se publica en ``GateOutput.rules``.
@@ -961,7 +976,7 @@ class _RuleLedger:
         self.mark(rule, _RULE_BLOCKED, detail)
 
     def entries(self) -> tuple[dict[str, str], ...]:
-        """Las 18 reglas, en el orden declarado (nunca en el orden de un ``set``)."""
+        """Las 19 reglas, en el orden declarado (nunca en el orden de un ``set``)."""
         return tuple(self._entries[entry["rule"]] for entry in RULES)
 
 
@@ -1018,6 +1033,8 @@ class _Context:
     observation_sessions_remaining: int
     is_fomc_session: bool
     is_half_session: bool
+    is_session: bool
+    closure_reason: str | None
     fomc_dates_count: int
     ledger: _RuleLedger = field(default_factory=_RuleLedger)
 
@@ -1228,6 +1245,9 @@ def _context(
     cost_pct = cost.c_declared_pct
     cost_total_pct = cost.c_total_pct
     favourable = _probability_for(direction, probability)
+    # La clausura (regla 19) se pregunta al calendario una sola vez; la media sesion (regla 18)
+    # sigue consultando `is_half_day`, que es el metodo que la prueba de reuso espia.
+    info = calendar.session(day)
     return _Context(
         session=day,
         as_of=instant,
@@ -1254,6 +1274,8 @@ def _context(
         observation_sessions_remaining=observation,
         is_fomc_session=day in declared_fomc,
         is_half_session=calendar.is_half_day(day),
+        is_session=info.is_session,
+        closure_reason=info.reason,
         fomc_dates_count=len(declared_fomc),
     )
 
@@ -1557,6 +1579,39 @@ def _undecided_output(context: _Context) -> GateOutput:
     )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Regla 19 (#113): un dia sin sesion no se evalua, se justifica
+# ─────────────────────────────────────────────────────────────────────────────
+def _closure_output(context: _Context) -> GateOutput | None:
+    """Regla 19: si el calendario cierra, ``NOTHING`` con ese **unico** bloqueo (``§8.4``).
+
+    Un dia de mercado cerrado (festivo de EE. UU. o fin de semana) no es "no se" —el calendario
+    **si** sabe que no abre— ni un ``NOTHING`` cualquiera: es un ``NOTHING`` **justificado**. La
+    clausura corta **antes** que cualquier otra regla: sin sesion no hay nada que evaluar, asi que
+    no se suma a los bloqueos de sesion 1, 3, 4, 5, 15, 17 ni 18. El motivo se **reutiliza** de
+    ``MarketCalendar.session(...).reason`` (nunca se re-deriva).
+    """
+    if context.is_session:
+        context.ledger.mark(
+            "19",
+            _RULE_OK,
+            f"MarketCalendar.session({context.session.isoformat()}) es sesion: hay que evaluar",
+        )
+        return None
+    reason = context.closure_reason or "mercado cerrado"
+    detail = (
+        f"MarketCalendar.session({context.session.isoformat()}) cierra el mercado ({reason}): la "
+        "regla 19 devuelve NOTHING justificado porque no hay sesion que evaluar "
+        "(tech_stack.md §8.4)"
+    )
+    context.ledger.block("19", detail)
+    return _nothing(
+        context,
+        tier=TIER_C,
+        blockers=({"rule": "19", "code": CODE_MARKET_CLOSED, "detail": detail},),
+    )
+
+
 def _stale_output(context: _Context) -> GateOutput | None:
     """Regla 13: un ``as_of`` que no es de hoy no produce una recomendacion accionable."""
     if context.as_of.date() == context.today:
@@ -1634,10 +1689,12 @@ def evaluate_gate(
 
     Orden de evaluacion (la precedencia declarada en el docstring del modulo):
 
-    1. Frescura del dato (regla 13) y calidad del snapshot (regla 14) ⇒ estados "no se".
-    2. Decisiones abiertas (#59/#60, ``GateParameters`` con ``None``) ⇒ ``undecided``.
-    3. Bloqueos de sesion: reglas 1, 3, 4, 5, 15, 17 y 18.
-    4. Reglas 16, 8, 9 y 10 y, si nada bloquea, el *sizing* (regla 2).
+    1. Clausura del mercado (regla 19): sin sesion no hay nada que evaluar ⇒ ``NOTHING``
+       justificado, con ese unico bloqueo.
+    2. Frescura del dato (regla 13) y calidad del snapshot (regla 14) ⇒ estados "no se".
+    3. Decisiones abiertas (#59/#60, ``GateParameters`` con ``None``) ⇒ ``undecided``.
+    4. Bloqueos de sesion: reglas 1, 3, 4, 5, 15, 17 y 18.
+    5. Reglas 16, 8, 9 y 10 y, si nada bloquea, el *sizing* (regla 2).
 
     Una entrada inadmisible (un porcentaje en ``float``, un coste con ``nights > 0``, un stop de
     0, un calendario que no es ``MarketCalendar``) lanza ``GateInputError``: nunca un resultado
@@ -1664,6 +1721,9 @@ def evaluate_gate(
         monthly_pnl_pct=monthly_pnl_pct,
         observation_sessions_remaining=observation_sessions_remaining,
     )
+    closed = _closure_output(context)
+    if closed is not None:
+        return closed
     stale = _stale_output(context)
     if stale is not None:
         return stale

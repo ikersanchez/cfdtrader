@@ -45,21 +45,19 @@ y ``error``. El quinto estado del gate, ``no_recommendation_undecided``, no apar
 escenario declarado S1 cierra los once parametros (``scenario_parameters``).
 
 La guardia de obsolescencia de ``tech_stack.md`` §8.4 vive en ``delivery.staleness`` y se
-consulta **en dos momentos**, porque no todos sus datos estan disponibles a la vez:
+aplica **despues de construir la matriz**:
 
-1. **Antes de tocar el almacen**, con ``market_closure``: si el mercado no abre ese dia (festivo
-   de EE. UU. o fin de semana) imprime el aviso de ``closure_notice`` en stdout y **no ejecuta
-   nada**: ni lee el almacen, ni puntua el modelo, ni emite informe, ni escribe fila. Es la rama
-   "No se ejecuta" de §8.4: un mercado cerrado no es ``NOTHING`` (no hay sesion que evaluar) ni un
-   "no se" (el calendario **si** sabe que no abre), asi que no se colapsa en ninguno de los cuatro
-   estados.
-2. **Despues de construir la matriz**, con ``session_guard``: el veredicto sale de comparar la
-   ultima sesion del almacen con la anterior a la evaluada (``missing_previous_close`` y
-   ``snapshot_ahead`` son ``no_recommendation_stale_data``; el segundo es el caso de un
-   ``--as-of`` que no se corresponde con el almacen) y el **contador de observacion** de la regla
-   15 se deriva del diario (``execution_dates`` + ``observation_sessions_remaining``): la vuelta de
-   una ausencia de mas de una semana deja 5 sesiones por revalidar, que el gate convierte en
-   ``NOTHING`` con su bloqueo 15.
+- **Frescura**, con ``session_guard``: el veredicto sale de comparar la ultima sesion del almacen
+  con la anterior a la evaluada (``missing_previous_close`` y ``snapshot_ahead`` son
+  ``no_recommendation_stale_data``; el segundo es el caso de un ``--as-of`` que no se corresponde
+  con el almacen) y el **contador de observacion** de la regla 15 se deriva del diario
+  (``execution_dates`` + ``observation_sessions_remaining``): la vuelta de una ausencia de mas de
+  una semana deja 5 sesiones por revalidar, que el gate convierte en ``NOTHING`` con su bloqueo 15.
+- **Clausura** (``MARKET_CLOSED``, #113): un dia de mercado cerrado (festivo de EE. UU. o fin de
+  semana) **si** ejecuta el camino y emite fila: la sesion no es sesion, el gate lo justifica con
+  la regla 19 y el informe trae ``bloqueo: 19:mercado_cerrado``. La rama "no se ejecuta" de §8.4
+  fue #40; #113 implementa su alternativa (``NOTHING`` justificado) y por eso este modulo ya no
+  imprime un aviso sin informe ni fila.
 
 Despues, la fila del almacen tiene que traer las diez features y un ``garch_forecast`` positivo
 (si no, ``no_recommendation_data_quality``). El informe imprime la **justificacion** de un
@@ -135,10 +133,9 @@ from cfdtrader.data.settings import ConfigurationError, load_settings
 from cfdtrader.data.store import Store
 from cfdtrader.decision.gate import GateOutput, GateStatus, evaluate_gate
 from cfdtrader.delivery.staleness import (
+    GuardVerdict,
     SessionGuard,
-    closure_notice,
     execution_dates,
-    market_closure,
     session_guard,
 )
 from cfdtrader.features.store import FEATURE_VERSION_PREFIX
@@ -715,11 +712,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Imprime la pista del dia o su estado «sin recomendacion»; devuelve el codigo de salida.
 
     Codigos: ``0`` = informe emitido (``recommendation``, ``no_recommendation_stale_data`` o
-    ``no_recommendation_data_quality``) o mercado cerrado (la rama "no se ejecuta" de §8.4: aviso
-    con su motivo, sin informe y sin fila); ``2`` = ``--as-of``/``--model-run``/``--journal-root``/
+    ``no_recommendation_data_quality``; un dia de mercado cerrado es ``recommendation`` con
+    ``NOTHING`` justificado, regla 19); ``2`` = ``--as-of``/``--model-run``/``--journal-root``/
     ``--git-commit`` ausentes o invalidos, fallo del pipeline (``error``) o diario no escribible,
     con el motivo por ``stderr`` y sin *traceback*. Cada ejecucion registra la fila del diario
-    (§19.3) antes de devolver, salvo cuando no hay sesion que registrar.
+    (§19.3) antes de devolver, tambien en un dia de mercado cerrado.
     """
     parser = argparse.ArgumentParser(
         prog="cfdtrader.delivery.run_daily",
@@ -827,13 +824,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     # mientras la resolucion contra el registro no lo haya devuelto (nunca un digest inventado).
     model_version = cast("str", declared_run if declared_run is not None else declared_variant)
 
-    # La guardia de §8.4 empieza **antes de leer nada**: si ese dia el mercado americano no abre,
-    # el camino diario "no se ejecuta" (ni almacen, ni registro, ni modelo, ni informe, ni fila).
-    closure = market_closure(as_of=moment, calendar=calendar)
-    if closure is not None:
-        print(closure_notice(session=session, reason=closure))
-        return 0
-
     try:
         if declared_variant is not None:
             entry = resolve_run(runs_root=runs_root, variant_id=declared_variant)
@@ -849,9 +839,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             snapshot_session=snapshot_session,
             executions=execution_dates(journal_root),
         )
-        if guard.blocks:
-            # Aqui solo pueden llegar los dos "no se" de frescura: la clausura ya se comprobo
-            # arriba, con el mismo `as_of` y el mismo calendario.
+        if guard.blocks and guard.verdict is not GuardVerdict.MARKET_CLOSED:
+            # Aqui solo llegan los dos "no se" de frescura. La clausura (#113, MARKET_CLOSED) **no**
+            # para el camino: el gate la convierte en un `NOTHING` justificado (regla 19) que si se
+            # registra, con el `observation_sessions_remaining` = 0 que la guardia ya derivo.
             text = render(
                 status=GateStatus.NO_RECOMMENDATION_STALE_DATA,
                 session=session,

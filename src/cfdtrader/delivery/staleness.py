@@ -10,8 +10,9 @@ Las tres preguntas que responde, y quien las responde:
 
 - **¿Es dia de sesion?** :func:`market_closure` reutiliza ``MarketCalendar`` (el modulo de #4) y
   devuelve el motivo declarado (``festivo: ...``, ``fin de semana``) o ``None`` si el mercado
-  abre. **No re-deriva festivos, medias sesiones ni horarios**: la tabla de §8.4 dice
-  literalmente "⏭️ No se ejecuta", y la clausura **no** es un estado del diario (ver abajo).
+  abre. **No re-deriva festivos, medias sesiones ni horarios**: la clausura la decide el
+  calendario y, desde #113, el camino diario la convierte en un ``NOTHING`` justificado (la
+  regla 19 del gate), no en un "no se ejecuta".
 - **¿Corresponden los datos a la sesion?** :func:`session_guard` compara la ultima sesion del
   almacen con la anterior a la evaluada y publica un :class:`GuardVerdict`: falta el cierre de la
   sesion anterior (§8.4 fila 2), el almacen va por delante de la declaracion, o se puede seguir.
@@ -20,19 +21,17 @@ Las tres preguntas que responde, y quien las responde:
   observacion de la regla 15 **derivadas del diario**: el historial de ejecuciones es el unico
   registro de la ausencia, y no se persiste ningun contador nuevo.
 
-Los cuatro estados de ``plan.md`` §19.2 y por que la clausura no es uno de ellos
---------------------------------------------------------------------------------
+Los cuatro estados de ``plan.md`` §19.2 y donde entra la clausura (#113)
+------------------------------------------------------------------------
 
 El registro distingue ``recommendation`` (con ``LONG``/``SHORT``/``NOTHING``),
 ``no_recommendation_stale_data``, ``no_recommendation_data_quality`` y ``error``. Un dia de
-mercado cerrado **no es ninguno** de los cuatro: no hay sesion que evaluar, no hay juicio que
-hacer y no hay "no se" (el calendario *si* sabe que no abre). Ademas un ``NOTHING`` en el diario
-exige ``direction = nothing``, que ``journal.decision_log.build_decision`` deriva de un
-``GateOutput``, y el gate (``decision.gate``, congelado para esta entrega) no tiene ninguna regla
-de mercado cerrado. Por eso este modulo implementa la rama **primera y normativa** de §8.4
-("no se ejecuta"): :func:`closure_notice` publica el aviso, con su motivo, y el camino diario no
-emite informe ni fila. La alternativa del parentesis de §8.4 ("o se ejecuta y devuelve ``NOTHING``
-justificado") es **#113**, declarada fuera de alcance en el grooming de #40.
+mercado cerrado **no es un "no se"**: no hay sesion que evaluar y el calendario *si* sabe que no
+abre. #40 implemento la rama **primera** de §8.4 ("no se ejecuta": un aviso sin informe ni fila);
+**#113 implementa su alternativa** (la del parentesis: "o se ejecuta y devuelve ``NOTHING``
+justificado"). Por eso este modulo ya **no** publica un aviso de clausura (``closure_notice`` era
+de #40): :func:`market_closure` sigue dando el motivo, y el gate lo convierte en un ``NOTHING``
+con la regla 19 que si se registra en el diario.
 
 Sin reloj, sin red y sin escritura
 ----------------------------------
@@ -67,7 +66,6 @@ __all__ = [
     "OBSERVATION_SESSIONS",
     "GuardVerdict",
     "SessionGuard",
-    "closure_notice",
     "execution_dates",
     "market_closure",
     "observation_sessions_remaining",
@@ -91,8 +89,9 @@ class GuardVerdict(StrEnum):
     """El veredicto de la guardia sobre la sesion declarada.
 
     ``PROCEED`` no significa "hay pista": significa que la guardia **no** la prohibe y el gate
-    decide despues (con sus reglas 1, 3, 4, 5, 15, 17 y 18). Los otros tres son paradas: dos de
-    ellas "no se" (``no_recommendation_stale_data``) y la otra el aviso de §8.4.
+    decide despues (con sus reglas 1, 3, 4, 5, 15, 17, 18 y 19). ``MISSING_PREVIOUS_CLOSE`` y
+    ``SNAPSHOT_AHEAD`` son paradas "no se" (``no_recommendation_stale_data``); ``MARKET_CLOSED``
+    no para el camino: el gate la convierte en ``NOTHING`` justificado (regla 19, #113).
     """
 
     PROCEED = "proceed"
@@ -116,19 +115,6 @@ def market_closure(*, as_of: datetime, calendar: MarketCalendar) -> str | None:
     if info.is_session:
         return None
     return info.reason or CLOSED_REASON
-
-
-def closure_notice(*, session: date, reason: str) -> str:
-    """El aviso de la rama "no se ejecuta" de §8.4: ni informe, ni pista, ni fila de diario.
-
-    Se imprime en **stdout** (no es un error) y **no** lleva la valla de honestidad del informe
-    porque no es un informe: no hay ``estado:`` que se pueda confundir con los cuatro de §19.2.
-    """
-    return (
-        f"sin sesion: {session.isoformat()} ({reason})\n"
-        "motivo: el mercado americano no abre ese dia (tech_stack.md §8.4): el camino diario no "
-        "se ejecuta y no se emite ninguna recomendacion\n"
-    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
