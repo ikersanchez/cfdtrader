@@ -318,3 +318,60 @@ def _offset(zone: str, day: date) -> timedelta:
     """Desplazamiento UTC de esa zona a mediodía de ese día."""
     noon = datetime.combine(day, time(12, 0), tzinfo=ZoneInfo(zone))
     return noon.utcoffset() or timedelta()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #124 · El calendario de FOMC declarado: fuente, fecha y año ausente
+# ─────────────────────────────────────────────────────────────────────────────
+def test_124_the_declared_calendar_declares_its_source_date_and_meetings() -> None:
+    """Sin procedencia ni fecha, un calendario declarado no es auditable."""
+    from cfdtrader.data.calendar import DEFAULT_FOMC_CALENDAR_PATH, load_fomc_calendar
+
+    config = load_fomc_calendar()
+    assert config is not None, f"falta el artefacto {DEFAULT_FOMC_CALENDAR_PATH}"
+    assert config.source.startswith("https://www.federalreserve.gov/")
+    assert config.verified_on == date(2026, 10, 3)
+    assert config.tentative_note.strip(), "la fuente avisa de que las fechas son provisionales"
+    assert len(config.meetings[2027]) == 16, "las ocho reuniones de 2027, con sus dos dias"
+
+
+def test_124_an_undeclared_year_is_none_and_not_an_empty_tuple() -> None:
+    """«Nadie lo ha declarado» y «declarado, y no hay ninguna» no son lo mismo."""
+    from cfdtrader.data.calendar import fomc_dates_for, load_fomc_calendar
+
+    config = load_fomc_calendar()
+    assert config is not None
+    assert fomc_dates_for(config, 2026) is None, "2026 no se pudo verificar y no se inventa"
+    declared = fomc_dates_for(config, 2027)
+    assert declared is not None
+    assert list(declared) == sorted(set(declared)), "sin repetidas y en orden"
+
+
+def test_124_a_missing_artifact_is_not_declared_and_a_broken_one_raises(tmp_path: Path) -> None:
+    """``None`` si no existe; un fichero mal formado falla al arrancar (``tech_stack.md`` §4.2)."""
+    from cfdtrader.data.calendar import load_fomc_calendar
+
+    assert load_fomc_calendar(tmp_path / "no-existe.yaml") is None
+
+    unknown = tmp_path / "desconocido.yaml"
+    unknown.write_text(
+        "version: 1\nsource: https://x\nverified_on: 2026-10-03\n"
+        "tentative_note: n\ncampo_de_mas: 1\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigurationError):
+        load_fomc_calendar(unknown)
+
+
+def test_124_a_year_declared_without_meetings_is_rejected(tmp_path: Path) -> None:
+    """Declarar el año vacío afirmaría «se sabe, y no hay ninguna»: la indistinción a eliminar."""
+    from cfdtrader.data.calendar import load_fomc_calendar
+
+    empty = tmp_path / "vacio.yaml"
+    empty.write_text(
+        "version: 1\nsource: https://x\nverified_on: 2026-10-03\ntentative_note: n\n"
+        "meetings:\n  2026: []\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigurationError, match="sin ninguna reunion"):
+        load_fomc_calendar(empty)

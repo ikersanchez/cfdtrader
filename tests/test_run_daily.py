@@ -517,7 +517,9 @@ def test_a_stale_store_has_no_hint(
     assert f"snapshot_sesion: {SNAPSHOT_SESSION.isoformat()}" in captured.out
     assert "direccion:" not in captured.out
     assert "no hay edge demostrado" in captured.out
-    assert captured.err == ""
+    # 2026 no esta declarado en `config/fomc_calendar.yaml`: el camino diario lo dice en voz alta
+    # en vez de pasar un conjunto vacio en silencio (#124). Era `captured.err == ""` antes.
+    assert "no esta declarado en el calendario de FOMC" in captured.err
 
 
 def test_a_null_feature_row_is_a_data_quality_state(
@@ -766,7 +768,9 @@ def test_main_emits_the_recommendation_state(
     assert "ev_neto_pct: null" in captured.out
     assert "gate_sha256: sha256:" in captured.out
     assert "no hay edge demostrado" in captured.out
-    assert captured.err == ""
+    # 2026 no esta declarado en `config/fomc_calendar.yaml`: el camino diario lo dice en voz alta
+    # en vez de pasar un conjunto vacio en silencio (#124). Era `captured.err == ""` antes.
+    assert "no esta declarado en el calendario de FOMC" in captured.err
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2536,3 +2540,56 @@ def test_121_the_journal_row_keeps_only_what_blocks(
 
     assert blockers, "la sesion de los fixtures trae bloqueos del gate"
     assert set(blockers).isdisjoint(informative), f"un informativo se colo: {blockers}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #124 · El conjunto de FOMC declarado llega al gate (parte (a) de #114)
+# ─────────────────────────────────────────────────────────────────────────────
+_DECLARED_FOMC = run_daily._declared_fomc_dates  # pyright: ignore[reportPrivateUsage]
+
+
+def test_124_a_declared_year_reaches_the_gate_and_an_undeclared_one_is_announced(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """El literal `fomc_dates=()` no distinguía «hoy no hay FOMC» de «no hay calendario»."""
+    dates, note, declared = _DECLARED_FOMC(2027)
+    assert declared is True
+    assert len(dates) == 16
+    assert "federalreserve.gov" in note and "verificado" in note
+    assert capsys.readouterr().err == "", "un año declarado no avisa de nada"
+
+    empty, absence, is_declared = _DECLARED_FOMC(2026)
+    assert empty == () and is_declared is False
+    assert "no esta declarado" in absence
+    assert "regla 17" in absence, "el aviso dice que la regla 17 no puede dispararse"
+
+
+def test_124_a_declared_fomc_day_blocks_with_rule_17() -> None:
+    """La regla 17 **se dispara** con el calendario declarado, no con un conjunto vacío."""
+    dates, _, declared = _DECLARED_FOMC(2027)
+    assert declared is True
+    fomc_day = dates[0]
+    cost = cost_breakdown(
+        model=declared_cost_model(),
+        slippage=declared_slippage_assumption(),
+        notional_usd=NOTIONAL_USD,
+        side=Side.LONG,
+        nights=0,
+    )
+    output = evaluate_gate(
+        session=fomc_day,
+        as_of=datetime.combine(fomc_day, datetime.min.time(), tzinfo=EASTERN),
+        today=fomc_day,
+        calendar=load_calendar(),
+        prob_up_calibrated=0.6,
+        expected_move_pct=Decimal("1.0"),
+        expected_move_basis="sigma_k",
+        cost=cost,
+        capital_usd=NOTIONAL_USD,
+        snapshot_ok=True,
+        stop_pct=Decimal("0.5"),
+        target_pct=Decimal("1.0"),
+        fomc_dates=dates,
+        params=scenario_parameters(cost_pct=cost.c_declared_pct),
+    )
+    assert ("17", "dia_de_fomc") in [(entry["rule"], entry["code"]) for entry in output.blockers]

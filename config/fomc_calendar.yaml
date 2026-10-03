@@ -1,0 +1,45 @@
+# Calendario de reuniones del FOMC — parte (a) de #114.
+#
+# Esquema: `src/cfdtrader/data/calendar.py` (Pydantic, `extra="forbid"`).
+#
+# La fuente es el calendario público de la Reserva Federal. A diferencia de una noticia, este
+# calendario se **publica con antelación**: usarlo para bloquear un día futuro **no es look-ahead**.
+# Lo que hay que declarar es la procedencia y la fecha en que se consultó.
+#
+# La propia Fed advierte —y por eso está copiado aquí— que las fechas son **provisionales** hasta
+# la reunión inmediatamente anterior.
+#
+# ⚠️ **2026 no está declarado en este fichero**, y no es un olvido: su sección no se pudo recuperar
+# de la fuente (la página es grande y la extracción se corta antes de llegar a ella; la de 2027 sí
+# se verificó completa). **No se inventa ninguna fecha.** Un año ausente produce un **aviso visible**
+# en el informe y en el `manifest`, nunca un conjunto vacío silencioso: «hoy no hay FOMC» y «nadie
+# ha declarado el calendario» son cosas distintas y el camino diario tiene que poder distinguirlas.
+
+version: 1
+source: https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm
+verified_on: 2026-10-03
+tentative_note: >-
+  Each meeting date is tentative until confirmed at the meeting immediately preceding it.
+
+# Días de reunión por año: cada año lleva **las ocho reuniones** con sus dos días, tal como la Fed
+# las publica. Decidir si bloquea sólo el día del comunicado (el segundo, 14:00 ET) o también el
+# primero es una decisión de estrategia (`plan.md` §19), no de este artefacto: aquí se declara lo
+# que la fuente dice.
+meetings:
+  2027:
+    - 2027-01-26
+    - 2027-01-27
+    - 2027-03-16
+    - 2027-03-17
+    - 2027-04-27
+    - 2027-04-28
+    - 2027-06-08
+    - 2027-06-09
+    - 2027-07-27
+    - 2027-07-28
+    - 2027-09-14
+    - 2027-09-15
+    - 2027-10-26
+    - 2027-10-27
+    - 2027-12-07
+    - 2027-12-08

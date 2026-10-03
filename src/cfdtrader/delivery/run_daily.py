@@ -135,7 +135,13 @@ from cfdtrader.backtest.costs import (
     declared_cost_model,
     declared_slippage_assumption,
 )
-from cfdtrader.data.calendar import EASTERN, MarketCalendar, load_calendar
+from cfdtrader.data.calendar import (
+    EASTERN,
+    MarketCalendar,
+    fomc_dates_for,
+    load_calendar,
+    load_fomc_calendar,
+)
 from cfdtrader.data.news import load_headlines
 from cfdtrader.data.settings import ConfigurationError, load_settings
 from cfdtrader.data.store import Store
@@ -464,6 +470,30 @@ def _optional_float(value: object) -> float | None:
 # ─────────────────────────────────────────────────────────────────────────────
 # Informe
 # ─────────────────────────────────────────────────────────────────────────────
+def _declared_fomc_dates(year: int) -> tuple[tuple[date, ...], str, bool]:
+    """Los dias de FOMC del año, la nota que describe su procedencia y si el año esta declarado.
+
+    Existe por una indistincion concreta: un conjunto vacio puede significar «hoy no hay FOMC» o
+    «nadie ha declarado el calendario», y son cosas distintas (#114). Antes eran indistinguibles
+    porque el camino diario pasaba un literal ``()``. Ahora el año ausente sale **en voz alta**.
+    """
+    try:
+        config = load_fomc_calendar()
+    except ConfigurationError as failure:
+        return (), f"el calendario de FOMC declarado no se puede leer: {failure}", False
+    if config is None:
+        return (), "no hay calendario de FOMC declarado: la regla 17 no puede dispararse", False
+    dates = fomc_dates_for(config, year)
+    if dates is None:
+        return (
+            (),
+            f"el año {year} no esta declarado en el calendario de FOMC ({config.source}): la regla "
+            "17 no puede dispararse",
+            False,
+        )
+    return dates, f"{config.source} (verificado {config.verified_on.isoformat()})", True
+
+
 def _day_events(
     calendar: MarketCalendar, session: date, moment: datetime
 ) -> EventCalendarSignal | None:
@@ -491,6 +521,7 @@ def render(
     message: str,
     output: GateOutput | None = None,
     calendar_events: EventCalendarSignal | None = None,
+    notes: Sequence[str] = (),
 ) -> str:
     """El informe del dia: cabecera, pista (si la hay), bloqueos, motivo y valla (#109, #40).
 
@@ -511,6 +542,7 @@ def render(
         lines.extend(_blocker_lines(output))
     if calendar_events is not None:
         lines.extend(_calendar_lines(calendar_events))
+    lines.extend(f"nota: {note}" for note in notes)
     lines.append(f"motivo: {message}")
     lines.append("")
     lines.extend(HONESTY_FENCE)
@@ -1021,6 +1053,11 @@ def _deliver(
     # Los eventos del dia (informativos incluidos) se publican en el informe; si la senal del
     # calendario no se puede calcular, el informe sale **sin** su seccion en vez de caerse (#121).
     calendar_events: EventCalendarSignal | None = None
+    # El conjunto de FOMC declarado y su procedencia (parte (a) de #114). Un año no declarado deja
+    # el conjunto vacio **y una nota**: lo que no puede volver es el silencio del literal `()`.
+    fomc_dates: tuple[date, ...] = ()
+    fomc_note = ""
+    fomc_declared = False
     # El `model_version` del diario: el `run_sha256` resuelto, o el selector declarado verbatim
     # mientras la resolucion contra el registro no lo haya devuelto (nunca un digest inventado).
     model_version = cast("str", declared_run if declared_run is not None else declared_variant)
@@ -1112,6 +1149,10 @@ def _deliver(
         stop_pct = SCENARIO_STOP_SIGMA_MULTIPLE * move
         with observer.stage("calendar"):
             calendar_events = _day_events(calendar, session, moment)
+            fomc_dates, fomc_note, fomc_declared = _declared_fomc_dates(session.year)
+            observer.add_version("fomc_calendar", fomc_note)
+            if not fomc_declared:
+                print(f"aviso: {fomc_note}", file=sys.stderr)
         if calendar_events is not None:
             observer.add_hash("calendar_sha256", calendar_events.signal_sha256)
         with observer.stage("overlay"):
@@ -1130,7 +1171,7 @@ def _deliver(
                 snapshot_ok=True,
                 stop_pct=stop_pct,
                 target_pct=SCENARIO_TARGET_STOP_MULTIPLE * stop_pct,
-                fomc_dates=(),
+                fomc_dates=fomc_dates,
                 params=params,
                 trades_today=0,
                 daily_pnl_pct=None,
@@ -1176,6 +1217,7 @@ def _deliver(
         message=_guard_message(guard),
         output=output,
         calendar_events=calendar_events,
+        notes=() if fomc_declared else (fomc_note,),
     )
     with observer.stage("journal"):
         failure = _record_or_report(

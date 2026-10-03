@@ -37,21 +37,25 @@ from zoneinfo import ZoneInfo
 
 import holidays
 import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from cfdtrader.data.settings import ConfigurationError
 
 __all__ = [
     "DEFAULT_CALENDAR_PATH",
+    "DEFAULT_FOMC_CALENDAR_PATH",
     "EASTERN",
     "HALF_SESSION_CLOSE_ET",
     "MADRID",
     "SESSION_CLOSE_ET",
     "SESSION_OPEN_ET",
     "CalendarConfig",
+    "FomcCalendarConfig",
     "MarketCalendar",
     "SessionInfo",
+    "fomc_dates_for",
     "load_calendar",
+    "load_fomc_calendar",
 ]
 
 #: Zona de referencia interna del proyecto: **nunca** una hora local fija.
@@ -410,3 +414,77 @@ def load_calendar(
             except ValidationError as error:
                 raise ConfigurationError(f"calendario inválido en {target}: {error}") from error
     return MarketCalendar(config, years=years)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# El calendario de FOMC declarado (parte (a) de #114)
+# ─────────────────────────────────────────────────────────────────────────────
+#: Ruta por defecto del calendario de reuniones del FOMC declarado.
+DEFAULT_FOMC_CALENDAR_PATH = Path(__file__).resolve().parents[3] / "config" / "fomc_calendar.yaml"
+
+
+class FomcCalendarConfig(BaseModel):
+    """Contenido de ``config/fomc_calendar.yaml``.
+
+    A diferencia de una noticia, este calendario se **publica con antelacion**: usarlo para
+    bloquear un dia futuro **no es look-ahead**. Lo que hay que declarar es la procedencia y la
+    fecha en que se consulto, porque la propia Fed avisa de que las fechas son **provisionales**
+    hasta la reunion inmediatamente anterior.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    version: int = Field(ge=1, description="version del esquema del fichero")
+    source: str = Field(min_length=1, description="URL de procedencia del calendario")
+    verified_on: date = Field(description="fecha en que se consulto la fuente")
+    tentative_note: str = Field(min_length=1, description="aviso de la fuente sobre las fechas")
+    #: Días de reunión por año; un año declarado lleva al menos una fecha.
+    meetings: dict[int, tuple[date, ...]] = {}
+
+    @field_validator("meetings")
+    @classmethod
+    def _reject_empty_years(cls, value: dict[int, tuple[date, ...]]) -> dict[int, tuple[date, ...]]:
+        """Un año declarado con la lista vacia seria «declarado sin reuniones»: no existe.
+
+        Es la distincion que sostiene toda la tarea: si no se sabe, **no se declara el año**, y el
+        camino diario lo avisa. Declararlo vacio seria decir que se sabe y que no hay ninguna.
+        """
+        empty = sorted(year for year, days in value.items() if not days)
+        if empty:
+            raise ValueError(
+                f"los años {empty} estan declarados sin ninguna reunion: si no se sabe, no se "
+                "declara el año en vez de declararlo vacio"
+            )
+        return value
+
+
+def load_fomc_calendar(path: Path | str | None = None) -> FomcCalendarConfig | None:
+    """Carga ``config/fomc_calendar.yaml``.
+
+    Devuelve ``None`` cuando el artefacto **no existe**: entonces el calendario no esta declarado,
+    que es informacion **distinta** de «hoy no hay FOMC», y el llamante tiene que poder
+    distinguirla. Un fichero mal formado falla al arrancar, con el motivo (``tech_stack.md`` §4.2).
+    """
+    target = Path(path) if path is not None else DEFAULT_FOMC_CALENDAR_PATH
+    if not target.is_file():
+        return None
+    try:
+        loaded: object = yaml.safe_load(target.read_text(encoding="utf-8"))
+    except yaml.YAMLError as error:
+        raise ConfigurationError(f"YAML inválido en {target}: {error}") from error
+    if not isinstance(loaded, dict):
+        raise ConfigurationError(f"{target} debe contener un mapping en la raíz")
+    try:
+        return FomcCalendarConfig.model_validate(cast("dict[str, object]", loaded))
+    except ValidationError as error:
+        raise ConfigurationError(f"calendario de FOMC inválido en {target}: {error}") from error
+
+
+def fomc_dates_for(config: FomcCalendarConfig, year: int) -> tuple[date, ...] | None:
+    """Los dias de FOMC declarados para ese año, o ``None`` si el **año no esta declarado**.
+
+    ``None`` **no** es una lista vacia: es «nadie ha declarado el calendario de ese año». Confundir
+    las dos cosas es exactamente lo que hacia el literal ``fomc_dates=()`` del camino diario, que
+    hacia indistinguible «hoy no hay FOMC» de «la regla 17 no puede dispararse» (#114).
+    """
+    return config.meetings.get(year)
