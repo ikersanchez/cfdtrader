@@ -44,11 +44,14 @@ dependencies = [
     # Caché en disco de respuestas, con clave `hash(prompt + modelo + inputs)` (§4.9).
     # Autorizado para #33. La poda es de #44.
     "diskcache>=5.6,<6",
+    # Grafo de agentes: **versión fijada y pineada** (tech_stack.md §4.10). Autorizado para #36.
+    # Evoluciona rápido, así que el pin es exacto, no un rango: `==1.2.12`.
+    "langgraph==1.2.12",
 ]
 
 # Fase 0–2: stack mínimo viable (tech_stack.md §5.1).
-# La Fase 3 (carril A) ya añade el SDK `openai`, `feedparser`, `jinja2` y `diskcache`; el
-# resto de §5.2 (langgraph, tiktoken, gdeltdoc, streamlit, …) sigue fuera hasta que lo
+# La Fase 3 (carril A) ya añade el SDK `openai`, `feedparser`, `jinja2`, `diskcache` y
+# `langgraph` (#36); el resto de §5.2 (tiktoken, gdeltdoc, streamlit, …) sigue fuera hasta que lo
 # pida su tarea.
 [dependency-groups]
 dev = [
