@@ -15,6 +15,7 @@ del repositorio sin que ninguna puerta se enterara.
 from __future__ import annotations
 
 import hashlib
+import os
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -45,6 +46,24 @@ def fingerprint(root: Path) -> dict[str, str]:
         for path in sorted(root.rglob("*"))
         if path.is_file()
     }
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_real_llm_key() -> Iterator[None]:
+    """La sesion de tests **no** debe llegar al proveedor LLM real: la clave se vacia por defecto.
+
+    En CI no hay ``.env`` y las pruebas nunca abren red; en local si puede haber una
+    ``LLM_API_KEY``, y entonces el camino diario (overlay e informe) y los subprocesos de
+    determinismo pagarian una llamada real. La regla es la misma en los dos entornos: ninguna
+    prueba abre red. Una prueba que necesite la clave la fija con ``monkeypatch.setenv``.
+    """
+    previous = os.environ.get("LLM_API_KEY")
+    os.environ["LLM_API_KEY"] = ""
+    yield
+    if previous is None:
+        os.environ.pop("LLM_API_KEY", None)
+    else:
+        os.environ["LLM_API_KEY"] = previous
 
 
 @pytest.fixture(scope="session", autouse=True)

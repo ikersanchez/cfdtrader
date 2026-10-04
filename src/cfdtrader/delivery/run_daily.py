@@ -105,6 +105,7 @@ from lightgbm import Booster
 from lightgbm.basic import LightGBMError
 from pydantic import ValidationError
 
+from cfdtrader.agents import report as report_agent
 from cfdtrader.agents.event_calendar import (
     EventCalendarInputError,
     EventCalendarSignal,
@@ -553,6 +554,94 @@ def _earnings_blockers(earnings: Sequence[EarningsEvent]) -> tuple[str, ...]:
     return tuple(f"earnings_confirmado:{event.symbol}" for event in earnings if event.blocking)
 
 
+def _report_facts(
+    output: GateOutput,
+    *,
+    publications: Sequence[MacroPublication],
+    earnings: Sequence[EarningsEvent],
+    calendar_events: EventCalendarSignal | None,
+) -> report_agent.ReportFacts:
+    """Los **hechos** que el informe redacta: datos ya calculados, no numeros del LLM (#37)."""
+    direction = "nothing" if output.direction is None else output.direction.value
+    return report_agent.ReportFacts(
+        trade_date=output.session,
+        direction=direction,
+        prob_up_calibrated=output.prob_up_calibrated,
+        expected_move_pct=float(output.expected_move_pct),
+        cost_pct=float(output.cost_pct),
+        # `ev_net_pct` y `target_pct` son nullables en el gate; el stop **siempre** existe.
+        ev_net_pct=None if output.ev_net_pct is None else float(output.ev_net_pct),
+        stop_pct=float(output.stop_pct),
+        target_pct=None if output.target_pct is None else float(output.target_pct),
+        tier=output.tier or "",
+        blocking_events=tuple(str(entry["code"]) for entry in output.blockers),
+        day_events=() if calendar_events is None else tuple(_calendar_lines(calendar_events)),
+        publications=tuple(_publication_lines(publications)),
+        earnings=tuple(_earnings_lines(earnings)),
+    )
+
+
+def _compose_report(
+    output: GateOutput,
+    ops_root: Path,
+    moment: datetime,
+    *,
+    publications: Sequence[MacroPublication],
+    earnings: Sequence[EarningsEvent],
+    calendar_events: EventCalendarSignal | None,
+) -> tuple[report_agent.ReportDraft | None, Mapping[str, object]]:
+    """El informe redactado por el modelo de mayor calidad, o ``None`` si no se puede (#37).
+
+    **Nunca lanza.** Es una capa **opcional** por diseno (`tech_stack.md` §4.9): si falta la clave,
+    el modelo, la plantilla o el presupuesto, devuelve ``None`` y el camino diario publica su
+    informe determinista de siempre. Devuelve tambien los ``prompt_hashes`` que van al diario.
+
+    El modelo **no** decide ni calcula: recibe los hechos ya calculados y solo redacta (con su
+    contra-argumento). El guardia se consulta **antes** de llamar: con el overlay cortado no se paga
+    una llamada para nada.
+    """
+    cache: ResponseCache | None = None
+    metered: MeteredLLMClient | None = None
+    draft: report_agent.ReportDraft | None = None
+    prompt_hashes: dict[str, object] = {}
+    try:
+        settings = LLMClientConfig()
+        model = settings.model_for("report")
+        facts = _report_facts(
+            output,
+            publications=publications,
+            earnings=earnings,
+            calendar_events=calendar_events,
+        )
+        cache = ResponseCache(ops_root / LLM_CACHE_DIRNAME)
+        metered = MeteredLLMClient(
+            build_client(settings),
+            cache=cache,
+            guard=BudgetGuard(caps=BudgetCaps().caps()),
+            as_of=moment,
+            provider=settings.provider,
+            purpose="report",
+            journal=ops_root,
+        )
+        if metered.state != OverlayState.APPLIED:
+            return None, {}
+        agent = report_agent.ReportAgent(OverlayClient(metered), model=model)
+        draft = agent.compose(facts)
+        prompt_hashes = {report_agent.PROMPT_TEMPLATE_NAME: agent.prompt_hash}
+    except (
+        LLMError,
+        report_agent.ReportAgentError,
+        ValidationError,
+        ConfigurationError,
+    ) as failure:
+        print(f"no se puede redactar el informe: {failure}", file=sys.stderr)
+        return None, {}
+    finally:
+        if cache is not None:
+            cache.close()
+    return draft, prompt_hashes
+
+
 def render(
     *,
     status: GateStatus,
@@ -565,6 +654,7 @@ def render(
     calendar_events: EventCalendarSignal | None = None,
     publications: Sequence[MacroPublication] = (),
     earnings: Sequence[EarningsEvent] = (),
+    report: report_agent.ReportDraft | None = None,
     notes: Sequence[str] = (),
 ) -> str:
     """El informe del dia: cabecera, pista (si la hay), bloqueos, motivo y valla (#109, #40).
@@ -588,6 +678,8 @@ def render(
         lines.extend(_calendar_lines(calendar_events))
     lines.extend(_publication_lines(publications))
     lines.extend(_earnings_lines(earnings))
+    if report is not None:
+        lines.extend(_report_lines(report))
     lines.extend(f"nota: {note}" for note in notes)
     lines.append(f"motivo: {message}")
     lines.append("")
@@ -671,6 +763,18 @@ def _earnings_lines(earnings: Sequence[EarningsEvent]) -> list[str]:
         f"bloquea: {'si' if event.blocking else 'no'}"
         for event in earnings
     ]
+
+
+def _report_lines(draft: report_agent.ReportDraft) -> list[str]:
+    """El informe redactado por el LLM: narrativa y contra-argumento (#37).
+
+    Va con prefijo propio (`redaccion:`) y **nunca** reescribe los numeros: los hechos ya estan en
+    las lineas de arriba. Es la unica parte del informe que puede faltar sin romper el pipeline.
+    """
+    lines = [f"redaccion: {draft.narrative}"]
+    lines.extend(f"contra_argumento: {item}" for item in (*draft.bull_case, *draft.bear_case))
+    lines.append(f"redaccion_modelo: {draft.model} | prompt: {draft.prompt_hash}")
+    return lines
 
 
 def _date_or_null(value: date | None) -> str:
@@ -1322,6 +1426,17 @@ def _deliver(
                 message=str(error),
             )
 
+    with observer.stage("report"):
+        report, report_hashes = _compose_report(
+            output,
+            observability_root,
+            moment,
+            publications=publications,
+            earnings=earnings,
+            calendar_events=calendar_events,
+        )
+    if report is not None:
+        observer.add_hash("report_prompt_sha256", report.prompt_hash)
     observer.add_hash("gate_sha256", output.gate_sha256)
     text = render(
         status=output.status,
@@ -1334,6 +1449,7 @@ def _deliver(
         calendar_events=calendar_events,
         publications=publications,
         earnings=earnings,
+        report=report,
         notes=() if fomc_declared else (fomc_note,),
     )
     with observer.stage("journal"):
@@ -1349,7 +1465,7 @@ def _deliver(
             output=output,
             prob_up_raw=prob_up_raw,
             overlay=overlay,
-            prompt_hashes=prompt_hashes,
+            prompt_hashes={**prompt_hashes, **report_hashes},
             extra_blockers=earnings_blockers,
         )
     if failure is not None:

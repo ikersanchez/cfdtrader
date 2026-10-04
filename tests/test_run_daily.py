@@ -37,6 +37,7 @@ import numpy as np
 import polars as pl
 import pytest
 
+from cfdtrader.agents import report as report_agent
 from cfdtrader.agents.event_calendar import (
     EventCalendarInputError,
     EventKind,
@@ -817,6 +818,17 @@ def _stub_overlay(result: OverlayDecision, hashes: Mapping[str, object]) -> obje
         return result, hashes
 
     return _fake
+
+
+@pytest.fixture(autouse=True)
+def _no_llm_report(monkeypatch: pytest.MonkeyPatch) -> None:
+    """La redaccion del informe no abre red en las pruebas: se sustituye por un no-op (#37).
+
+    El camino diario SI consulta el estado antes de llamar, pero la clave del `.env` existe: sin
+    esta sustitucion, cada prueba del pipeline pagaria una llamada real. Las pruebas de #37
+    sobreescriben este doble con una redaccion pautada.
+    """
+    monkeypatch.setattr(run_daily, "_compose_report", lambda *args, **kwargs: (None, {}))
 
 
 def test_a7_the_journal_records_what_the_overlay_did(
@@ -2859,3 +2871,53 @@ def test_126_a_day_without_earnings_adds_no_line() -> None:
         message="motivo",
     )
     assert "resultado_mega_cap:" not in text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #37 · El informe redactado por el LLM entra en el informe y en el diario
+# ─────────────────────────────────────────────────────────────────────────────
+def test_37_the_composed_report_reaches_the_report_and_the_journal(
+    store_root: Path,
+    runs_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Con una redaccion disponible, se publica y el diario guarda el texto redactado verbatim."""
+    draft = report_agent.ReportDraft(
+        narrative="sin edge demostrado: la pista es apoyo a la decision",
+        bull_case=("el soporte aguanta",),
+        bear_case=("la subasta falla",),
+        prompt_hash="sha256:" + "a" * 64,
+        model="report-model-v1",
+    )
+    monkeypatch.setattr(
+        run_daily,
+        "_compose_report",
+        lambda *args, **kwargs: (draft, {report_agent.PROMPT_TEMPLATE_NAME: draft.prompt_hash}),
+    )
+    journal_root = tmp_path / "journal"
+
+    assert _daily_run(store_root, runs_root, journal_root) == 0
+
+    captured = capsys.readouterr()
+    assert "redaccion: sin edge demostrado" in captured.out
+    assert "contra_argumento: la subasta falla" in captured.out
+    row = _journal_row(journal_root)
+    assert "redaccion: sin edge demostrado" in cast("str", row["report_text"])
+    hashes = cast("dict[str, str]", row["prompt_hashes"])
+    assert hashes[report_agent.PROMPT_TEMPLATE_NAME] == draft.prompt_hash
+
+
+def test_37_without_a_redaction_the_report_is_still_emitted(
+    store_root: Path, runs_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Sin redaccion (el doble autouse), el informe sale igual: la capa es opcional."""
+    journal_root = tmp_path / "journal"
+
+    assert _daily_run(store_root, runs_root, journal_root) == 0
+
+    captured = capsys.readouterr()
+    assert "redaccion:" not in captured.out
+    assert "estado: recommendation" in captured.out
+    assert "no hay edge demostrado" in captured.out
