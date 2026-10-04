@@ -109,8 +109,10 @@ def test_a2_the_quantified_assumption_derives_exactly_and_is_still_assumed() -> 
     assert quantified.r_pct == SCENARIO_R_PCT
     assert quantified.pct_of_notional == EXPECTED_SLIPPAGE_PCT
     assert quantified.pct_of_notional == quantified.pct_of_r * quantified.r_pct / Decimal(100)
-    assert quantified.r_decided_on == "2026-10-04"
     assert quantified.decided_on == "2026-09-18"
+    # El marcador de la decision de #60 es el propio `r_pct`: no hay campo nuevo que se pueda
+    # publicar de mas (el informe del motor tiene que seguir siendo byte a byte el mismo).
+    assert set(quantified.model_dump()) == set(declared_slippage_assumption().model_dump())
 
 
 def test_a2_a_typed_number_is_rejected_without_the_declared_derivation() -> None:
@@ -147,8 +149,13 @@ def test_a4_the_engine_closes_the_total_with_the_decided_r() -> None:
     assert payload["slippage"]["state"] == "assumed"
     assert payload["slippage"]["is_measurement"] is False
     assert payload["slippage"]["r_pct"] == "1"
-    assert payload["slippage"]["r_decided_on"] == "2026-10-04"
     assert payload["c_total"]["pct"] == "0.2042"
+    # El informe **no** gana ninguna clave: el bloque del *slippage* ya dice que el supuesto esta
+    # cuantificado con `r_pct` y `pct_of_notional`, y anadir una clave a un bloque publicado
+    # invalidaria el artefacto ya emitido (`phase1_backtest`, #29) sin necesidad.
+    assert set(payload["slippage"]) == set(
+        costs.report_payload(slippage=declared_slippage_assumption())["slippage"]
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
