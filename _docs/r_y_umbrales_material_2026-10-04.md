@@ -102,6 +102,23 @@ fuera del terreno que el propio plan declaró alcanzable.
 > `tech_stack.md` §11 bis, y `analysis/cost_audit.py` ya dejó escrito el principio que la gobierna —
 > **una asunción no es una medición, y asumir tu propio peor caso no puede ser un aprobado**.
 
+### Un precedente que ya existe en el repositorio (y que acota la opción 3)
+
+No hay que inventarlo. El informe del pipeline (`analysis/pipeline_report.py`) ya publica un **tercer
+brazo**, `coste_declarado`, que **no es una validación** (`is_validation = false`) y existe
+precisamente para responder a «¿operaría el pipeline alguna sesión sin esperar a #60/#62?»:
+re-deriva la decisión sobre el **coste declarado** —sin el término supuesto— con la regla literal
+que el propio informe publica.
+
+Y el motivo por el que su brazo hermano (`escenario`, S1) **no opera ninguna sesión** está escrito y
+**medido**, no afirmado: con el supuesto en `assumed`, `c_total_pct` es `null`, el tier es **C por
+construcción** y bloquean las reglas 9 y 10. Es **el mismo mecanismo** que bloquea el camino diario.
+
+⇒ La opción 3 **no es una invención nueva**: es extender al camino diario un patrón que el repositorio
+ya publica y ya etiqueta como lo que es. Ese es el argumento a favor; en contra sigue estando que
+cualquier coste que no sea la medición (#62) es un supuesto, y hay que decirlo en la salida.
+
+
 ## 6. Procedencia y recomputabilidad
 
 Todos los números de este documento salen de la API pública del repositorio, no de aritmética

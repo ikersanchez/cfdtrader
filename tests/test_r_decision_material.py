@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Final
 
 from cfdtrader.analysis.cost_audit import slippage_assumption_block
+from cfdtrader.analysis.pipeline_report import ARM_COSTE_DECLARADO, ARM_NAMES
 from cfdtrader.backtest.costs import (
     DECLARED_SPREAD_HALF_PCT,
     SLIPPAGE_ASSUMPTION_PCT_OF_R,
@@ -189,3 +190,11 @@ def test_the_document_does_not_decide_r() -> None:
     assert "no la decisión" in text
     assert "quien decide es el propietario" in text
     assert "#60" in text and "#131" in text
+
+
+def test_the_precedent_arm_exists_and_the_document_cites_it() -> None:
+    """La opcion 3 se apoya en un patron que ya existe: el brazo `coste_declarado` del informe."""
+    assert ARM_COSTE_DECLARADO == "coste_declarado"
+    assert ARM_COSTE_DECLARADO in ARM_NAMES
+    assert "no es una validación" in _material_text()
+    assert ARM_COSTE_DECLARADO in _material_text()
