@@ -853,7 +853,12 @@ def test_b7_the_manifest_declares_the_headline_counts(
             published_at=moment - timedelta(days=30),
         ),
     )
-    monkeypatch.setattr(run_daily, "load_headlines", lambda *args, **kwargs: batch)
+
+    def _pinned_batch(*arguments: object, **keywords: object) -> tuple[Headline, ...]:
+        """El lote pautado, sin tocar el almacen: se prueba el **conteo**, no el lector."""
+        return batch
+
+    monkeypatch.setattr(run_daily, "load_headlines", _pinned_batch)
     monkeypatch.setenv("LLM_MAX_CALLS_PER_RUN", "0")
     journal_root = tmp_path / "journal"
 
