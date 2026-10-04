@@ -166,11 +166,12 @@ from cfdtrader.features.store import FEATURE_VERSION_PREFIX
 from cfdtrader.journal.decision_log import DecisionLogError, Journal, build_decision
 from cfdtrader.llm.base import LLMClientConfig, LLMError, build_client
 from cfdtrader.llm.budget import (
+    BatchCounts,
     BudgetCaps,
     BudgetGuard,
     MeteredLLMClient,
     OverlayClient,
-    prepare_headlines,
+    prepare_batch,
 )
 from cfdtrader.llm.cache import ResponseCache
 from cfdtrader.models.baseline import BASELINE_FEATURES
@@ -841,7 +842,7 @@ def _compute_overlay(
     data_root: Path,
     ops_root: Path,
     moment: datetime,
-) -> tuple[OverlayDecision, Mapping[str, object]]:
+) -> tuple[OverlayDecision, Mapping[str, object], dict[str, int]]:
     """El overlay del dia: titulares del almacen -> `NewsAgent` -> `OverlayDecision`.
 
     **Nunca lanza.** El overlay es opcional por diseno (`tech_stack.md` §4.9): si falta la clave,
@@ -856,10 +857,22 @@ def _compute_overlay(
     La cache vive bajo ``ops_root`` —la raiz de observabilidad, no la del diario— porque es donde
     ``tech_stack.md`` §12.6 situa ``ops.llm_cache``, y porque ``--observability-root`` tiene que
     desviarla igual que desvia el ``run_log`` (#43).
+
+    Devuelve tambien, como tercer elemento, los **conteos del lote** (#129): cuantos titulares se
+    leyeron, cuantos colapso la deduplicacion, cuantos quedaron fuera de la ventana, cuantos se
+    prepararon y cuantos llegaron de verdad al modelo. Sin ese conteo, §6.3.5 no se completa.
     """
     cache: ResponseCache | None = None
     metered: MeteredLLMClient | None = None
+    counts = BatchCounts(read=0, duplicates=0, out_of_window=0, sent=0, truncated=0)
     try:
+        # El conteo del lote se toma **antes** de construir la capa metrada, para poder declararlo
+        # aunque la capa LLM este caida (#129). El **estado** del overlay no cambia de precedencia:
+        # sigue declarandose con el mismo orden de siempre, y por eso el corte por «sin titulares»
+        # va **despues** de construir el cliente. Un proveedor ausente sigue siendo `disabled_error`
+        # y no «sin titulares en la ventana»: el journal registra que **no se pudo**, no que no
+        # hiciera falta.
+        prepared, counts = prepare_batch(load_headlines(Store(data_root), as_of=moment), now=moment)
         settings = LLMClientConfig()
         model = settings.model_for("extract")
         cache = ResponseCache(ops_root / LLM_CACHE_DIRNAME)
@@ -872,13 +885,13 @@ def _compute_overlay(
             purpose="extract",
             journal=ops_root,
         )
-        prepared = prepare_headlines(load_headlines(Store(data_root), as_of=moment), now=moment)
         if not prepared:
             return (
                 OverlayDecision(
                     state=OverlayState.APPLIED, reasons=("sin titulares en la ventana",)
                 ),
                 {},
+                _headline_counters(counts, sent=0),
             )
         extraction = NewsAgent(OverlayClient(metered), model=model).extract(prepared)
     except (LLMError, NewsAgentError, ValidationError, ConfigurationError) as failure:
@@ -892,11 +905,40 @@ def _compute_overlay(
         else:
             state = OverlayState.DISABLED_ERROR
             reasons = ()
-        return disabled_overlay(state, reasons=(*reasons, str(failure))), {}
+        return (
+            disabled_overlay(state, reasons=(*reasons, str(failure))),
+            {},
+            _headline_counters(counts, sent=0),
+        )
     finally:
         if cache is not None:
             cache.close()
-    return overlay_from_extraction(extraction), {PROMPT_TEMPLATE_NAME: extraction.prompt_hash}
+    return (
+        overlay_from_extraction(extraction),
+        {PROMPT_TEMPLATE_NAME: extraction.prompt_hash},
+        _headline_counters(counts, sent=counts.sent),
+    )
+
+
+def _headline_counters(counts: BatchCounts, *, sent: int) -> dict[str, int]:
+    """Los conteos del lote que van al *manifest* de la sesion (tarea #129).
+
+    Se publican **cinco** numeros y no cuatro porque ``prepared`` y ``sent`` **no** son lo mismo: el
+    lote puede dejar titulares listos y que la capa LLM no llegue a llamar (sin clave, con el
+    presupuesto agotado o con el proveedor caido). Confundirlos falsearia el **coste por titular**
+    de #117 en la direccion contraria a la util: se dividiria el gasto entre titulares que nunca se
+    enviaron.
+
+    ``read == duplicates + out_of_window + prepared`` cierra por construccion
+    (:class:`BatchCounts`); ``sent <= prepared``, y solo ``sent`` es «lo que costo dinero».
+    """
+    return {
+        "headlines_read": counts.read,
+        "headlines_duplicates": counts.duplicates,
+        "headlines_out_of_window": counts.out_of_window,
+        "headlines_prepared": counts.sent,
+        "headlines_sent": sent,
+    }
 
 
 def _record(
@@ -1375,7 +1417,13 @@ def _deliver(
         if calendar_events is not None:
             observer.add_hash("calendar_sha256", calendar_events.signal_sha256)
         with observer.stage("overlay"):
-            overlay, prompt_hashes = _compute_overlay(data_root, observability_root, moment)
+            overlay, prompt_hashes, headline_counters = _compute_overlay(
+                data_root, observability_root, moment
+            )
+        # El conteo del lote (#129) va al *manifest* de la sesion: es lo unico que permite publicar
+        # el coste por titular y lo que la deduplicacion evito (#117, §6.3.5).
+        for name, value in headline_counters.items():
+            observer.add_counter(name, value)
         with observer.stage("gate"):
             output = evaluate_gate(
                 session=session,

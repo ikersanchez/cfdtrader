@@ -38,6 +38,7 @@ from cfdtrader.llm.budget import (
     MONTHLY_WARNING,
     PRICES_EUR_PER_MTOKENS,
     PRICES_VERIFIED_ON,
+    BatchCounts,
     BudgetCaps,
     BudgetGuard,
     Caps,
@@ -47,6 +48,7 @@ from cfdtrader.llm.budget import (
     OverlayState,
     estimate_cost,
     fingerprint_warning,
+    prepare_batch,
     prepare_headlines,
     record_call,
 )
@@ -560,3 +562,70 @@ def test_b14_long_titles_are_truncated_and_stale_ones_dropped() -> None:
     assert len(prepared) == 1
     assert prepared[0].title == long_title[:100]
     assert len(prepared[0].title) == 100
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #129 · El conteo del lote: lo que antes se calculaba y se tiraba
+# ─────────────────────────────────────────────────────────────────────────────
+def test_b2_prepare_headlines_keeps_its_signature_and_delegates() -> None:
+    """`prepare_headlines` no cambia para quien ya la usa: mismo retorno, mismo lote."""
+    batch = (_headline("La Fed sube los tipos"), _headline("Nvidia presenta resultados"))
+    assert prepare_headlines(batch, now=NOW) == prepare_batch(batch, now=NOW)[0]
+
+
+def test_b3_the_counts_are_declared_over_a_known_batch() -> None:
+    """Un lote del que se sabe la respuesta exacta: 2 duplicados, 1 fuera, 1 truncado."""
+    batch = (
+        _headline("La Fed sube los tipos"),
+        _headline("¡La FED sube los tipos!"),
+        _headline("Nvidia presenta resultados"),
+        _headline("titular del mes pasado", minutes=-60 * 24 * 30),
+        _headline("x" * 500),
+    )
+    prepared, counts = prepare_batch(batch, now=NOW, window_hours=24, max_chars=100)
+
+    assert counts.read == 5
+    assert counts.duplicates == 1, "los dos titulares casi identicos colapsan"
+    assert counts.out_of_window == 1, "el del mes pasado queda fuera de la ventana"
+    assert counts.sent == 3
+    assert counts.truncated == 1, "el titular de 500 caracteres llega truncado"
+    assert len(prepared) == counts.sent
+
+
+def test_b4_the_identity_closes_over_the_real_batch() -> None:
+    """⭐ El conteo **no** puede tener huecos: todo lo leido acaba en una de las tres categorias."""
+    batch = (
+        _headline("a"),
+        _headline("a"),
+        _headline("b"),
+        _headline("c", minutes=600),
+        _headline("d"),
+    )
+    _, counts = prepare_batch(batch, now=NOW, window_hours=1)
+    assert counts.read == counts.duplicates + counts.out_of_window + counts.sent
+
+
+def test_b4_an_incoherent_count_cannot_be_constructed() -> None:
+    """La identidad se exige **al construir**: un conteo incompleto no llega a existir."""
+    with pytest.raises(ValueError, match="no cierra"):
+        BatchCounts(read=5, duplicates=1, out_of_window=0, sent=3, truncated=0)
+
+
+@pytest.mark.parametrize("field", ["read", "duplicates", "out_of_window", "sent", "truncated"])
+def test_b4_a_negative_or_boolean_count_is_rejected(field: str) -> None:
+    """Un `bool` es un `int` disfrazado y un negativo falsearia el informe: los dos se cortan."""
+    base = {"read": 2, "duplicates": 0, "out_of_window": 0, "sent": 2, "truncated": 0}
+    with pytest.raises(ValueError, match=f"BatchCounts.{field}"):
+        BatchCounts(**{**base, field: True if field == "truncated" else -1})
+
+
+def test_b10_the_duplicate_count_comes_from_the_dedup_of_30() -> None:
+    """El conteo **reutiliza** lo que #30 ya devolvia; no se recuenta por hash aqui."""
+    batch = (
+        _headline("La Fed sube los tipos"),
+        _headline("La Fed sube los tipos"),
+        _headline("Nvidia presenta resultados"),
+    )
+    _, duplicates = news_deduplicate(batch)
+    _, counts = prepare_batch(batch, now=NOW)
+    assert counts.duplicates == len(duplicates) == 1

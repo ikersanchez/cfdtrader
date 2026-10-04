@@ -49,6 +49,7 @@ __all__ = [
     "MONTHLY_WARNING",
     "PRICES_EUR_PER_MTOKENS",
     "PRICES_VERIFIED_ON",
+    "BatchCounts",
     "BudgetCaps",
     "BudgetDecision",
     "BudgetGuard",
@@ -59,6 +60,7 @@ __all__ = [
     "OverlayState",
     "estimate_cost",
     "fingerprint_warning",
+    "prepare_batch",
     "prepare_headlines",
     "record_call",
 ]
@@ -431,7 +433,50 @@ def record_call(journal: Journal | Path | str, call: LLMCall) -> WriteOutcome:
 # ─────────────────────────────────────────────────────────────────────────────
 # Palancas 3, 6 y 7 de §6.3
 # ─────────────────────────────────────────────────────────────────────────────
-def prepare_headlines(
+@dataclass(frozen=True, slots=True)
+class BatchCounts:
+    """Lo que el lote **vio** y lo que llego al modelo (tarea #129).
+
+    Existe porque el informe mensual de coste (`tech_stack.md` §6.3.5) pide el **coste por titular
+    procesado** y el gasto que la deduplicacion **evito**, y ninguna tabla los guardaba: el conteo
+    se calculaba en :func:`prepare_batch` y se tiraba.
+
+    Cierra **por construccion**: ``read == duplicates + out_of_window + sent``. La identidad no es
+    decorativa: es lo que permite afirmar que el conteo esta **completo**, en vez de que sea una
+    suma de partes sueltas que nadie cuadra.
+
+    ⚠️ Se **persiste** en el ``manifest`` de la ejecucion (#43), y eso acota su vida: el *manifest*
+    vive en el directorio de sesion, que la retencion de ``ops.run_log`` purga a los **90 dias**
+    (#44). Alcanza para el informe **mensual**; **no** para reconstruir un historial largo, a
+    diferencia de ``ops.llm_calls`` (18 meses). El limite es real y se declara.
+    """
+
+    read: int
+    duplicates: int
+    out_of_window: int
+    sent: int
+    truncated: int
+
+    def __post_init__(self) -> None:
+        """Valida en la **construccion**: un conteo imposible no debe poder existir.
+
+        Se rechazan los tres casos que rompen un informe: un no-entero, un negativo (y un ``bool``,
+        que es un ``int`` disfrazado) y —lo importante— un conteo que **no cierra**. La identidad se
+        exige aqui, no solo en una prueba: ninguna ruta puede publicar un conteo incompleto.
+        """
+        for name in ("read", "duplicates", "out_of_window", "sent", "truncated"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"BatchCounts.{name}: se espera un entero >= 0, no {value!r}")
+        if self.read != self.duplicates + self.out_of_window + self.sent:
+            raise ValueError(
+                "BatchCounts: el conteo no cierra: "
+                f"read={self.read} != duplicates={self.duplicates} + out_of_window="
+                f"{self.out_of_window} + sent={self.sent}"
+            )
+
+
+def prepare_batch(
     headlines: Sequence[Headline],
     *,
     now: datetime,
@@ -439,11 +484,11 @@ def prepare_headlines(
     known_titles: Sequence[str] = (),
     window_hours: int = DEFAULT_WINDOW_HOURS,
     max_chars: int = DEFAULT_TRUNCATE_CHARS,
-) -> tuple[Headline, ...]:
-    """Deja el lote listo para gastar lo minimo: deduplicar, acotar la ventana y truncar.
+) -> tuple[tuple[Headline, ...], BatchCounts]:
+    """Deja el lote listo para gastar lo minimo **y devuelve su conteo** (tarea #129).
 
-    - **Palanca 3**: la deduplicacion **reutiliza** ``data.news.deduplicate`` (la de #30, prueba
-      incluida). No se reescribe la similitud difusa aqui.
+    - **Palanca 3**: la deduplicacion **reutiliza** ``data.news.deduplicate`` (la de #30). El
+      segundo termino que #30 ya devolvia —los **duplicados**— es lo que se contaba y se tiraba.
     - **Palanca 7**: fuera el titular anterior a ``now - window_hours`` y tambien el posterior a
       ``now`` (point-in-time, la misma regla que #30).
     - **Palanca 6**: el titulo que se envia se trunca a ``max_chars``. Se trunca el **texto**, no la
@@ -453,17 +498,53 @@ def prepare_headlines(
     abajo se usa el hash del titular que **realmente se envio al modelo**, que es el unico que el
     modelo puede citar.
     """
-    fresh, _ = deduplicate(headlines, known_hashes=known_hashes, known_titles=known_titles)
+    fresh, duplicates = deduplicate(headlines, known_hashes=known_hashes, known_titles=known_titles)
     floor = now - timedelta(hours=window_hours)
     prepared: list[Headline] = []
+    out_of_window = 0
+    truncated = 0
     for headline in fresh:
         if not floor <= headline.published_at <= now:
+            out_of_window += 1
             continue
         if len(headline.title) <= max_chars:
             prepared.append(headline)
         else:
             prepared.append(headline.model_copy(update={"title": headline.title[:max_chars]}))
-    return tuple(prepared)
+            truncated += 1
+    counts = BatchCounts(
+        read=len(headlines),
+        duplicates=len(duplicates),
+        out_of_window=out_of_window,
+        sent=len(prepared),
+        truncated=truncated,
+    )
+    return tuple(prepared), counts
+
+
+def prepare_headlines(
+    headlines: Sequence[Headline],
+    *,
+    now: datetime,
+    known_hashes: frozenset[str] = frozenset(),
+    known_titles: Sequence[str] = (),
+    window_hours: int = DEFAULT_WINDOW_HOURS,
+    max_chars: int = DEFAULT_TRUNCATE_CHARS,
+) -> tuple[Headline, ...]:
+    """El lote listo para el modelo. **Delega** en :func:`prepare_batch`, que ademas cuenta (#129).
+
+    La firma y el tipo de retorno se mantienen: quien solo quiere los titulares no cambia. Quien
+    necesita el conteo —el informe de coste— llama a :func:`prepare_batch`.
+    """
+    prepared, _ = prepare_batch(
+        headlines,
+        now=now,
+        known_hashes=known_hashes,
+        known_titles=known_titles,
+        window_hours=window_hours,
+        max_chars=max_chars,
+    )
+    return prepared
 
 
 # ─────────────────────────────────────────────────────────────────────────────

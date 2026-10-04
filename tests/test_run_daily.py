@@ -27,7 +27,7 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Final, cast
@@ -809,13 +809,87 @@ def _journal_row(journal_root: Path) -> dict[str, object]:
     return Journal(journal_root).read_decision(JOURNAL_DATE)
 
 
+def test_b7_the_manifest_declares_the_headline_counts(
+    store_root: Path,
+    runs_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """#129: el `manifest` de la sesion declara cuantos titulares vio el lote y cuantos envio.
+
+    Se pauta el lote y se **agota el presupuesto** a proposito: el overlay no llega a llamar, y aun
+    asi el conteo tiene que salir entero con `headlines_sent = 0`. Que la capa LLM este caida no es
+    motivo para no saber cuantos titulares habia.
+    """
+    moment = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
+    batch = (
+        Headline(
+            source="rss",
+            feed="qa",
+            title="La Fed sube los tipos",
+            url="https://example.invalid/a",
+            published_at=moment,
+        ),
+        Headline(
+            source="rss",
+            feed="qa",
+            title="La Fed sube los tipos",
+            url="https://example.invalid/b",
+            published_at=moment,
+        ),
+        Headline(
+            source="rss",
+            feed="qa",
+            title="Nvidia presenta resultados",
+            url="https://example.invalid/c",
+            published_at=moment,
+        ),
+        Headline(
+            source="rss",
+            feed="qa",
+            title="Titular del mes pasado",
+            url="https://example.invalid/d",
+            published_at=moment - timedelta(days=30),
+        ),
+    )
+    monkeypatch.setattr(run_daily, "load_headlines", lambda *args, **kwargs: batch)
+    monkeypatch.setenv("LLM_MAX_CALLS_PER_RUN", "0")
+    journal_root = tmp_path / "journal"
+
+    assert _daily_run(store_root, runs_root, journal_root) == 0
+    capsys.readouterr()
+
+    manifest = json.loads(
+        (journal_root / "ops" / NEXT_SESSION.isoformat() / "manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    counters = manifest["counters"]
+    assert counters["headlines_read"] == 4
+    assert counters["headlines_duplicates"] == 1, "los dos titulares identicos colapsan"
+    assert counters["headlines_out_of_window"] == 1, "el del mes pasado queda fuera"
+    assert counters["headlines_prepared"] == 2
+    assert counters["headlines_sent"] == 0, "sin llamada no se envio nada, y se declara"
+    assert (
+        counters["headlines_read"]
+        == counters["headlines_duplicates"]
+        + counters["headlines_out_of_window"]
+        + counters["headlines_prepared"]
+    ), "el conteo del lote cierra en el propio manifest"
+
+
 def _stub_overlay(result: OverlayDecision, hashes: Mapping[str, object]) -> object:
-    """Un `_compute_overlay` de mentira: devuelve la decision pautada sin tocar el proveedor."""
+    """Un `_compute_overlay` de mentira: devuelve la decision pautada sin tocar el proveedor.
+
+    Devuelve tambien los conteos del lote (#129) —aqui vacios, porque el doble no lee titulares—,
+    que es el tercer elemento que el camino diario espera.
+    """
 
     def _fake(
         *arguments: object, **keywords: object
-    ) -> tuple[OverlayDecision, Mapping[str, object]]:
-        return result, hashes
+    ) -> tuple[OverlayDecision, Mapping[str, object], dict[str, int]]:
+        return result, hashes, {}
 
     return _fake
 

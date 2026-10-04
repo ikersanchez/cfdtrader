@@ -102,6 +102,13 @@ class Manifest(BaseModel):
     hashes: dict[str, str] = Field(
         default_factory=dict, description="digests con prefijo sha256: (gate_sha256, …)"
     )
+    counters: dict[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "conteos de la ejecucion (titulares leidos, duplicados, enviados; #129). A diferencia "
+            "de `versions` y `hashes`, que declaran identidad, estos declaran **cuanto paso**"
+        ),
+    )
     stages: tuple[str, ...] = Field(default=(), description="etapas registradas, en orden")
     ok: bool = Field(description="False si alguna etapa o el cierre fallaron")
 
@@ -124,6 +131,21 @@ def _require_aware(value: object, *, field_name: str) -> datetime:
         )
     if value.utcoffset() is None:
         raise ObservabilityError(f"{field_name}: se espera un `datetime` con zona (TZ-aware)")
+    return value
+
+
+def _require_count(value: object, *, field_name: str) -> int:
+    """Un conteo: entero y ``>= 0``. Un ``bool`` es un ``int`` disfrazado y se rechaza.
+
+    Un conteo negativo o booleano en el *manifest* no es un matiz de estilo: es un informe de coste
+    que cuadra mal. Se corta en la puerta de entrada (tarea #129).
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ObservabilityError(
+            f"{field_name}: se espera un entero >= 0, no {type(value).__name__}"
+        )
+    if value < 0:
+        raise ObservabilityError(f"{field_name}: se espera un entero >= 0, no {value}")
     return value
 
 
@@ -152,6 +174,7 @@ def _manifest_payload(manifest: Manifest) -> dict[str, object]:
         "git_commit": manifest.git_commit,
         "versions": dict(manifest.versions),
         "hashes": dict(manifest.hashes),
+        "counters": dict(manifest.counters),
         "stages": list(manifest.stages),
         "ok": manifest.ok,
     }
@@ -187,6 +210,7 @@ class RunObserver:
         self._records: list[StageRecord] = []
         self._versions: dict[str, str] = {}
         self._hashes: dict[str, str] = {}
+        self._counters: dict[str, int] = {}
         self._ok = True
 
     @property
@@ -214,6 +238,21 @@ class RunObserver:
         """Declara un digest (``gate_sha256``, …) para el *manifest*."""
         self._hashes[_require_text(name, field_name="hash")] = _require_text(
             value, field_name=f"hash {name!r}"
+        )
+
+    def add_counter(self, name: str, value: int) -> None:
+        """Declara un **conteo** (``headlines_sent``, …) para el *manifest* (tarea #129).
+
+        Es la tercera familia del *manifest*, y la unica que declara **cuanto paso** en vez de
+        **quien era**: ``versions`` y ``hashes`` identifican la ejecucion; esto la **cuenta**.
+
+        ⚠️ Estos conteos viven con el *manifest*, dentro del directorio de sesion, que la retencion
+        de ``ops.run_log`` purga a los **90 dias** (#44). Alcanzan para el informe **mensual** de
+        coste (#117); **no** para reconstruir un historial largo, a diferencia de la fila de
+        ``ops.llm_calls`` (18 meses). El limite es real y se declara.
+        """
+        self._counters[_require_text(name, field_name="counter")] = _require_count(
+            value, field_name=f"counter {name!r}"
         )
 
     def record(
@@ -268,6 +307,7 @@ class RunObserver:
             git_commit=self._git_commit,
             versions=dict(self._versions),
             hashes=dict(self._hashes),
+            counters=dict(self._counters),
             stages=tuple(entry.stage for entry in self._records),
             ok=self._ok,
         )

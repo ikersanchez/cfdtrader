@@ -309,3 +309,53 @@ def test_a11_fail_marks_the_run_without_recording_a_stage(tmp_path: Path) -> Non
     assert observer.records == ()
     with pytest.raises(ObservabilityError, match="error"):
         observer.fail("")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #129 · Los conteos del manifest: cuanto paso, no quien era
+# ─────────────────────────────────────────────────────────────────────────────
+def test_b5_the_manifest_publishes_the_counters(tmp_path: Path) -> None:
+    """Los conteos viajan en el `manifest` y se leen de vuelta desde el fichero."""
+    with _observer(tmp_path, FakeClock(0.0)) as observer:
+        observer.add_counter("headlines_read", 5)
+        observer.add_counter("headlines_sent", 3)
+
+    manifest = json.loads((tmp_path / RUN_ID / "manifest.json").read_text(encoding="utf-8"))
+    expected = {"headlines_read": 5, "headlines_sent": 3}
+    assert manifest["counters"] == expected
+    assert observer.manifest().counters == expected
+
+
+def test_b5_an_execution_without_counters_declares_an_empty_map(tmp_path: Path) -> None:
+    """Sin conteos el mapa va vacio, no ausente: el lector no tiene que defenderse de un `null`."""
+    with _observer(tmp_path, FakeClock(0.0)):
+        pass
+    manifest = json.loads((tmp_path / RUN_ID / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["counters"] == {}
+
+
+@pytest.mark.parametrize("value", [-1, True, "3", 2.0])
+def test_b6_add_counter_rejects_what_is_not_a_count(tmp_path: Path, value: object) -> None:
+    """Un negativo, un booleano, una cadena o un flotante no son un conteo: se cortan al entrar."""
+    observer = RunObserver(tmp_path, run_id=RUN_ID, as_of=AS_OF, git_commit=GIT_COMMIT)
+    with pytest.raises(ObservabilityError, match="counter"):
+        observer.add_counter("headlines_read", value)  # type: ignore[arg-type]
+
+
+def test_b6_add_counter_rejects_a_blank_name(tmp_path: Path) -> None:
+    """Un conteo sin nombre no se puede leer despues: es un dato perdido con apariencia de dato."""
+    observer = RunObserver(tmp_path, run_id=RUN_ID, as_of=AS_OF, git_commit=GIT_COMMIT)
+    with pytest.raises(ObservabilityError, match="counter"):
+        observer.add_counter("  ", 1)
+
+
+def test_b8_the_counters_travel_as_integers_with_sorted_keys(tmp_path: Path) -> None:
+    """JSON puro: el conteo viaja como entero (no como cadena) y las claves van ordenadas."""
+    with _observer(tmp_path, FakeClock(0.0)) as observer:
+        observer.add_counter("headlines_sent", 3)
+        observer.add_counter("headlines_read", 5)
+
+    text = (tmp_path / RUN_ID / "manifest.json").read_text(encoding="utf-8")
+    assert '"headlines_read":5' in text, "un entero, no la cadena '5'"
+    assert '"headlines_read":"5"' not in text, "una cadena falsearia cualquier agregado"
+    assert text.index('"headlines_read"') < text.index('"headlines_sent"'), "claves ordenadas"
