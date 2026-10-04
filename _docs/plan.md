@@ -2,7 +2,7 @@
 
 | Campo | Valor |
 |---|---|
-| **Versión** | **2.13** |
+| **Versión** | **2.14** |
 | **Fecha** | 2026-10-04 |
 | **Estado** | Diseño — pendiente de ejecutar Fase 0 |
 | **Instrumento** | **SPX500:CFD**, cotizando en el horario de la sesión regular estadounidense; las horas se calculan en `America/New_York` y se presentan en `Europe/Madrid` |
@@ -1209,6 +1209,53 @@ El registro debe distinguir con claridad tres situaciones **que no son lo mismo*
 - **El neto del informe del pipeline (2026-10-04, #133).** Los tres brazos publican además su lectura **neta** bajo el supuesto declarado ya cuantificado por el `R` de #60 (20 bp), **etiquetada** (`assumed`, `is_measurement: false`); `net_metrics` deja de ser `not_computable` y de culpar a #60 (cerrada): lo que falta es **medir** el *slippage* (#62), y reemitir el veredicto de Fase 2 con estas cifras es **#88**. La lectura **declarada** y las **decisiones** de los brazos no cambian (#133 no toca el motor ni el gate): el neto se **re-deriva** restando el supuesto.
 - **Valla de honestidad (se mantiene).** Decidir los umbrales **no** es una afirmación de *edge* y, por sí sola, **no** autoriza operar: desde **#131** el `EV` neto se calcula sobre un **supuesto** declarado (20 bp, #64), no sobre una medición —y el gate lo publica como **sensibilidad**, también cuando sale negativo—, y el tier A sigue sin alcanzarse en las sesiones de probabilidad baja. `§11.6` **no** se altera, el carril B sigue bloqueado (`phase2_ready = false`) y la ejecución es **manual** (§19.7).
 
+### 19.13 Reemisión del veredicto de Fase 2 sobre la base **neta** (2026-10-04)
+
+✅ **Ejecutado (2026-10-04, tarea #88 / T29b).** El veredicto de la puerta de Fase 2 se **reemite**
+sobre la base **neta** bajo el supuesto declarado (20 bp, #64, cuantificado por el `R` de #60), que
+es lo que **#133** dejó publicable y lo que #29 (`not_evaluable`, base neta `not_computable`) no
+podía evaluar. El instrumento es un módulo **nuevo**, `analysis/phase2_net.py`, hermano de
+`phase2_dominance.py` (#93): **no** toca #29, **no** toca #28, **no** mide nada — reemite.
+
+- **El resultado medido, y es el que manda.** Fila principal de §11.6: **`fail`**
+  (`edge_against`). Con `coste_declarado` (150/500 sesiones operadas) la lectura neta da
+  `hit_rate_per_trade` **0,3533** con IC 95 % [0,2800; 0,4267] — **por debajo** del `p*`
+  vinculante (50,42 %) — y un Sharpe **−2,33** con IC 95 % [−3,89; −0,83], que excluye el 0 **por
+  abajo**. Agregado de las nueve filas: **`fail`**; veredicto: **`stop`** (la acción de §11.6 para
+  la fila principal es «Parar»); **`phase2_ready = false`**. La base **declarada** era
+  *inconclusa* (`hit_rate_per_trade` 0,4933 con IC que contiene el `p*`, Sharpe 0,127 con IC que
+  contiene el 0): el supuesto declarado, al cobrarse, **convierte la duda en un fallo**, que es
+  justo lo que §3.3 anticipaba («un *slippage* de 20 bp se come cualquier edge»).
+- **Las tres filas de comparación, decididas por bootstrap pareado.** `no_trade`: **`fail`**
+  (diferencia media −0,0570 % por sesión, IC 95 % [−0,0901; −0,0229]: el sistema es **peor** que no
+  operar, significativamente). `liston_a`: **`pass`** (+0,1237 %, IC [0,0415; 0,2040]): aun sin
+  edge, en la base neta **sí** bate a *siempre largo* `open→close`. `liston_b`: **`not_evaluable`
+  declarado** — es una serie de **referencia** (cierre a cierre con financiación, sin ejecución), no
+  tiene base neta comparable y su listón de primera clase es **#70**; compararla habría inventado una
+  base. El PBO y el Sharpe deflactado (copiados de #26) también fallan aquí, y las filas de Fase 4
+  (`#45`, `#84`) siguen `not_evaluable`: con ellas sin evaluar, el agregado **no puede** ser `pass`.
+- **Dos decisiones de metrología, declaradas antes de ver el resultado y no después.**
+  **(a)** La mitad de la tasa de acierto se decide con `hit_rate_per_trade` —la denominación **por
+  operación** de #92—, porque el `p*` de §11.6 es el break-even de **una operación**; la `hit_rate`
+  por **sesión** (0,106 con IC [0,080; 0,134]) se **publica** como contexto y **no** decide.
+  **(b)** Las comparaciones se deciden por el **bootstrap pareado de la diferencia** (neto del brazo
+  base menos neto de la fila, sesión a sesión, semilla declarada continuando la derivación de #28):
+  `pass` si el IC excluye el 0 por arriba, `fail` por abajo, `not_evaluable` en otro caso. Ninguna de
+  las dos re-deriva un umbral: la tabla de §11.6 **no se toca**.
+- **Procedencia, y por qué el informe se re-deriva en vivo.** El artefacto **publicado** de #28
+  (2026-09-23) todavía dice `net_metrics: not_computable` —es anterior a #133—, así que el módulo
+  **re-deriva el pipeline** con su API pública (`analyse(..., write=False)`, el precedente de #93),
+  lo **consume en solo lectura** y publica el estado del artefacto del que parte. Refrescar los
+  artefactos publicados es **#108**. La serie neta **se lee** del artefacto (no se re-deriva con una
+  fórmula duplicada), el término del supuesto **se importa** (`ASSUMED_SLIPPAGE_PCT`) y los tres
+  intervalos se **reproducen** desde la serie publicada con las semillas declaradas: si no cuadran,
+  el módulo **falla con error tipado** en vez de publicar otra cosa con el mismo nombre.
+- **Valla de honestidad (se mantiene).** Esto **no** es una medición: los 20 bp son un **supuesto**
+  (`assumed`, `is_measurement: false`) y medirlo es **#62**. Tampoco **re-decide** nada de lo
+  registrado: `§19.6` (`reframe`) y `§19.7` (carril A / carril B) siguen como están, el carril B
+  sigue bloqueado (`phase2_ready = false`) y el `stop` es la **acción de §11.6 sobre el criterio**,
+  no un cambio de rumbo del proyecto. `§11.6` **no** se altera.
+
 ---
 
 ## 20. Marco regulatorio y fiscal (España) — resumen, no asesoramiento
@@ -1325,3 +1372,4 @@ El registro debe distinguir con claridad tres situaciones **que no son lo mismo*
 | 2026-10-04 | **2.11** | 🔢 **Cierre de la decisión abierta 5 (`tech_stack.md` §11 bis): umbrales y tamaño de `R`.** Nuevo **§19.12** fija los cuatro valores que faltaban —**`R` = 1,00 %** del nocional (amplitud del bracket: fija `p*`, el supuesto del 20 % de la puerta (b) y el *sizing*), **riesgo por operación 1 %**, **pérdida diaria −2 %** (semanal −5 %, mensual −10 %) y **`EV` neto mínimo `2 × c`**— más los tiers (`A` = 3c y `p > 0,58`, `B` = 2c, solo `A` autorizado). **§12** gana el bloque «Umbrales DECIDIDOS» y la regla 9 pasa a `> 2c`; **§3.3** declara que el supuesto del *slippage* ya tiene valor (20 bp); **§21** cierra las preguntas 6 y 8. Se registra además cómo se autoriza en la observación (**coste declarado**, con el `EV` bajo el supuesto como sensibilidad, respuesta a #131). Cabecera a 2.11 | La decisión 5 es la que **#9 no podía suplir** y la que **#131** marcó como **no diferible**: sin `R` el `EV` neto es `null` y la Fase 4 no puede observar. §11 bis exige decidir antes de implementar. Decisión del propietario del 2026-10-04, sin tocar `§11.6` ni fijar digests de artefactos regenerables |
 | 2026-10-04 | **2.12** | 🔌 **#131: el `R` decidido en #60 queda cableado en el camino diario.** El supuesto de *slippage* se **cuantifica** (`declared_slippage_assumption(r_pct=…)`: 20 % de 1,00 % = **20 bp**), el motor de costes deja de publicar `r_pct: null` (`c_total` = `c_declared` + 0,2 %) y el gate verifica la **regla 9** sobre el **coste declarado** (base `declared`, §19.12), publicando el EV bajo el supuesto como **sensibilidad** (`ev_net_is_sensitivity`), **también cuando es negativa**. Los dos `r_pct` —el del escenario y el que cuantifica el supuesto— tienen que **coincidir** o el gate lanza su error de entrada. **§3.3** y **§19.12** dejan de declarar el cableado como pendiente. Cabecera a 2.12 | Sin `R` cableado el `EV` neto era `null`, la regla 9 bloqueaba y la Fase 4 habría observado `N = 0` (#45 ⇒ `not_evaluable`). El supuesto **sigue** siendo un supuesto: medirlo es #62 |
 | 2026-10-04 | **2.13** | 📉 **#133: el informe del pipeline publica el neto bajo el supuesto declarado.** Los tres brazos ganan `net_series` y `net_metrics` —etiquetados `assumed`, `is_measurement: false`, con el valor del supuesto (20 bp) y el `R` de #60— y el bloque `net_metrics` de nivel superior deja de ser `not_computable` y de culpar a #60: los seguimientos pasan a **#62** (medirlo) y **#88** (reemitir el veredicto con las cifras). El neto se **re-deriva** (`c_total = c_declared + 20 bp`): ni el motor ni el gate ni ninguna **decisión** de brazo cambian, y la lectura declarada queda intacta. **§19.12** gana la entrada correspondiente. Cabecera a 2.13 | El `null` no era «no se puede calcular»: era un motivo obsoleto. Publicar la lectura neta **etiquetada** es lo que permite que #88 reemita el veredicto de Fase 2 sin recurrir a la lectura optimista |
+| 2026-10-04 | **2.14** | 🧾 **#88: el veredicto de Fase 2 se reemite sobre la base neta.** Nuevo **§19.13** y módulo `analysis/phase2_net.py` (T29b, hermano de #93): las **nueve** filas de §11.6 se evalúan sobre la base neta bajo el supuesto declarado (20 bp de #64/#60), con la mitad de acierto decidida por `hit_rate_per_trade` (#92) y las tres comparaciones por bootstrap pareado (`liston_b` queda `not_evaluable`: su listón de primera clase es #70). **Resultado medido:** fila principal **`fail`** (`hit_rate_per_trade` 0,3533 con IC [0,2800; 0,4267], Sharpe −2,33 con IC [−3,89; −0,83]), **peor que no operar** (diferencia −0,0570 %, IC [−0,0901; −0,0229]), mejor que *siempre largo* `open→close` (+0,1237 %); agregado **`fail`**, veredicto **`stop`**, `phase2_ready = false`. Se re-deriva el pipeline en vivo porque el artefacto publicado es anterior a #133 (refrescarlo es #108). **§11.6, §19.6 y §19.7 no se tocan** | La base declarada era *inconclusa* y la neta **falla**: publicar la lectura neta etiquetada (#133) obliga a reemitir el veredicto con ella. El supuesto **sigue** siendo un supuesto (`is_measurement: false`): medirlo es #62 |
