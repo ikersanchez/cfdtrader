@@ -2,7 +2,7 @@
 
 | Campo | Valor |
 |---|---|
-| **Versión** | **2.8** |
+| **Versión** | **2.9** |
 | **Fecha** | 2026-10-04 |
 | **Estado** | Diseño — pendiente de ejecutar Fase 0 |
 | **Instrumento** | **SPX500:CFD**, cotizando en el horario de la sesión regular estadounidense; las horas se calculan en `America/New_York` y se presentan en `Europe/Madrid` |
@@ -1166,6 +1166,16 @@ El registro debe distinguir con claridad tres situaciones **que no son lo mismo*
 - **El camino diario sigue sin el LLM en el camino crítico** (condición (d)): la recomendación se emite sin el overlay.
 - **Valla de honestidad (se mantiene).** Cerrar la Fase 3 **no** es una afirmación de *edge*: la Fase 3 avanza por el **carril A** (§19.7) y **§11.6 no se altera** —el carril B sigue bloqueado y `phase2_ready = false`—. La ejecución es **manual**.
 
+### 19.10 Política de texto no fiable del overlay de noticias (2026-10-04)
+
+✅ **Decisión del propietario (2026-10-04).** Los titulares son **texto de terceros**: pueden contener una instrucción embebida (*prompt injection*). Es la superficie que dejaba abierta la tarea **#115**, y la decisión registrada al abrirla es: **un lote con patrones de instrucción se deja pasar acotado** —**no** se descarta entero, **no** se neutraliza—.
+
+- **Delimitación.** La plantilla del `NewsAgent` envuelve el bloque de titulares entre marcadores (`UNTRUSTED_BEGIN`/`UNTRUSTED_END`) y declara ese texto como **dato, nunca instrucción**; el mensaje de sistema lo repite.
+- **Detección.** Una función **pura** marca los patrones declarados: frases (español e inglés) sobre el titular normalizado —sin mayúsculas ni acentos— y marcadores literales (vallas de código, etiquetas de rol `system:`/`assistant:`).
+- **Acotado (la política elegida).** Todo evento de un titular sospechoso sale con **magnitud por debajo de `high`** y **confianza por debajo del umbral de veto** (0,8). Efecto: un titular envenenado **no puede** provocar el **veto binario** ni sumar el **tope de +10 pp**; su contribución queda en el escalón `medium` (±5 pp). El evento se **conserva**; el lote no se descarta.
+- **Evidencia (tarea #115, commit `ee72659`).** `agents/news.py` (`detect_injection`, `SUSPICIOUS_MAGNITUDE_CAP = medium`, `SUSPICIOUS_CONFIDENCE_CAP = 0,5`), `agents/prompts/news_extract.j2` y `tests/test_news_injection.py` con un conjunto fijo de titulares adversariales.
+- **Valla de honestidad (se mantiene).** Esta defensa es un **límite de daño**, no una afirmación de seguridad total ni de *edge*: la detección depende de la lista declarada de patrones y el carril B sigue bloqueado por §11.6 (`phase2_ready = false`).
+
 ---
 
 ## 20. Marco regulatorio y fiscal (España) — resumen, no asesoramiento
@@ -1277,3 +1287,4 @@ El registro debe distinguir con claridad tres situaciones **que no son lo mismo*
 | 2026-10-01 | **2.6** | 🧭 **Reencuadre del objetivo en dos carriles.** Nuevo **§19.7**: el **carril A** (asistente de decisión, ejecución manual) puede construirse y usarse **sin superar §11.6**; el **carril B** (estrategia validada) **sigue gated** por §11.6. La regla de fases de `_docs/tasks.md` y la viñeta de bloqueo de §19.6 quedan **acotadas al carril B**, y se registra la **valla de honestidad** (toda salida del asistente avisa de que **no hay edge demostrado**). Cabecera a 2.6 | Registrar la decisión del propietario del 2026-10-01 sin reabrir §11.6 ni fijar digests de artefactos regenerables |
 | 2026-10-03 | **2.7** | 🚪 **Puerta de salida de la Fase 3 declarada, antes de ver resultados.** **§16** (Fase 3) gana la puerta de la tarea 38 con sus cuatro condiciones —acotado e inofensivo **con pruebas**; registrado en el diario; evaluación incremental **diseñada, ejecutada y reportada**; y camino diario **sin el LLM en el camino crítico**— y la advertencia de que **no es una afirmación de *edge*** (carril A). Nuevo **§19.8** con las cuatro decisiones del propietario del 2026-10-03: la puerta admite **`not_evaluable`** con su consecuencia declarada **de antemano**; OPEX, triple *witching* y roll del ES **informativos**, sin regla 21; la primera versión de la orquestación **sin `interrupt`**; y fuente del calendario externo (**`yfinance`** + calendario declarado). **§7.3** ajusta el párrafo de LangGraph a la decisión. Cabecera a 2.7 | §11.6 exige **pre-registrar** los criterios y no modificarlos tras ver los resultados —declarar la puerta al final sería mover la portería—, y §17 prohíbe dar por resuelta una decisión sin registrarla antes. Decisión del propietario del 2026-10-03 |
 | 2026-10-04 | **2.8** | ✅ **Cierre de la Fase 3: la puerta se resuelve con `not_evaluable`.** Nuevo **§19.9** transcribe el veredicto que publica la **tarea #38** (`_docs/overlay_evaluation_2026-10-04.md`): el backtest corre **siempre sin overlay** porque no hay archivo histórico de noticias (`tech_stack.md` §4.9), así que la medición pareada (Brier y Sharpe OOS con/sin overlay) **no es obtenible hacia atrás** y **no se inventa ningún número**. Se aplica la consecuencia declarada **de antemano** en §16/§19.8 —el LLM queda **solo como redactor** y la evidencia se traslada al *paper trading* de la Fase 4 (#45)—, y la puerta queda satisfecha en su condición **(c)** con veredicto explícito. **§11.6 no se toca**: el carril B sigue bloqueado y `phase2_ready = false`. Cabecera a 2.8 | Registrar el resultado de la puerta de salida de la Fase 3 en el documento que la declaró, sin fijar digests de artefactos regenerables |
+| 2026-10-04 | **2.9** | 🛡️ **Política de texto no fiable del overlay de noticias.** Nuevo **§19.10** registra la decisión del propietario del 2026-10-04 al abrir **#115**: los titulares son **texto de terceros** y el lote con patrones de instrucción **se deja pasar acotado** (no se descarta). La defensa —delimitación en la plantilla, detección pura y acotado de magnitud/confianza— es un **límite de daño**: un titular envenenado no puede disparar el veto ni el tope de ±10 pp; el carril B sigue bloqueado por §11.6. Cabecera a 2.9 | Registrar como normativa la defensa frente a *prompt injection* de #115, sin fijar digests de artefactos regenerables |

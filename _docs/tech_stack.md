@@ -2,10 +2,10 @@
 
 | Campo | Valor |
 |---|---|
-| **Versión** | **2.9** · instrumento S&P 500 |
+| **Versión** | **2.10** · instrumento S&P 500 |
 | **Fecha** | 2026-10-04 |
 | **Estado** | ✅ **Especificación cerrada.** Cambios posteriores solo mediante entrada en el registro y motivo medido |
-| **Documento padre** | `plan.md` v2.8 (fuente de verdad funcional) |
+| **Documento padre** | `plan.md` v2.9 (fuente de verdad funcional) |
 | **Ámbito** | Stack técnico del sistema descrito en `plan.md` |
 | **Instrumento** | **SPX500:CFD**, horario definido en `America/New_York` y presentado en `Europe/Madrid` |
 | **Restricciones rectoras** | Ejecución en **PC propio** · prioridad a **software libre y open source** · coste marginal objetivo **≈0 €** |
@@ -382,11 +382,14 @@ Esta separación es la palanca de coste más importante: no tiene sentido pagar 
 | **Reproducibilidad degradada** | Registrar `model` + `system_fingerprint` + `seed` + `prompt_hash`. **Nunca en el camino crítico del backtest** (§3.2) |
 | **Dependencia de un tercero** | El overlay es **opcional**: si la API cae, el pipeline produce recomendación sin él. `LLMClient` permite cambiar de proveedor sin tocar el resto |
 | **Los datos salen del PC** | Enviar **solo titulares públicos**. Nunca posiciones, capital ni salidas del modelo (§3.2) |
+| **La entrada es texto de terceros** (un titular puede traer una instrucción, *prompt injection*) | El bloque de titulares se **delimita** como **dato no fiable** en la plantilla y el evento de un titular sospechoso sale **acotado** (magnitud por debajo de `high` y confianza por debajo del umbral de veto), así que **no puede** disparar el veto ni el tope de ±10 pp (**#115**) |
 | **El proveedor retira o cambia el modelo** | Fijar identificadores **con versión concreta**, nunca alias móviles. Detectar cambio de `system_fingerprint` y alertar |
 | **Límites de tasa (*rate limits*)** | `tenacity` con backoff, llamadas agrupadas (*batching*) y reintento en ventana posterior |
 | **El proveedor cambia precios** | El contador de gasto es propio y acumulativo: te enteras el mismo día |
 
 **Regla de diseño que no cambia:** el LLM **extrae eventos, veta y redacta**. No calcula números y no decide la dirección. Todo lo dicho en `plan.md` §6.2 y §7.3 sigue vigente palabra por palabra. Cambiar de Ollama a API **mejora la calidad de esa función**, pero no le amplía los permisos.
+
+**El titular no es una instrucción.** El texto que entra en el prompt es **dato de terceros**: se delimita como tal y, si un titular parece traer una orden embebida, el evento que salga de él se **acota** para que jamás alcance el veto ni el techo de ±10 pp. Es una defensa que **limita** al LLM, no una capacidad nueva (tarea **#115**; decisión del propietario del 2026-10-04 en `plan.md` §19.10).
 
 **Especificación explícita que faltaba:** **el backtest y el walk-forward se ejecutan siempre con el overlay LLM deshabilitado.** No es una opción de configuración ni un modo: es la única forma correcta de retrotestear, porque no existe un archivo histórico de noticias con `published_at` fiable a coste razonable (§6.2 del `plan.md`). El overlay se evalúa **aparte**, y solo de dos maneras posibles:
 
@@ -988,3 +991,4 @@ Como el sistema decide **una vez al día**, los artefactos de decisión son **un
 | 2026-10-03 | **2.7** | 🚪 **Puntero al documento padre.** La Fase 3 declara su **puerta de salida** (`plan.md` §16 y §19.8): se admite **`not_evaluable`** como veredicto válido con su consecuencia declarada **de antemano**, OPEX y compañía quedan **informativos** (sin regla 21), la primera versión de la orquestación de §4.10 va **sin `interrupt`**, y el calendario externo se ingiere con **`yfinance`** más un calendario declarado. **Sin cambio de contenido en este documento**: sólo la cabecera y el puntero al padre. Cabecera a 2.7 y fila `Documento padre` a `plan.md` v2.7 | Mantener el puntero al padre coherente con `plan.md` v2.7 sin tocar la especificación ya cerrada ni añadir digests de artefactos regenerables |
 | 2026-10-03 | **2.8** | 💰 **§6.3: tabla de precios verificada e identificadores vigentes.** Se publica la tarifa **por id concreto** en EUR/Mtok —`deepseek-flash` y `deepseek-v4-pro`, con entrada (sin caché y con caché) y salida—, **verificada el 2026-10-03** contra la página del proveedor y convertida al tipo de referencia del **BCE del 2026-10-02** (`1 EUR = 1,1225 USD`); se declara la regla **peak/off-peak** (la tarifa publicada es la off-peak, que es la del pipeline a 12:00–13:00 UTC) y que la entrada con caché del proveedor es **#116**. Se corrige el identificador: **`deepseek-chat` no existe** y la asignación de la estrategia de dos modelos pasa a declararse (`LLM_MODEL_EXTRACT`/`LLM_MODEL_REPORT`). Cabecera a 2.8 | #118: las dos filas de `ops.llm_calls` traían `cost_estimate: null` y el guardián cerraba con 0,0 €, así que los topes diario y mensual de §6.3.4 **no podían dispararse nunca** y eran decorativos |
 | 2026-10-04 | **2.9** | 🚪 **Puntero al documento padre.** La Fase 3 **cierra** su puerta de salida con veredicto **`not_evaluable`** (tarea #38): el backtest corre **siempre sin overlay** por la ausencia de archivo histórico de noticias (**§4.9**), así que la medición pareada con/sin overlay no es obtenible hacia atrás; el LLM queda **solo como redactor** y la evidencia se traslada al *paper trading* de la Fase 4 (#45). **Sin cambio de contenido en este documento**: sólo la cabecera y el puntero al padre. Cabecera a 2.9 y fila `Documento padre` a `plan.md` v2.8 | Mantener el puntero al padre coherente con `plan.md` v2.8 sin tocar la especificación ya cerrada ni añadir digests de artefactos regenerables |
+| 2026-10-04 | **2.10** | 🛡️ **§4.9: el texto de terceros se trata como dato no fiable.** Se añade una contrapartida nueva —los titulares pueden traer una instrucción (*prompt injection*)— con su mitigación: el bloque de titulares se **delimita** en la plantilla como dato no fiable y el evento de un titular sospechoso sale **acotado** (magnitud por debajo de `high` y confianza por debajo del umbral de veto), así que **no puede** disparar el veto ni el tope de ±10 pp (**#115**). La **regla de diseño se mantiene**: la defensa **limita** al LLM, no le amplía los permisos. Cabecera a 2.10 y fila `Documento padre` a `plan.md` v2.9 | Registrar en la especificación la defensa frente a *prompt injection* de #115 (`plan.md` §19.10), sin fijar digests de artefactos regenerables |
