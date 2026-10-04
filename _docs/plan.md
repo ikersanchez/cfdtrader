@@ -2,7 +2,7 @@
 
 | Campo | Valor |
 |---|---|
-| **Versión** | **2.9** |
+| **Versión** | **2.10** |
 | **Fecha** | 2026-10-04 |
 | **Estado** | Diseño — pendiente de ejecutar Fase 0 |
 | **Instrumento** | **SPX500:CFD**, cotizando en el horario de la sesión regular estadounidense; las horas se calculan en `America/New_York` y se presentan en `Europe/Madrid` |
@@ -980,6 +980,18 @@ Motor con purga/embargo, modelo de costes, baselines triviales, métricas netas.
 
 Recomendaciones diarias registradas, sin operar (o con importe simbólico). Medir divergencia vs backtest.
 
+<!-- puerta-fase-4:begin -->
+> **Puerta de salida (tarea 45) — regla operacionalizada el 2026-10-04, antes de ver resultados, y no se modifica después.** `§11.6` declara la valla —«divergencia paper vs backtest < 2σ durante 3 meses»— pero no **de qué** es la σ, **sobre qué** muestra ni **con qué** regla se decide. Aquí se fijan las cinco piezas, para que no se elijan después de mirar.
+
+- **Estadístico.** La **media del retorno neto por sesión** de las recomendaciones emitidas: `status = recommendation` y `direction ∈ {long, short}`. Las sesiones **sin** recomendación (`no_recommendation_stale_data`, `no_recommendation_data_quality`, `error`) y las de `direction = nothing` **no** entran en la media: se cuentan aparte y su recuento se publica.
+- **Referencia.** La media y la **σ que declara el backtest** para su propia serie, leídas del artefacto del `run_sha256` que se use como referencia. **La σ NO se recalcula con la muestra del *paper***: recalcularla sería redefinir la puerta a posteriori.
+- **Regla.** Hay **divergencia** si `|media_paper − media_backtest| > 2 · σ_backtest / √N`, con `N` = sesiones con recomendación de la ventana. Si no, no hay divergencia. Es la regla la que decide: **nada se decide mirando el gráfico**.
+- **Muestra mínima.** Con `N < 30` sesiones el veredicto es **`not_evaluable`** (vocabulario de §19.8/§19.9), nunca un aprobado por silencio. La ventana nominal de §11.6 son **3 meses de sesiones**, no tres meses naturales.
+- **Cómo se recomputa el resultado de cada recomendación.** El resultado **no está en ninguna tabla**: `journal.trades` (§12.5) está reservado a la **operación real** (#47) y en observación **no se escribe**. Se **recomputa** desde lo persistido: la fila de `journal.decisions` de la sesión (`trade_date`, `direction`, `stop_pct`, `target_pct`, `cost_pct`) más el almacén de mercado de esa sesión (`open`, `close` y su camino intradía, para resolver si tocó stop u objetivo primero). El coste es el **modelo declarado** de §3.3 (tarea #11): **no** se define un segundo coste.
+- **Protocolo de observación.** Cada sesión se ejecuta **a mano** (§4.11): no hay *scheduler* ni notificación. Una ausencia no es un hueco silencioso: la guardia de obsolescencia (§12 regla 13, tarea #40) deja en el diario el `NOTHING` justificado con su motivo.
+- **Qué no cambia.** Esta puerta **no** es una afirmación de *edge*: `§11.6` se mantiene intacto, el carril B sigue bloqueado (`phase2_ready = false`) y la Fase 4 avanza por el **carril A** (§19.7). La ejecución sigue siendo **manual**.
+<!-- puerta-fase-4:end -->
+
 ### Fase 5 · Live con tamaño mínimo
 
 Solo señales tier A. Escalado condicionado a que la Fase 4 no haya divergido > 2σ.
@@ -1176,6 +1188,15 @@ El registro debe distinguir con claridad tres situaciones **que no son lo mismo*
 - **Evidencia (tarea #115, commit `ee72659`).** `agents/news.py` (`detect_injection`, `SUSPICIOUS_MAGNITUDE_CAP = medium`, `SUSPICIOUS_CONFIDENCE_CAP = 0,5`), `agents/prompts/news_extract.j2` y `tests/test_news_injection.py` con un conjunto fijo de titulares adversariales.
 - **Valla de honestidad (se mantiene).** Esta defensa es un **límite de daño**, no una afirmación de seguridad total ni de *edge*: la detección depende de la lista declarada de patrones y el carril B sigue bloqueado por §11.6 (`phase2_ready = false`).
 
+### 19.11 Puerta de la Fase 4 operacionalizada (2026-10-04)
+
+✅ **Decisión del propietario (2026-10-04).** La puerta de la Fase 4 tenía **umbral** y no tenía **regla**. `§11.6` dice «divergencia paper vs backtest < 2σ durante 3 meses» sin decir **de qué** es la σ, **sobre qué** muestra ni **con qué** regla se decide; y la Fase 3 se cerró trasladando la evidencia **aquí** (§19.9). Se fija la regla **antes de ver resultados** —no existe `journal/` y `runs/` solo contiene *backtests*: no se ha observado ninguna sesión—, porque §11.6 manda fijar los criterios antes y no moverlos después.
+
+- **Las cinco piezas quedan en §16**, en el bloque de la puerta de la Fase 4: **estadístico** (media del retorno neto por sesión de las recomendaciones emitidas), **referencia** (media y σ **del backtest**, nunca recalculada con la muestra del *paper*), **regla** (`|Δ| > 2σ/√N`), **muestra mínima** (`N < 30` ⇒ **`not_evaluable`**) y **recomputación** del resultado desde `journal.decisions` más el almacén, con el coste declarado de §3.3.
+- **El resultado del *paper* no se lee: se recomputa.** `journal.trades` (§12.5) es para la **operación real** (#47), así que en observación queda **vacío**, y eso es lo correcto, no un olvido. Sin declararlo, el primer lector lo tomaría por un agujero.
+- **Por qué antes de mirar.** Elegir el estadístico, la muestra o el umbral **después** de ver el *paper* es elegir la puerta a conveniencia. El precedente es la puerta de la Fase 3, declarada el 2026-10-03 **antes** de ver resultados (§16 y §19.8).
+- **Valla de honestidad (se mantiene).** Operacionalizar la puerta **no** la aprueba ni afirma *edge*: `§11.6` **no** se altera —el criterio principal sigue `not_evaluable` y `phase2_ready = false`—, el carril B sigue bloqueado y la ejecución es **manual** (§19.7).
+
 ---
 
 ## 20. Marco regulatorio y fiscal (España) — resumen, no asesoramiento
@@ -1288,3 +1309,4 @@ El registro debe distinguir con claridad tres situaciones **que no son lo mismo*
 | 2026-10-03 | **2.7** | 🚪 **Puerta de salida de la Fase 3 declarada, antes de ver resultados.** **§16** (Fase 3) gana la puerta de la tarea 38 con sus cuatro condiciones —acotado e inofensivo **con pruebas**; registrado en el diario; evaluación incremental **diseñada, ejecutada y reportada**; y camino diario **sin el LLM en el camino crítico**— y la advertencia de que **no es una afirmación de *edge*** (carril A). Nuevo **§19.8** con las cuatro decisiones del propietario del 2026-10-03: la puerta admite **`not_evaluable`** con su consecuencia declarada **de antemano**; OPEX, triple *witching* y roll del ES **informativos**, sin regla 21; la primera versión de la orquestación **sin `interrupt`**; y fuente del calendario externo (**`yfinance`** + calendario declarado). **§7.3** ajusta el párrafo de LangGraph a la decisión. Cabecera a 2.7 | §11.6 exige **pre-registrar** los criterios y no modificarlos tras ver los resultados —declarar la puerta al final sería mover la portería—, y §17 prohíbe dar por resuelta una decisión sin registrarla antes. Decisión del propietario del 2026-10-03 |
 | 2026-10-04 | **2.8** | ✅ **Cierre de la Fase 3: la puerta se resuelve con `not_evaluable`.** Nuevo **§19.9** transcribe el veredicto que publica la **tarea #38** (`_docs/overlay_evaluation_2026-10-04.md`): el backtest corre **siempre sin overlay** porque no hay archivo histórico de noticias (`tech_stack.md` §4.9), así que la medición pareada (Brier y Sharpe OOS con/sin overlay) **no es obtenible hacia atrás** y **no se inventa ningún número**. Se aplica la consecuencia declarada **de antemano** en §16/§19.8 —el LLM queda **solo como redactor** y la evidencia se traslada al *paper trading* de la Fase 4 (#45)—, y la puerta queda satisfecha en su condición **(c)** con veredicto explícito. **§11.6 no se toca**: el carril B sigue bloqueado y `phase2_ready = false`. Cabecera a 2.8 | Registrar el resultado de la puerta de salida de la Fase 3 en el documento que la declaró, sin fijar digests de artefactos regenerables |
 | 2026-10-04 | **2.9** | 🛡️ **Política de texto no fiable del overlay de noticias.** Nuevo **§19.10** registra la decisión del propietario del 2026-10-04 al abrir **#115**: los titulares son **texto de terceros** y el lote con patrones de instrucción **se deja pasar acotado** (no se descarta). La defensa —delimitación en la plantilla, detección pura y acotado de magnitud/confianza— es un **límite de daño**: un titular envenenado no puede disparar el veto ni el tope de ±10 pp; el carril B sigue bloqueado por §11.6. Cabecera a 2.9 | Registrar como normativa la defensa frente a *prompt injection* de #115, sin fijar digests de artefactos regenerables |
+| 2026-10-04 | **2.10** | 🚪 **Puerta de salida de la Fase 4 operacionalizada, antes de ver resultados (tarea 45).** `§16` gana el bloque pre-registrado de la Fase 4 con sus **cinco** piezas —**estadístico** (media del retorno neto por sesión de las recomendaciones emitidas), **referencia** (media y σ **del backtest**, nunca recalculada con la muestra del *paper*), **regla** (`\|Δ\| > 2σ/√N`), **muestra mínima** (`N < 30` ⇒ `not_evaluable`) y **recomputación** del resultado desde `journal.decisions` más el almacén con el coste declarado de §3.3— delimitado por marcadores para que una prueba lo ancle con su `sha256`. Nuevo **§19.11** registra la decisión y por qué se toma antes de observar. Cabecera a 2.10 | `§11.6` exige **pre-registrar** los criterios y no modificarlos tras ver los resultados: la Fase 4 tenía umbral y **no** regla, y la Fase 3 dejó aquí la evidencia (§19.9). Decisión del propietario del 2026-10-04, sin tocar `§11.6` ni fijar digests de artefactos regenerables |
