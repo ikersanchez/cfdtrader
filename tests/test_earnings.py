@@ -13,6 +13,7 @@ from typing import ClassVar
 import pytest
 
 from cfdtrader.data.earnings import (
+    ConfirmedEarnings,
     EarningsCertainty,
     EarningsMoment,
     MegaCapIssuer,
@@ -47,7 +48,9 @@ class _FakeSource:
 
 def _config(*, confirmed: bool = False) -> MegaCapsConfig:
     """Un registro de un solo emisor, con o sin una fecha confirmada declarada."""
-    confirmed_earnings = ({"date": date(2026, 9, 17), "moment": "amc"},) if confirmed else ()
+    confirmed_earnings: tuple[ConfirmedEarnings, ...] = (
+        (ConfirmedEarnings(date=date(2026, 9, 17), moment=EarningsMoment.AMC),) if confirmed else ()
+    )
     issuer = MegaCapIssuer(symbol="NVDA", name="NVIDIA", confirmed_earnings=confirmed_earnings)
     return MegaCapsConfig(version=1, source="fake", declared_on=date(2026, 9, 1), issuers=(issuer,))
 

@@ -467,6 +467,7 @@ def test_118_the_price_table_is_by_concrete_id_and_declares_its_date() -> None:
 def test_118_the_declared_tariff_turns_tokens_into_euros() -> None:
     """Con tarifa, el coste deja de ser ``null``: es el numero que #117 podra agregar."""
     cost = estimate_cost(model="deepseek-flash", tokens_in=814, tokens_out=1730)
+    assert cost is not None
     assert cost == pytest.approx((814 * 0.133630 + 1730 * 0.534521) / 1_000_000)
     assert cost > 0
     assert estimate_cost(model="modelo-sin-tarifa", tokens_in=814, tokens_out=1730) is None

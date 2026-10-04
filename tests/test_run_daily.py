@@ -820,6 +820,11 @@ def _stub_overlay(result: OverlayDecision, hashes: Mapping[str, object]) -> obje
     return _fake
 
 
+def _no_report(*args: object, **kwargs: object) -> tuple[None, dict[str, str]]:
+    """Doble sin red del informe redactado (#37): no-op que nunca redacta."""
+    return (None, {})
+
+
 @pytest.fixture(autouse=True)
 def _no_llm_report(monkeypatch: pytest.MonkeyPatch) -> None:
     """La redaccion del informe no abre red en las pruebas: se sustituye por un no-op (#37).
@@ -828,7 +833,7 @@ def _no_llm_report(monkeypatch: pytest.MonkeyPatch) -> None:
     esta sustitucion, cada prueba del pipeline pagaria una llamada real. Las pruebas de #37
     sobreescriben este doble con una redaccion pautada.
     """
-    monkeypatch.setattr(run_daily, "_compose_report", lambda *args, **kwargs: (None, {}))
+    monkeypatch.setattr(run_daily, "_compose_report", _no_report)
 
 
 def test_a7_the_journal_records_what_the_overlay_did(
@@ -2891,11 +2896,13 @@ def test_37_the_composed_report_reaches_the_report_and_the_journal(
         prompt_hash="sha256:" + "a" * 64,
         model="report-model-v1",
     )
-    monkeypatch.setattr(
-        run_daily,
-        "_compose_report",
-        lambda *args, **kwargs: (draft, {report_agent.PROMPT_TEMPLATE_NAME: draft.prompt_hash}),
-    )
+
+    def _compose(
+        *args: object, **kwargs: object
+    ) -> tuple[report_agent.ReportDraft, dict[str, str]]:
+        return (draft, {report_agent.PROMPT_TEMPLATE_NAME: draft.prompt_hash})
+
+    monkeypatch.setattr(run_daily, "_compose_report", _compose)
     journal_root = tmp_path / "journal"
 
     assert _daily_run(store_root, runs_root, journal_root) == 0
