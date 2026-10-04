@@ -11,8 +11,9 @@ del plan oficial. Aqui se cablean **sin duplicar** nada:
   (#24), y ``fit_baseline``/``calibrated_probabilities`` deciden con la probabilidad **calibrada**;
 - el gate de #27 se evalua **tal cual** (``evaluate_gate`` con las 19 entradas declaradas) y la
   conversion a ``Decision`` la hace ``to_engine_decision`` (el ``open`` de la subasta, #64);
-- las metricas son los **helpers exportados** de #15: ``calculate_metrics`` **lanza** con
-  ``pnl_net = null``, que es el 100 % de los casos mientras el *slippage* siga supuesto.
+- las metricas son los **helpers exportados** de #15 (intervalos bootstrap y ratios): el informe
+  re-deriva **sus** series —la de coste declarado y la **neta** bajo el supuesto (#133)— y **no**
+  llama a ``calculate_metrics``, que lanza con ``pnl_net = null``.
 
 Tres brazos declarados (A4-A6):
 
@@ -30,7 +31,10 @@ Tres brazos declarados (A4-A6):
 
 Que **no** hace, y se declara en el payload en vez de rellenarse:
 
-- ninguna metrica neta: ``net_metrics = not_computable`` con motivo y seguimientos #62 y #60;
+- ninguna metrica neta **medida**: las metricas netas de cada brazo se publican bajo el **supuesto
+  declarado** ya cuantificado por el `R` de #60 (20 bp), **etiquetadas** (`slippage_state`,
+  `is_measurement`, valor del supuesto): son un numero asumido, no medido. Medirlo es #62 y reemitir
+  el veredicto de Fase 2 con estas cifras es #88;
 - las unidades del motor las declara **#80** (fraccion del nocional): el retorno de coste
   declarado se calcula **aqui**, en %, y el AST de este modulo **no** lee el atributo del P&L
   declarado del motor, lo re-deriva;
@@ -151,9 +155,12 @@ __all__ = [
     "ARM_ESCENARIO",
     "ARM_NAMES",
     "ARM_OFICIAL",
+    "ASSUMED_SLIPPAGE_PCT",
     "BASIS_DECLARED_COST",
+    "BASIS_DECLARED_COST_WITH_ASSUMED_SLIPPAGE",
     "HASH_PREFIX",
     "METRIC_NAMES",
+    "NET_METRICS_STATE",
     "NO_INTERVAL_METRICS",
     "REPORT_HASH_FORMAT",
     "REPORT_PREFIX",
@@ -225,6 +232,23 @@ SCENARIO_TARGET_STOP_MULTIPLE: Final[Decimal] = Decimal("2")
 #: **#60** (`plan.md` §12 y §19.12). Es la **unica** fuente del valor: el camino diario lo importa
 #: de aqui para cuantificar el supuesto de *slippage* (#131) en vez de reescribir el literal.
 SCENARIO_R_PCT: Final[Decimal] = Decimal("1")
+
+#: El *slippage* **declarado** del supuesto de #64 ya cuantificado por el `R` que el propietario
+#: decidio en **#60**: `20 % de R = 20 % de 1,00 % = 0,2 %` (**20 bp**). Se **deriva** del ratio que
+#: declara el propio supuesto (constante de #8, via #11) y del `R` de S1: aqui no se teclea ninguna
+#: cifra de coste.
+ASSUMED_SLIPPAGE_PCT: Final[Decimal] = (
+    Decimal(cast("Decimal", declared_slippage_assumption().pct_of_r))
+    * SCENARIO_R_PCT
+    / Decimal(100)
+)
+
+#: La base de la **lectura neta** (#133): coste declarado **mas** el supuesto ya cuantificado.
+BASIS_DECLARED_COST_WITH_ASSUMED_SLIPPAGE: Final[str] = "declared_cost_with_assumed_slippage"
+
+#: El estado del bloque ``net_metrics`` desde #133: las metricas netas **si** se publican, bajo el
+#: supuesto declarado (nunca una medicion). ``not_computable`` queda para cuando no hay supuesto.
+NET_METRICS_STATE: Final[str] = "computed_under_declared_assumption"
 
 #: La columna de ``regime_v1`` de la que sale el movimiento esperado y su base declarada.
 GARCH_COLUMN: Final[str] = "garch_forecast"
@@ -306,9 +330,11 @@ MONEY_PRECISION: Final[int] = 50
 
 #: Motivo de ``net_metrics``: los estados del *slippage* no se fusionan (A9).
 NET_METRICS_REASON: Final[str] = (
-    "`pnl_net_pct` es `null` en todas las operaciones: el supuesto de #64 (estado `assumed`, "
-    "`is_measurement = false`) no se puede cobrar sin `R` (#60) y medir el *slippage* es #62. "
-    "Ninguna metrica neta (Sharpe, Sortino, EV, IC) se fabrica sobre la base neta"
+    "las metricas netas se publican **bajo el supuesto declarado** de #64, ya cuantificado por el "
+    "`R` que el propietario decidio en #60 (`c_total_pct = c_declared_pct + 20 bp`, con "
+    "`slippage_state = assumed` e `is_measurement = false`): son un numero **asumido**, no medido. "
+    "Lo que sigue faltando es **medir** el *slippage* (#62), y reemitir el veredicto de Fase 2 con "
+    "estas cifras es #88"
 )
 
 #: El informe declara lo que no hace, con la issue que lo cierra (A9, A10).
@@ -317,8 +343,8 @@ DOES_NOT_DO: Final[tuple[dict[str, str], ...]] = (
         "id": "net_metrics",
         "issue": "#62",
         "statement": (
-            "no publica metricas netas: sin *slippage* medido no hay `c_total_pct` y "
-            "`calculate_metrics` **lanza** (la tabla es de coste declarado)"
+            "no publica metricas netas **medidas**: las que publica llevan el supuesto declarado "
+            "(20 bp, #64/#60) **etiquetado**, termino que solo una medicion real cierra (#62)"
         ),
     },
     {
@@ -369,12 +395,15 @@ FOLLOW_UPS: Final[tuple[dict[str, str], ...]] = (
     {
         "issue": "#62",
         "topic": "medir el *slippage*",
-        "why": "mientras siga supuesto, ninguna metrica neta es publicable",
+        "why": "mientras siga supuesto, las metricas netas llevan un numero **asumido**, no medido",
     },
     {
-        "issue": "#60",
-        "topic": "R y umbrales del gate",
-        "why": "sin `R` el supuesto de *slippage* no tiene % del nocional y el tier A no se decide",
+        "issue": "#88",
+        "topic": "reemitir el veredicto de Fase 2 con las metricas netas",
+        "why": (
+            "desde #133 el neto bajo el supuesto declarado (20 bp) es computable: queda reemitir "
+            "el veredicto con esas cifras"
+        ),
     },
 )
 
@@ -1215,6 +1244,75 @@ def _traded_series_pct(run: BacktestRun) -> tuple[float, ...]:
     )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# #133 · La lectura NETA bajo el supuesto declarado (20 bp), etiquetada
+# ─────────────────────────────────────────────────────────────────────────────
+def _net_return_pct(outcome: SessionOutcome) -> float:
+    """El retorno **neto** bajo el supuesto declarado, en %: el declarado **menos** 20 bp.
+
+    El motor ya declara ``c_total_pct = c_declared_pct + ASSUMED_SLIPPAGE_PCT`` cuando el llamante
+    cuantifica el supuesto con el `R` de #60 (#131); aqui se re-deriva con la **misma** formula
+    (A10 de #28: el informe **no** lee el P&L declarado del motor), **sin** cuantificar nada en el
+    motor ni en el gate y **sin** tocar las decisiones de ningun brazo. El termino es un
+    **supuesto** declarado (#64), nunca una medicion (#62).
+    """
+    return _declared_return_pct(outcome) - float(ASSUMED_SLIPPAGE_PCT)
+
+
+def _net_series_of_run(run: BacktestRun) -> tuple[float, ...]:
+    """La serie neta: la convencion de #15 (`no_trade` diluye con 0, `skipped` fuera).
+
+    Una sesion **operada** pierde los 20 bp del supuesto; una ``no_trade`` vale ``0`` **exacto** en
+    las dos series (sin operacion no hay coste que cobrar), asi que la resta no se le aplica.
+    """
+    values: list[float] = []
+    for outcome in _sessions_of_run(run):
+        if outcome.status == STATUS_SKIPPED:
+            continue
+        values.append(0.0 if outcome.status == STATUS_NO_TRADE else _net_return_pct(outcome))
+    return tuple(values)
+
+
+def _net_traded_series_pct(run: BacktestRun) -> tuple[float, ...]:
+    """La serie neta de **solo** las sesiones operadas (denominacion por operacion, #92)."""
+    return tuple(
+        _net_return_pct(outcome)
+        for outcome in _sessions_of_run(run)
+        if outcome.status == STATUS_TRADED
+    )
+
+
+def _assumption_labels() -> dict[str, object]:
+    """La **etiqueta** del supuesto, en un solo sitio: estado, ``is_measurement``, valor e issues.
+
+    Se lee del propio supuesto declarado (``declared_slippage_assumption()``, #64 via #11): el
+    informe no reescribe el estado ni lo convierte en ``measured``. El valor que se publica es el
+    **ya cuantificado** por el `R` de #60 (**20 bp**).
+    """
+    assumption = declared_slippage_assumption()
+    return {
+        "basis": BASIS_DECLARED_COST_WITH_ASSUMED_SLIPPAGE,
+        "slippage_state": assumption.state.value,
+        "is_measurement": assumption.is_measurement,
+        "assumed_slippage_pct": _num(ASSUMED_SLIPPAGE_PCT),
+        "slippage_pct_of_r": _num(cast("Decimal", assumption.pct_of_r)),
+        "r_pct": _num(SCENARIO_R_PCT),
+        "assumption_issue": "#64",
+        "r_issue": "#60",
+        "measuring_issue": "#62",
+    }
+
+
+def _net_series_payload(series_pct: Sequence[float]) -> dict[str, object]:
+    """El bloque de la serie **neta**: la etiqueta del supuesto, la serie y su digest (A3, #133).
+
+    El cuerpo (``units``/``n``/``series_pct``) y su ``series_sha256`` son los **mismos** que los de
+    la serie declarada —misma convencion, mismo digest autoconsistente— y la etiqueta viaja al
+    lado: la primera clave es ``basis``, que es lo que impide confundirla con una medicion.
+    """
+    return {**_declared_series_payload(series_pct), **_assumption_labels()}
+
+
 def _exit_counts(run: BacktestRun) -> dict[str, int]:
     """Recuento por motivo de salida, en orden estable (los ceros medidos viajan)."""
     raw: dict[str, int] = {}
@@ -1945,15 +2043,23 @@ def _arm_payload(
     arm: ArmRun,
     *,
     metrics: Mapping[str, object],
+    net_metrics: Mapping[str, object],
     mismatches: int,
     declared_series_zero: bool,
     n_test_without_move: int,
 ) -> dict[str, object]:
-    """Un brazo, con la identidad que exige A4 y las reglas del gate medidas (A5, A6, A12)."""
+    """Un brazo, con la identidad que exige A4 y las reglas del gate medidas (A5, A6, A12).
+
+    Desde #133 publica **dos** lecturas de la misma corrida: la de coste **declarado** (la de
+    siempre) y la **neta** bajo el supuesto declarado (20 bp), etiquetada con su estado `assumed`,
+    su `is_measurement = false` y el valor del supuesto. Las decisiones del brazo **no** cambian:
+    lo que se anade es la lectura neta.
+    """
     trades = [outcome for outcome in _sessions_of_run(arm.run) if outcome.status == STATUS_TRADED]
     declared_cost_sum = math.fsum(
         float(cast("CostBreakdown", outcome.cost).c_declared_pct) for outcome in trades
     )
+    net_series = _net_series_of_run(arm.run)
     return {
         "name": arm.name,
         "n_test": arm.n_test,
@@ -1968,6 +2074,9 @@ def _arm_payload(
         "declared_return_series_all_zero": declared_series_zero,
         "declared_series": _declared_series_payload(_series_of_run(arm.run)),
         "metrics": dict(metrics),
+        "net_series": _net_series_payload(net_series),
+        "net_metrics": dict(net_metrics),
+        "net_series_all_zero": all(value == 0.0 for value in net_series),
         "gate": {
             "params_declared": sorted(arm.params.model_fields_set),
             "n_params_declared": len(arm.params.model_fields_set),
@@ -2247,6 +2356,7 @@ def _payload(
     baselines: Sequence[BaselineOutcome],
     rows: Sequence[TableRow],
     metrics_by_name: Mapping[str, Mapping[str, object]],
+    net_metrics_by_name: Mapping[str, Mapping[str, object]],
     benchmark: tuple[float, ...],
     mismatches: Mapping[str, int],
     zero_series: Mapping[str, bool],
@@ -2285,6 +2395,7 @@ def _payload(
             arm.name: _arm_payload(
                 arm,
                 metrics=metrics_by_name.get(arm.name, {}),
+                net_metrics=net_metrics_by_name.get(arm.name, {}),
                 mismatches=mismatches.get(arm.name, 0),
                 declared_series_zero=zero_series.get(arm.name, True),
                 n_test_without_move=n_test_without_move,
@@ -2309,10 +2420,12 @@ def _payload(
             rows=rows, metrics_by_name=metrics_by_name, benchmark=benchmark
         ),
         "net_metrics": {
-            "state": "not_computable",
+            "state": NET_METRICS_STATE,
             "reason": NET_METRICS_REASON,
             "where": "cfdtrader.backtest.metrics.calculate_metrics",
-            "follow_ups": ["#62", "#60"],
+            **_assumption_labels(),
+            "published_in": "arms.<arm>.net_metrics (por brazo) y arms.<arm>.net_series",
+            "follow_ups": ["#62", "#88"],
         },
         "limits": {
             "phase0_gate": "fail",
@@ -2332,7 +2445,8 @@ def _payload(
             "el motor es puro y no lee `context`: el decididor recibe la carga opaca por "
             "sesion y no ve altos, bajos ni cierres de la sesion en curso",
             "el *slippage* sigue **supuesto** (#64): ninguna cifra de este informe incluye un "
-            "termino medido de ejecucion",
+            "termino **medido** de ejecucion. La lectura neta de cada brazo (#133) **si** incluye "
+            "el supuesto declarado ya cuantificado por el `R` de #60 (20 bp) y viaja etiquetada",
             "el liston B de primera clase (posiciones overnight por el motor) es #70 y el instante "
             "de corte de la financiacion es #87",
             "las reglas de sesion 1, 3, 4, 5, 15, 17 y 18 se evaluan con los valores "
@@ -2564,10 +2678,16 @@ def _build_rows(
     rows: Sequence[TableRow],
     benchmark: tuple[float, ...],
     cache: dict[tuple[str, tuple[float, ...]], dict[str, object]],
-) -> tuple[dict[str, dict[str, object]], dict[str, bool]]:
-    """Las metricas de las nueve filas y de los tres brazos, con la cache de series compartida."""
+) -> tuple[dict[str, dict[str, object]], dict[str, bool], dict[str, dict[str, object]]]:
+    """Las metricas de las nueve filas y de los tres brazos, con la cache de series compartida.
+
+    Devuelve tres mapas: las metricas de coste **declarado** y su serie-toda-a-cero, y las metricas
+    **netas** bajo el supuesto declarado (#133). Las dos lecturas salen de la **misma** corrida: el
+    neto no re-ejecuta nada, re-deriva la serie restando el supuesto (20 bp) a lo operado.
+    """
     metrics_by_name: dict[str, dict[str, object]] = {}
     zero_series: dict[str, bool] = {}
+    net_by_name: dict[str, dict[str, object]] = {}
     for row in rows:
         metrics_by_name[row.row] = _row_metrics(
             series_pct=row.series_pct,
@@ -2587,7 +2707,15 @@ def _build_rows(
             cache=cache,
         )
         zero_series[arm.name] = all(value == 0.0 for value in series)
-    return metrics_by_name, zero_series
+        net_series = _net_series_of_run(arm.run)
+        net_by_name[arm.name] = _row_metrics(
+            series_pct=net_series,
+            traded_series_pct=_net_traded_series_pct(arm.run),
+            benchmark_pct=benchmark,
+            basis=BASIS_DECLARED_COST_WITH_ASSUMED_SLIPPAGE,
+            cache=cache,
+        )
+    return metrics_by_name, zero_series, net_by_name
 
 
 def analyse(
@@ -2683,7 +2811,7 @@ def analyse(
         baselines=baselines, sessions=test_sessions, daily=daily, carry_pct=carry_pct
     )
     cache: dict[tuple[str, tuple[float, ...]], dict[str, object]] = {}
-    metrics_by_name, zero_series = _build_rows(
+    metrics_by_name, zero_series, net_by_name = _build_rows(
         arms=arms, rows=rows, benchmark=benchmark, cache=cache
     )
     regeneration: dict[str, object] | None = None
@@ -2701,6 +2829,7 @@ def analyse(
         baselines=baselines,
         rows=rows,
         metrics_by_name=metrics_by_name,
+        net_metrics_by_name=net_by_name,
         benchmark=benchmark,
         mismatches=_mismatches(arms),
         zero_series=zero_series,

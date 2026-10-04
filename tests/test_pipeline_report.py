@@ -1118,20 +1118,32 @@ def test_a9_declared_cost_at_the_top_and_in_every_arm(real_report: PipelineRepor
 
 
 @needs_store
-def test_a9_net_metrics_are_not_computable_and_never_fabricated(
+def test_a9_net_metrics_are_published_under_the_declared_assumption(
     real_report: PipelineReport,
 ) -> None:
-    """A9: `net_metrics: not_computable` con motivo y seguimientos, y ninguna metrica neta."""
+    """A9 (#133): el neto se publica **etiquetado** como supuesto y nada se fabrica con 0."""
     net = as_map(at(real_report.payload, "net_metrics"))
-    assert net["state"] == "not_computable"
+    assert net["state"] == "computed_under_declared_assumption"
     assert as_str(net["reason"]).strip()
-    assert net["follow_ups"] == ["#62", "#60"]
+    assert net["follow_ups"] == ["#62", "#88"]
+    assert net["basis"] == "declared_cost_with_assumed_slippage"
+    assert net["slippage_state"] == "assumed"
+    assert net["is_measurement"] is False
+    assert net["assumed_slippage_pct"] == "0.2"
+    assert net["r_pct"] == "1"
     assert not _calls("calculate_metrics")
     assert as_map(at(real_report.payload, "limits"))["slippage_state"] == "assumed"
     assert as_map(at(real_report.payload, "limits"))["slippage_is_measurement"] is False
+    # La lectura **declarada** no gana ninguna clave `net_`: el neto vive en su propio bloque.
     for name in (*ARM_NAMES, "always_long"):
         metrics = metrics_of(real_report, name)
         assert not [key for key in metrics if key.startswith("net_")]
+    # Y lo que no se puede calcular sigue en `null` **con motivo**, nunca en 0 (#15, A8).
+    for name in ARM_NAMES:
+        block = as_map(at(real_report.payload, "arms", name, "net_metrics"))
+        assert set(block) == set(metrics_of(real_report, name)), "mismas once metricas"
+        assert as_map(block["profit_factor"])["lower"] is None
+        assert as_map(block["profit_factor"])["upper"] is None
     assert as_map(at(real_report.payload, "limits"))["financing_cut"] is None
 
 
