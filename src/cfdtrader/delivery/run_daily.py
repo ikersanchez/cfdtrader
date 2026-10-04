@@ -143,6 +143,7 @@ from cfdtrader.data.calendar import (
     fomc_dates_for,
     load_calendar,
     load_fomc_calendar,
+    pending_reason,
 )
 from cfdtrader.data.earnings import EarningsEvent, earnings_on
 from cfdtrader.data.macro import MacroPublication, publications_on
@@ -490,12 +491,19 @@ def _declared_fomc_dates(year: int) -> tuple[tuple[date, ...], str, bool]:
         return (), "no hay calendario de FOMC declarado: la regla 17 no puede dispararse", False
     dates = fomc_dates_for(config, year)
     if dates is None:
-        return (
-            (),
+        detail = (
             f"el año {year} no esta declarado en el calendario de FOMC ({config.source}): la regla "
-            "17 no puede dispararse",
-            False,
+            "17 no puede dispararse"
         )
+        pending = pending_reason(config, year)
+        if pending is not None:
+            detail = (
+                f"el año {year} no esta declarado en el calendario de FOMC "
+                f"({config.source}) y esta declarado como pendiente desde "
+                f"{config.pending[year].attempted_on.isoformat()}: {pending}: la regla 17 no puede "
+                "dispararse"
+            )
+        return (), detail, False
     return dates, f"{config.source} (verificado {config.verified_on.isoformat()})", True
 
 

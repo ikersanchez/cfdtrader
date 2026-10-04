@@ -809,6 +809,21 @@ def _journal_row(journal_root: Path) -> dict[str, object]:
     return Journal(journal_root).read_decision(JOURNAL_DATE)
 
 
+def test_132_the_aviso_names_the_pending_year_and_its_reason() -> None:
+    """#132: el aviso no dice solo «falta el calendario», dice **por que** falta y desde cuando."""
+    dates, note, declared = run_daily._declared_fomc_dates(2026)  # pyright: ignore[reportPrivateUsage]
+
+    assert dates == () and declared is False
+    assert "no esta declarado en el calendario de FOMC" in note, (
+        "la frase que ya existia se conserva"
+    )
+    assert "pendiente" in note, "el hueco declarado tiene que **nombrarse**"
+    assert "2026-10-04" in note, "y con la fecha del intento"
+
+    _, generic, _ = run_daily._declared_fomc_dates(2030)  # pyright: ignore[reportPrivateUsage]
+    assert "pendiente" not in generic, "un año sin intento declarado no finge que lo hubo"
+
+
 def test_b7_the_manifest_declares_the_headline_counts(
     store_root: Path,
     runs_root: Path,

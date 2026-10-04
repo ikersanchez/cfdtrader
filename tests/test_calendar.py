@@ -375,3 +375,51 @@ def test_124_a_year_declared_without_meetings_is_rejected(tmp_path: Path) -> Non
     )
     with pytest.raises(ConfigurationError, match="sin ninguna reunion"):
         load_fomc_calendar(empty)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #132 · El hueco declarado como dato: 2026 pendiente, con su motivo y su fecha
+# ─────────────────────────────────────────────────────────────────────────────
+def test_132_the_undeclared_year_is_declared_as_pending_with_its_reason() -> None:
+    """«No está declarado» y «no está declarado **por esto**» no son lo mismo (tarea #132)."""
+    from cfdtrader.data.calendar import fomc_dates_for, load_fomc_calendar, pending_reason
+
+    config = load_fomc_calendar()
+    assert config is not None
+    assert fomc_dates_for(config, 2026) is None, (
+        "2026 no se pudo recuperar: no se inventa ninguna fecha"
+    )
+    reason = pending_reason(config, 2026)
+    assert reason is not None and reason.strip(), "el hueco tiene que traer su motivo"
+    assert "seccion" in reason or "corta" in reason, "el motivo dice **qué** falló"
+    assert config.pending[2026].attempted_on == date(2026, 10, 4), "el intento queda fechado"
+    assert pending_reason(config, 2027) is None, "2027 está declarado: no hay nada pendiente"
+
+
+def test_132_a_year_declared_and_pending_at_once_is_rejected(tmp_path: Path) -> None:
+    """Las dos cosas a la vez harían mentir al aviso según cuál se leyera primero."""
+    from cfdtrader.data.calendar import load_fomc_calendar
+
+    contradictory = tmp_path / "contradictorio.yaml"
+    contradictory.write_text(
+        "version: 1\nsource: https://x\nverified_on: 2026-10-03\ntentative_note: n\n"
+        "meetings:\n  2026:\n    - 2026-01-27\n"
+        "pending:\n  2026:\n    reason: porque si\n    attempted_on: 2026-10-04\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigurationError, match="pendientes"):
+        load_fomc_calendar(contradictory)
+
+
+def test_132_a_pending_entry_without_a_reason_is_rejected(tmp_path: Path) -> None:
+    """Una entrada pendiente sin motivo es un hueco mudo: la indistincion que #114 quito."""
+    from cfdtrader.data.calendar import load_fomc_calendar
+
+    muted = tmp_path / "mudo.yaml"
+    muted.write_text(
+        "version: 1\nsource: https://x\nverified_on: 2026-10-03\ntentative_note: n\n"
+        "pending:\n  2026:\n    reason: ''\n    attempted_on: 2026-10-04\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigurationError):
+        load_fomc_calendar(muted)

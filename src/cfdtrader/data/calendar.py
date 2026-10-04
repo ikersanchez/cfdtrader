@@ -37,7 +37,7 @@ from zoneinfo import ZoneInfo
 
 import holidays
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from cfdtrader.data.settings import ConfigurationError
 
@@ -52,10 +52,12 @@ __all__ = [
     "CalendarConfig",
     "FomcCalendarConfig",
     "MarketCalendar",
+    "PendingYear",
     "SessionInfo",
     "fomc_dates_for",
     "load_calendar",
     "load_fomc_calendar",
+    "pending_reason",
 ]
 
 #: Zona de referencia interna del proyecto: **nunca** una hora local fija.
@@ -423,6 +425,20 @@ def load_calendar(
 DEFAULT_FOMC_CALENDAR_PATH = Path(__file__).resolve().parents[3] / "config" / "fomc_calendar.yaml"
 
 
+class PendingYear(BaseModel):
+    """Un año que se **intentó** recuperar y no se pudo declarar (tarea #132).
+
+    Existe para que el hueco sea **dato**, no un comentario: un lector —o el aviso del camino
+    diario— puede nombrarlo, y la fecha del intento queda registrada. Declarar aquí una fecha
+    inventada sería justo lo que el artefacto existe para impedir.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    reason: str = Field(min_length=1, description="por que el año no esta declarado")
+    attempted_on: date = Field(description="fecha del ultimo intento de recuperacion")
+
+
 class FomcCalendarConfig(BaseModel):
     """Contenido de ``config/fomc_calendar.yaml``.
 
@@ -440,6 +456,8 @@ class FomcCalendarConfig(BaseModel):
     tentative_note: str = Field(min_length=1, description="aviso de la fuente sobre las fechas")
     #: Días de reunión por año; un año declarado lleva al menos una fecha.
     meetings: dict[int, tuple[date, ...]] = {}
+    #: Años cuyo calendario **no** se ha podido declarar, con su motivo y la fecha del intento.
+    pending: dict[int, PendingYear] = {}
 
     @field_validator("meetings")
     @classmethod
@@ -456,6 +474,22 @@ class FomcCalendarConfig(BaseModel):
                 "declara el año en vez de declararlo vacio"
             )
         return value
+
+    @model_validator(mode="after")
+    def _reject_a_year_that_is_declared_and_pending_at_once(self) -> FomcCalendarConfig:
+        """Un año no puede estar a la vez declarado y pendiente: sería una contradicción silenciosa.
+
+        Si `meetings` trae sus fechas, ya no hay nada pendiente; y si está pendiente, no hay fechas.
+        Dejar las dos cosas convivir haría que el aviso del camino diario mintiera en una dirección
+        u otra según cuál se leyera primero.
+        """
+        both = sorted(set(self.meetings) & set(self.pending))
+        if both:
+            raise ValueError(
+                f"los años {both} estan declarados en `meetings` y ademas como pendientes: son "
+                "excluyentes"
+            )
+        return self
 
 
 def load_fomc_calendar(path: Path | str | None = None) -> FomcCalendarConfig | None:
@@ -488,3 +522,14 @@ def fomc_dates_for(config: FomcCalendarConfig, year: int) -> tuple[date, ...] | 
     hacia indistinguible «hoy no hay FOMC» de «la regla 17 no puede dispararse» (#114).
     """
     return config.meetings.get(year)
+
+
+def pending_reason(config: FomcCalendarConfig, year: int) -> str | None:
+    """Por que ese año **no** se ha podido declarar, o ``None`` si no esta declarado como pendiente.
+
+    Es la respuesta a «el año no esta declarado, ¿y por que?» (tarea #132): sin esto, el aviso del
+    camino diario dice que falta el calendario y deja al lector sin saber si nadie lo ha intentado
+    o si se intento y la fuente no lo dio.
+    """
+    pending = config.pending.get(year)
+    return None if pending is None else pending.reason
