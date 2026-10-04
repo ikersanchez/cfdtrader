@@ -29,6 +29,7 @@ from cfdtrader.journal.decision_log import (
     DECISION_STATUSES,
     DIGEST_KEY,
     DIRECTIONS,
+    IDENTITY_COLUMNS,
     JOURNAL_TABLES,
     LLM_OVERLAYS,
     OPS_TABLES,
@@ -48,6 +49,7 @@ from cfdtrader.journal.decision_log import (
     build_decision,
     counts_by_status,
     identity_column,
+    identity_columns,
     main,
     read_decision,
     read_decisions,
@@ -287,7 +289,7 @@ def test_identity_column_is_the_first_column_of_each_table(table: str) -> None:
 def test_round_trip_for_the_eight_tables(tmp_path: Path, table: str) -> None:
     journal = Journal(tmp_path)
     payload = _sample_payloads()[table]
-    identity = payload[identity_column(table)]
+    identity = {name: payload[name] for name in identity_columns(table)}
     assert journal.write(table, payload) is WriteOutcome.CREATED
     assert journal.read(table, identity) == payload
     assert read_record(journal, table, identity) == payload
@@ -353,6 +355,85 @@ def test_identity_must_be_a_safe_non_empty_text(tmp_path: Path) -> None:
     for unsafe in (".", "..", "../x", "a/b", "a\\b"):
         with pytest.raises(MissingIdentityError, match="nombre de fichero seguro"):
             journal.write("attribution", {"trade_date": unsafe, "agent": "technical"})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #123 · La identidad de `agent_signals` y `attribution` es `(trade_date, agent)`
+# ─────────────────────────────────────────────────────────────────────────────
+def test_123_the_identity_is_declared_per_table() -> None:
+    """La identidad se declara tabla a tabla; no se deduce de la posicion de la primera."""
+    assert IDENTITY_COLUMNS["agent_signals"] == ("trade_date", "agent")
+    assert IDENTITY_COLUMNS["attribution"] == ("trade_date", "agent")
+    for table in TABLES:
+        assert identity_columns(table) == IDENTITY_COLUMNS[table]
+        assert identity_columns(table)[0] == TABLE_COLUMNS[table][0]
+
+
+def test_123_the_path_contains_the_date_and_the_agent(tmp_path: Path) -> None:
+    """El nombre del fichero lleva la fecha **y** el agente, sin separadores de ruta."""
+    path = Journal(tmp_path).path(
+        "agent_signals", {"trade_date": "2026-10-03", "agent": "event_calendar"}
+    )
+    assert path.name == "2026-10-03__event_calendar.json"
+    assert path == tmp_path / "agent_signals" / "2026-10-03__event_calendar.json"
+
+
+def test_123_two_signals_the_same_day_do_not_collide(tmp_path: Path) -> None:
+    """La granularidad que declara la columna `agent` (una fila por agente y dia) cabe."""
+    journal = Journal(tmp_path)
+    base = _sample_payloads()["agent_signals"]
+
+    assert journal.write("agent_signals", {**base, "agent": "news"}) is WriteOutcome.CREATED
+    assert journal.write("agent_signals", base) is WriteOutcome.CREATED
+
+    names = sorted(path.name for path in (tmp_path / "agent_signals").iterdir())
+    assert names == ["2026-10-02__news.json", "2026-10-02__technical.json"]
+    assert (
+        journal.read("agent_signals", {"trade_date": "2026-10-02", "agent": "news"})["agent"]
+        == "news"
+    )
+
+
+def test_123_the_same_identity_stays_immutable(tmp_path: Path) -> None:
+    """Reescribir el mismo `(trade_date, agent)` con otro contenido sigue siendo error."""
+    journal = Journal(tmp_path)
+    base = _sample_payloads()["agent_signals"]
+    assert journal.write("agent_signals", base) is WriteOutcome.CREATED
+    identity = {"trade_date": base["trade_date"], "agent": base["agent"]}
+    before = journal.path("agent_signals", identity).read_bytes()
+
+    assert journal.write("agent_signals", base) is WriteOutcome.UNCHANGED
+
+    with pytest.raises(JournalRewriteError, match="otro"):
+        journal.write("agent_signals", {**base, "confidence": 0.99})
+    assert journal.path("agent_signals", identity).read_bytes() == before
+
+
+def test_123_a_missing_or_malformed_identity_is_typed(tmp_path: Path) -> None:
+    """Una identidad compuesta incompleta o insegura falla con error tipado."""
+    journal = Journal(tmp_path)
+    base = _sample_payloads()["attribution"]
+
+    # Fecha sin agente: el payload no completa la identidad.
+    incomplete = {key: value for key, value in base.items() if key != "agent"}
+    with pytest.raises(MissingIdentityError):
+        journal.write("attribution", incomplete)
+    # Agente vacio.
+    with pytest.raises(MissingIdentityError):
+        journal.write("attribution", {**base, "agent": ""})
+    # Separador de ruta en una de las columnas.
+    for unsafe in ("../x", "a/b", "a\\b"):
+        with pytest.raises(MissingIdentityError, match="nombre de fichero seguro"):
+            journal.write("attribution", {**base, "trade_date": unsafe})
+    # Un valor suelto no completa una identidad compuesta.
+    with pytest.raises(MissingIdentityError, match="fecha"):
+        journal.read("agent_signals", "2026-10-02")
+    # Un `Mapping` que no trae todas las columnas tampoco vale.
+    with pytest.raises(MissingIdentityError, match="faltan"):
+        journal.path("agent_signals", {"trade_date": "2026-10-02"})
+    # Identidad inexistente.
+    with pytest.raises(RecordNotFoundError):
+        journal.read("agent_signals", {"trade_date": "2026-01-01", "agent": "news"})
 
 
 def test_non_json_value_is_rejected(tmp_path: Path) -> None:

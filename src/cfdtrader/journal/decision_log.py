@@ -60,6 +60,7 @@ __all__ = [
     "DECISION_STATUSES",
     "DIGEST_KEY",
     "DIRECTIONS",
+    "IDENTITY_COLUMNS",
     "JOURNAL_TABLES",
     "LLM_OVERLAYS",
     "OPS_TABLES",
@@ -79,6 +80,7 @@ __all__ = [
     "build_decision",
     "counts_by_status",
     "identity_column",
+    "identity_columns",
     "main",
     "read_decision",
     "read_decisions",
@@ -134,7 +136,8 @@ OPS_TABLES: Final[tuple[str, ...]] = ("run_log", "llm_calls", "backtest_runs")
 #: Las 8 tablas declaradas por la tarea #39.
 TABLES: Final[tuple[str, ...]] = (*JOURNAL_TABLES, *OPS_TABLES)
 
-#: Columnas exactas de cada tabla (esquema **cerrado**). La primer columna es la identidad.
+#: Columnas exactas de cada tabla (esquema **cerrado**). La identidad se declara en
+#: ``IDENTITY_COLUMNS``, no por la posición de la primera columna.
 TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
     "decisions": (
         "trade_date",
@@ -207,6 +210,21 @@ TABLE_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
         "ok",
     ),
     "backtest_runs": ("run_sha256", "config", "metrics"),
+}
+
+#: Separador que compone el nombre del fichero a partir de varias columnas de identidad.
+IDENTITY_SEPARATOR: Final[str] = "__"
+
+#: Identidad **declarada por tabla**: las columnas que componen el nombre del fichero (#123).
+#:
+#: Por convencion, la primera columna del esquema. Pero ``agent_signals`` y ``attribution``
+#: declaran una fila **por agente y dia** (su columna ``agent`` existe para eso, §7.1): si la
+#: identidad fuera solo ``trade_date``, la segunda senal del dia no cabria y la columna ``agent``
+#: seria una columna muerta. Se declara aqui, tabla a tabla, sin deducirla de la posicion.
+IDENTITY_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
+    **{table: (TABLE_COLUMNS[table][0],) for table in TABLES},
+    "agent_signals": ("trade_date", "agent"),
+    "attribution": ("trade_date", "agent"),
 }
 
 
@@ -290,9 +308,41 @@ def _require_table(table: str) -> str:
     return table
 
 
+def identity_columns(table: str) -> tuple[str, ...]:
+    """Las columnas de identidad **declaradas** de la tabla (#123), una o varias y en orden."""
+    return IDENTITY_COLUMNS[_require_table(table)]
+
+
 def identity_column(table: str) -> str:
-    """La columna de identidad de la tabla: por convencion, la primera del esquema."""
-    return TABLE_COLUMNS[_require_table(table)][0]
+    """La **primera** columna de identidad declarada (``trade_date`` en ``agent_signals``)."""
+    return identity_columns(table)[0]
+
+
+def _identity_stem(table: str, identity: object) -> str:
+    """El nombre (sin ``.json``) que identifica la fila: sus columnas de identidad, unidas.
+
+    Acepta un ``Mapping`` con las columnas declaradas (todas), o un valor suelto para las tablas
+    de una sola columna. Una tabla compuesta **exige** el ``Mapping``: un valor suelto no llevar
+    los dos campos (fecha **y** agente) es, exactamente, el defecto que arregla #123.
+    """
+    columns = identity_columns(table)
+    if isinstance(identity, Mapping):
+        mapping = cast("Mapping[object, object]", identity)
+        provided = {str(key): value for key, value in mapping.items()}
+        missing = [name for name in columns if name not in provided]
+        if missing:
+            raise MissingIdentityError(
+                f"{table}: la identidad es {list(columns)}, y faltan {missing!r}"
+            )
+        parts = [_identity_text(provided[name], name) for name in columns]
+    elif len(columns) == 1:
+        parts = [_identity_text(identity, columns[0])]
+    else:
+        raise MissingIdentityError(
+            f"{table}: la identidad es {list(columns)}; un valor suelto no la completa, hace "
+            "falta la fecha **y** el agente"
+        )
+    return IDENTITY_SEPARATOR.join(parts)
 
 
 def _identity_text(value: object, column: str) -> str:
@@ -398,9 +448,9 @@ class Journal:
         """El directorio de la tabla (sin crearlo: escribir lo crea, leer solo lo consulta)."""
         return self.root / _require_table(table)
 
-    def path(self, table: str, identity: str) -> Path:
-        """La ruta del documento de esa identidad."""
-        return self.directory(table) / f"{_identity_text(identity, identity_column(table))}.json"
+    def path(self, table: str, identity: object) -> Path:
+        """La ruta del documento de esa identidad (una o varias columnas, #123)."""
+        return self.directory(table) / f"{_identity_stem(table, identity)}.json"
 
     def write(self, table: str, payload: Mapping[str, object]) -> WriteOutcome:
         """Escribe (o confirma sin cambios) una fila; ver ``write_record``."""
@@ -446,14 +496,15 @@ def write_record(journal: Journal, table: str, payload: Mapping[str, object]) ->
             f"{table}: claves que no son columnas ({unknown}); el esquema es cerrado y se esperaba "
             f"un subconjunto de {list(columns)}"
         )
-    identity_name = columns[0]
-    if identity_name not in payload:
+    identity_names = identity_columns(table)
+    missing = [name for name in identity_names if name not in payload]
+    if missing:
         raise MissingIdentityError(
-            f"{table}: falta la columna de identidad {identity_name!r}; sin identidad no hay fila"
+            f"{table}: faltan columnas de identidad {missing!r}; sin identidad no hay fila"
         )
     record = _plain_record(payload)
     _validate_record(table, record)
-    identity = _identity_text(record[identity_name], identity_name)
+    identity = {name: record[name] for name in identity_names}
     digest = _document_digest(record)
     document: dict[str, object] = {**record, DIGEST_KEY: digest}
     return _write_immutable(journal.path(table, identity), _render_document(document))
@@ -479,7 +530,7 @@ def _payload_from_document(document: object, path: Path) -> dict[str, object]:
 def read_record(journal: Journal, table: str, identity: object) -> dict[str, object]:
     """Lee una fila (payload **sin** el digest) y verifica su autoconsistencia."""
     _require_table(table)
-    path = journal.path(table, _identity_text(identity, identity_column(table)))
+    path = journal.path(table, identity)
     if not path.exists():
         raise RecordNotFoundError(f"{table}: no existe la identidad {path.stem!r} ({path})")
     text = path.read_text(encoding="utf-8")
