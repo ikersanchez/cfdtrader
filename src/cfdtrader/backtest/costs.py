@@ -14,11 +14,15 @@ Un ``CostModel`` construido sin validar (``model_construct``) se rechaza con
 **El *slippage* es el término dominante y un parámetro obligatorio de primera clase.**
 Tiene tres estados mutuamente distinguibles y **nunca fusionados** (``measured``,
 ``assumed``, ``unmeasured``); «no medido» vale ``null`` con motivo, jamás ``0``. El
-supuesto pesimista del propietario (2026-09-18, #64) viaja como ``assumed`` y **no**
-cierra el total: sin ``R`` decidido (decisión abierta 5 → **#60**) no hay un ``%`` del
-nocional que cobrar. El equivalente ilustrativo en bp solo se publica si el llamante lo
-pide **explícitamente**, etiquetado ``illustrative``/``decision: false``, y nunca
-alimenta ``c_total``.
+supuesto pesimista del propietario (2026-09-18, #64) viaja como ``assumed``. El tamaño de
+``R`` lo **decidió el propietario el 2026-10-04** (**#60**: 1,00 % del nocional), así que el
+llamante puede **cuantificar** el supuesto —``declared_slippage_assumption(r_pct=...)``, 20 %
+de ``R`` = 20 bp— y entonces sí cierra ``c_total``; **sin ``r_pct`` el supuesto viaja con
+``r_pct: null`` y el total sigue abierto**. El motor **no decide ``R``**: lo recibe como
+argumento. En los dos casos el estado es ``assumed`` con ``is_measurement: false``:
+cuantificar un supuesto **no** es medirlo (**#62**). El equivalente ilustrativo en bp solo se
+publica si el llamante lo pide **explícitamente**, etiquetado ``illustrative``/``decision:
+false``, y nunca alimenta ``c_total``.
 
 **Intradía puro por defecto.** ``nights = 0`` es el valor por defecto (``plan.md`` §12,
 regla 6: sin *overnight*) y con ``0`` noches no se cobra tenencia. Con ``nights >= 1`` el
@@ -96,6 +100,7 @@ __all__ = [
     "DECLARED_SPREAD_HALF_SOURCE",
     "FOLLOW_UPS",
     "LIMITATIONS",
+    "R_DECIDED_ON",
     "CostBreakdown",
     "CostError",
     "CostInputError",
@@ -130,6 +135,12 @@ RATIO_QUANTUM: Final[Decimal] = Decimal("0.0001")
 #: Procedencia de la tabla declarada. Las **cifras** son de #8; aquí solo se citan.
 SOURCE_DECLARED_TABLE: Final[str] = "plan.md §3.3 (documento del bróker) · reproducida por #8"
 SOURCE_USER: Final[str] = "declaración del usuario (2026-09-18)"
+
+#: Fecha en la que el propietario **decidió** el tamaño de ``R`` (§12 y §19.12, tarea **#60**).
+#: El motor **no** decide ``R`` —lo recibe como argumento—; esta fecha es la que declara de dónde
+#: sale el número cuando el llamante cuantifica el supuesto y permite exigir que la marca venga
+#: acompañada del valor: una fecha sin ``r_pct`` no cuantifica nada.
+R_DECIDED_ON: Final[str] = "2026-10-04"
 
 #: Las **dos mitades** del diferencial declarado (A9): cada mitad con su procedencia.
 DECLARED_SPREAD_HALF_PCT: Final[Decimal] = SPREAD_PCT / Decimal(2)
@@ -183,8 +194,8 @@ COST_MODEL_DOES_NOT_DO: Final[tuple[dict[str, str], ...]] = (
         "id": "no_decide_r",
         "issue": "#60",
         "statement": (
-            "no decide `R`: lo consume y publica `null` mientras el tamaño de `R` no esté "
-            "decidido (decisión abierta 5)"
+            "no decide `R`: lo **consume** como argumento explícito y, sin él, el supuesto viaja "
+            "con `r_pct: null` y el total no se cierra (`R` quedó decidido en #60)"
         ),
     },
     {
@@ -224,9 +235,10 @@ LIMITATIONS: Final[tuple[str, ...]] = (
     "cae antes del cierre, el intradía puro paga tenencia igualmente. El motor no lo deduce "
     "de ningún *timestamp* y #12/#13 tampoco pueden inferirlo.",
     "**El *slippage* es un supuesto pesimista declarado** (20 % de `R`, "
-    "`is_measurement: false`), **no** una medición: medirlo es #62 y el tamaño de `R` sigue "
-    "pendiente (#60). El supuesto no cierra el total y ningún camino lo convierte en "
-    "`measured`.",
+    "`is_measurement: false`), **no** una medición: medirlo es #62. El tamaño de `R` lo decidió "
+    "**#60** (1,00 %) el 2026-10-04 y el llamante puede **cuantificar** el supuesto con "
+    "`declared_slippage_assumption(r_pct=...)` para cerrar el total; sin ese argumento el total "
+    "sigue abierto. Ningún camino convierte el supuesto en `measured`.",
     "**El diferencial se cobra constante**: el ensanchamiento por tramo de sesión y por "
     "tamaño que #8 mide **no** se cobra aquí, con el sesgo que eso introduce (#66).",
     "**El precio de ejecución real (bid/ask del `SPX500:CFD`) y la fuente intradía son "
@@ -261,7 +273,10 @@ FOLLOW_UPS: Final[tuple[dict[str, str], ...]] = (
     {
         "issue": "#60",
         "topic": "umbrales y tamaño de `R`",
-        "why": "sin `R` decidido el supuesto de *slippage* no se puede cobrar",
+        "why": (
+            "decidido el 2026-10-04 (`R` = 1,00 % del nocional): el llamante puede cuantificar el "
+            "supuesto; cablearlo en el camino diario es #131"
+        ),
     },
     {
         "issue": "#62",
@@ -324,7 +339,18 @@ class SlippageParameter(BaseModel):
         default=None, description="ratio sobre R declarada (solo con state = assumed)"
     )
     r_pct: Decimal | None = Field(
-        default=None, description="tamaño de R en %: null mientras #60 no lo decida"
+        default=None,
+        description=(
+            "tamaño de R en %: null mientras #60 no lo decida; con la decisión de #60 lo pone el "
+            "llamante y el supuesto queda cuantificado"
+        ),
+    )
+    r_decided_on: str | None = Field(
+        default=None,
+        description=(
+            "fecha en la que se decidió el tamaño de R (#60): la marca que autoriza a cuantificar "
+            "el supuesto; sin ella, R viaja como null"
+        ),
     )
     source: str | None = Field(default=None, description="procedencia declarada")
     reason: str = Field(description="motivo: obligatorio en los tres estados")
@@ -366,16 +392,33 @@ class SlippageParameter(BaseModel):
                     "slippage.pct_of_r: un supuesto se declara como ratio sobre `R`; sin ella no "
                     "hay nada declarado"
                 )
-            if self.pct_of_notional is not None:
-                raise CostModelError(
-                    "slippage.pct_of_notional: un supuesto **no** es un % del nocional; si `R` "
-                    "está decidido, declara el término como medido (state = 'measured')"
-                )
-            if self.r_pct is not None:
-                raise CostModelError(
-                    "slippage.r_pct: el tamaño de `R` no se decide aquí (decisión abierta 5, #60): "
-                    "el supuesto se declara como ratio sobre `R` y `R` viaja como null"
-                )
+            if self.r_decided_on is None:
+                if self.pct_of_notional is not None:
+                    raise CostModelError(
+                        "slippage.pct_of_notional: un supuesto **no** es un % del nocional; con "
+                        "`R` decidido (#60) se declara `r_decided_on` y el número **derivado**, y "
+                        "sigue siendo `assumed` (nunca `measured`)"
+                    )
+                if self.r_pct is not None:
+                    raise CostModelError(
+                        "slippage.r_pct: el tamaño de `R` no se decide en este motor; sin "
+                        "`r_decided_on` (#60) el supuesto se declara como ratio sobre `R` y `R` "
+                        "viaja como null"
+                    )
+            else:
+                # `R` esta decidido (#60): el supuesto se **cuantifica** y sigue siendo supuesto.
+                if self.r_pct is None:
+                    raise CostModelError(
+                        "slippage.r_pct: `r_decided_on` declara que `R` esta decidido (#60) y sin "
+                        "el valor no cuantifica nada: pasa tambien `r_pct`"
+                    )
+                expected = self.pct_of_r * self.r_pct / Decimal(100)
+                if self.pct_of_notional != expected:
+                    raise CostModelError(
+                        "slippage.pct_of_notional: un supuesto cuantificado por el `R` decidido no "
+                        "se teclea: tiene que ser exactamente `pct_of_r x r_pct / 100` = "
+                        f"{_num(expected)} (llego {_num(self.pct_of_notional)})"
+                    )
             if not (self.source and self.decided_on):
                 raise CostModelError(
                     "slippage.source/slippage.decided_on: un supuesto exige procedencia y fecha de "
@@ -392,6 +435,11 @@ class SlippageParameter(BaseModel):
             raise CostModelError(
                 "slippage.pct_of_r/slippage.is_measurement: con state = 'unmeasured' no hay ni "
                 "supuesto ni medición: los dos van a null"
+            )
+        if self.r_pct is not None or self.r_decided_on is not None:
+            raise CostModelError(
+                "slippage.r_pct/slippage.r_decided_on: con state = 'unmeasured' no hay supuesto "
+                "que cuantificar: el tamaño de `R` no tiene nada que multiplicar y va a null"
             )
 
     @classmethod
@@ -431,6 +479,41 @@ class SlippageParameter(BaseModel):
                 "state": MeasureState.ASSUMED,
                 "is_measurement": False,
                 "pct_of_r": pct_of_r,
+                "source": source,
+                "reason": reason,
+                "decided_on": decided_on,
+                "follow_up_issue": follow_up_issue,
+            }
+        )
+
+    @classmethod
+    def assumed_quantified_by_r(
+        cls,
+        *,
+        pct_of_r: Decimal,
+        r_pct: Decimal,
+        source: str,
+        reason: str,
+        decided_on: str,
+        r_decided_on: str,
+        follow_up_issue: str | None = None,
+    ) -> Self:
+        """El supuesto **cuantificado** por el ``R`` ya decidido (#60), y todavía un supuesto.
+
+        ``state = "assumed"`` e ``is_measurement = False`` **no** cambian: lo único que cambia es
+        que el ratio sobre ``R`` se puede convertir a ``%`` del nocional porque ``R`` tiene valor.
+        El número **no se teclea**: se deriva (``pct_of_r x r_pct / 100``) y el validador exige la
+        derivación **exacta**, de modo que un supuesto cuantificado no se puede escribir a mano
+        incoherente. Medir el *slippage* de verdad sigue siendo **#62**.
+        """
+        return cls.model_validate(
+            {
+                "state": MeasureState.ASSUMED,
+                "is_measurement": False,
+                "pct_of_r": pct_of_r,
+                "r_pct": r_pct,
+                "r_decided_on": r_decided_on,
+                "pct_of_notional": pct_of_r * r_pct / Decimal(100),
                 "source": source,
                 "reason": reason,
                 "decided_on": decided_on,
@@ -726,23 +809,52 @@ def declared_cost_model() -> CostModel:
     )
 
 
-def declared_slippage_assumption() -> SlippageParameter:
+def declared_slippage_assumption(
+    r_pct: Decimal | None = None, *, r_decided_on: str | None = None
+) -> SlippageParameter:
     """El supuesto pesimista **declarado** por el propietario el 2026-09-18 (#64).
 
-    ``state = "assumed"``, ``is_measurement = False``, valor **100 % del margen de la
-    puerta (b) = 20 % de ``R``**, ``pct_of_notional = None`` y ``r_pct = None``: el tamaño
-    de ``R`` sigue pendiente (#60) y ningún camino convierte el supuesto en ``measured``.
+    ``state = "assumed"``, ``is_measurement = False`` y valor **100 % del margen de la
+    puerta (b) = 20 % de ``R``**.
+
+    **Sin argumentos** —el valor por defecto, el que consumen los informes ya publicados— el
+    supuesto viaja con ``pct_of_notional = None`` y ``r_pct = None``: el motor **no decide `R`**
+    y, sin que el llamante se lo diga, no hay un ``%`` del nocional que cobrar.
+
+    **Con ``r_pct``** —el ``R`` que el propietario **ya decidió** en #60 (1,00 % el 2026-10-04),
+    que llega como argumento precisamente porque este módulo no lo decide— el supuesto se
+    **cuantifica**: ``pct_of_notional`` pasa a ser ``20 %`` de ``r_pct`` (con ``R = 1,00 %``,
+    **20 bp**) y el motor cierra ``c_total``. El estado **no** cambia: sigue siendo ``assumed``
+    con ``is_measurement = False``, y el número sale de una **derivación declarada**, no de una
+    medición (**#62**).
     """
-    return SlippageParameter.assumed(
+    if r_pct is None:
+        return SlippageParameter.assumed(
+            pct_of_r=SLIPPAGE_ASSUMPTION_PCT_OF_R,
+            source=SLIPPAGE_ASSUMPTION_PROVENANCE,
+            reason=(
+                "el propietario decidió no medir el *slippage* todavía y seguir adelante con un "
+                "**supuesto pesimista declarado** en vez de un valor de relleno: medirlo exige "
+                "10-15 ejecuciones reales en la apertura (#62). Es una asunción, **no** una "
+                "medición"
+            ),
+            decided_on=SLIPPAGE_ASSUMPTION_DECIDED_ON,
+            follow_up_issue=SLIPPAGE_ASSUMPTION_R_ISSUE,
+        )
+    return SlippageParameter.assumed_quantified_by_r(
         pct_of_r=SLIPPAGE_ASSUMPTION_PCT_OF_R,
+        r_pct=r_pct,
         source=SLIPPAGE_ASSUMPTION_PROVENANCE,
         reason=(
             "el propietario decidió no medir el *slippage* todavía y seguir adelante con un "
             "**supuesto pesimista declarado** en vez de un valor de relleno: medirlo exige 10-15 "
-            "ejecuciones reales en la apertura (#62). Es una asunción, **no** una medición"
+            "ejecuciones reales en la apertura (#62). Es una asunción, **no** una medición: el "
+            "número sale de multiplicar el ratio declarado por el `R` que el propietario decidió "
+            "en #60 y viaja como `assumed` (`is_measurement: false`)"
         ),
         decided_on=SLIPPAGE_ASSUMPTION_DECIDED_ON,
-        follow_up_issue=SLIPPAGE_ASSUMPTION_R_ISSUE,
+        r_decided_on=R_DECIDED_ON if r_decided_on is None else r_decided_on,
+        follow_up_issue="#62",
     )
 
 
@@ -1071,6 +1183,7 @@ def _slippage_block(slippage: SlippageParameter, notional_usd: Decimal) -> dict[
         "pct_of_r": _num(slippage.pct_of_r),
         "pct_of_r_unit": "% de `R`",
         "r_pct": _num(slippage.r_pct),
+        "r_decided_on": slippage.r_decided_on,
         "r_issue": SLIPPAGE_ASSUMPTION_R_ISSUE,
         "source": slippage.source,
         "reason": slippage.reason,
@@ -1641,8 +1754,18 @@ def _slippage_from_args(args: argparse.Namespace) -> SlippageParameter:
             f"state = {state.value}: el motor solo admite un término numérico con "
             "state = measured, porque un supuesto o un «no medido» no tienen valor"
         )
+    if args.r_pct is not None and state is not MeasureState.ASSUMED:
+        raise CostInputError(
+            f"slippage: --r-pct ({args.r_pct}) solo cuantifica el **supuesto declarado** "
+            f"(state = assumed): con state = {state.value} no hay ratio sobre `R` que multiplicar"
+        )
     if state is MeasureState.ASSUMED:
-        return declared_slippage_assumption()
+        if args.r_pct is None:
+            # Sin `R` declarado el supuesto viaja con `r_pct: null`: el motor no decide `R`.
+            return declared_slippage_assumption()
+        return declared_slippage_assumption(
+            _decimal_from_text(args.r_pct, field="--r-pct"), r_decided_on=R_DECIDED_ON
+        )
     return SlippageParameter.unmeasured(
         reason="declarado como no medido en la CLI: no hay ninguna ejecución real (#62)"
     )
@@ -1714,6 +1837,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--illustrative-r-pct",
         default=None,
         help="`R` ilustrativo para la equivalencia del supuesto (nunca alimenta el total)",
+    )
+    parser.add_argument(
+        "--r-pct",
+        default=None,
+        help=(
+            "`R` ya decidido (#60) en % del nocional: cuantifica el supuesto declarado "
+            "(20 % de `R`) y permite cerrar `c_total`; solo con --slippage-state assumed"
+        ),
     )
     args = parser.parse_args(argv)
 

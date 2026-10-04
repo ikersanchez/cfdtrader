@@ -143,7 +143,10 @@ FROZEN: Final[frozenset[str]] = frozenset(
         "src/cfdtrader/models/calibration.py",
         "src/cfdtrader/models/labels.py",
         "src/cfdtrader/models/lightgbm_model.py",
-        "src/cfdtrader/backtest/costs.py",
+        # #131 retira `backtest/costs.py` de este conjunto: cablear el `R` decidido en #60 en el
+        # motor de costes —para que el supuesto de *slippage* tenga numero y el gate pueda
+        # verificar la regla 9 sobre el coste declarado (`plan.md` §19.12)— es exactamente ese
+        # fichero, el mismo criterio que #113 aplico con el gate y #124 con el calendario.
         "src/cfdtrader/backtest/engine.py",
         "src/cfdtrader/backtest/metrics.py",
         "src/cfdtrader/backtest/baselines.py",
@@ -770,8 +773,13 @@ def test_main_emits_the_recommendation_state(
     captured = capsys.readouterr()
     assert code == 0
     assert "estado: recommendation" in captured.out
-    assert "direccion: NOTHING" in captured.out
-    assert "ev_neto_pct: null" in captured.out
+    # #131: con el `R` que decidio #60 cableado, la sesion de los fixtures **autoriza** sobre el
+    # coste declarado (`plan.md` §19.12), asi que la direccion deja de ser NOTHING y el EV bajo el
+    # supuesto se publica como **sensibilidad** en vez de `null`.
+    assert "direccion: SHORT" in captured.out
+    assert "base_del_ev: declared" in captured.out
+    assert "ev_neto_es_sensibilidad: true" in captured.out
+    assert "ev_neto_pct: null" not in captured.out
     assert "gate_sha256: sha256:" in captured.out
     assert "no hay edge demostrado" in captured.out
     # 2026 **ya esta declarado** (tarea #132): el aviso **desaparece**. Era
@@ -2681,8 +2689,14 @@ def test_121_the_journal_row_keeps_only_what_blocks(
     blockers = cast("list[str]", row["blocking_events"])
     informative = {EventKind.OPEX.value, EventKind.TRIPLE_WITCHING.value, EventKind.ES_ROLL.value}
 
-    assert blockers, "la sesion de los fixtures trae bloqueos del gate"
     assert set(blockers).isdisjoint(informative), f"un informativo se colo: {blockers}"
+    # #131: con el `R` de #60 cableado la sesion de los fixtures ya **autoriza** sobre el coste
+    # declarado (§19.12), asi que `blocking_events` puede venir **vacio** (venia con las reglas 9 y
+    # 10 mientras el supuesto no estaba cuantificado). Lo que este test fija —y sigue fijando— es
+    # que lo informativo (OPEX, triple witching, roll de ES) **nunca** entra ahi. Que un bloqueo
+    # si aterrice en `blocking_events` lo cubren los casos con bloqueo de este mismo fichero
+    # (reglas 13, 1, 15 y las dos de calendario/beneficios).
+    assert all(isinstance(entry, str) and entry for entry in blockers)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

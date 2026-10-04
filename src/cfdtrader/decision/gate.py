@@ -40,11 +40,22 @@ El *slippage* no se fusiona con nada
 ------------------------------------
 
 Los tres estados de #11 (``measured``/``assumed``/``unmeasured``) llegan **tal cual** dentro
-del ``CostBreakdown``. ``ev_declared_pct`` se publica **siempre** (usa ``c_declared_pct``) y
-``ev_net_pct`` **solo** si ``c_total_pct`` tiene valor: un *slippage* no medido deja el EV
-neto en ``None`` y **nunca** en ``0``. Con el supuesto vigente (``assumed``, ``R`` sin
-decidir, #60) el total es ``null``, la regla 9 no se puede verificar y el gate lo publica
-como *blocker* que cita #62 y #60, sin convertir el supuesto en un numero.
+del ``CostBreakdown`` y **deciden la base** sobre la que se verifica la regla 9, que el gate
+publica sin fusionar:
+
+- ``measured``: la base es el **EV neto** (todo cobrado, el mas estricto); ``ev_net_pct`` se
+  publica y es el que se compara.
+- ``assumed`` **cuantificado** por el ``R`` decidido en #60 (``slippage.r_pct`` con valor): la
+  base es el **coste declarado** —``plan.md`` §19.12: la tabla de §3.3 **sin** el termino
+  supuesto— y el EV bajo el supuesto se publica como **sensibilidad** (``ev_net_pct`` con
+  ``ev_net_is_sensitivity``), nunca como medicion.
+- sin medicion y sin cuantificar: **no hay base**. ``ev_net_pct`` queda en ``None`` (**nunca**
+  en ``0``), la regla 9 no se puede verificar y el gate lo publica como *blocker*
+  ``ev_neto_no_calculable``, que cita #62 (medir el *slippage*).
+
+``ev_declared_pct`` se publica **siempre** (usa ``c_declared_pct``). Los dos ``r_pct`` —el del
+escenario (``GateParameters.r_pct``) y el que cuantifica el supuesto— tienen que **coincidir**:
+si no, el gate lanza ``GateInputError`` en vez de elegir uno.
 
 Los cinco estados de salida
 ---------------------------
@@ -146,12 +157,15 @@ from typing import Final, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from cfdtrader.backtest.costs import CostBreakdown
+from cfdtrader.backtest.costs import CostBreakdown, MeasureState
 from cfdtrader.backtest.engine import Decision, Direction, canonical_text
 from cfdtrader.data.calendar import MarketCalendar
 from cfdtrader.decision.overlay import OverlayDecision, OverlayState, apply_overlay, vetoes
 
 __all__ = [
+    "BASIS_DECLARED",
+    "BASIS_MEASURED",
+    "BASIS_NONE",
     "DECISION_THRESHOLD",
     "FOLLOW_UPS",
     "GATE_HASH_FORMAT",
@@ -722,6 +736,14 @@ class GateParameters(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 # Salida del gate
 # ─────────────────────────────────────────────────────────────────────────────
+#: Las tres bases declaradas sobre las que se puede verificar la regla 9 (nunca fusionadas).
+BASIS_MEASURED: Final[str] = "measured"
+#: `plan.md` §19.12: se decide sobre el **coste declarado** y el EV del supuesto es sensibilidad.
+BASIS_DECLARED: Final[str] = "declared"
+#: Sin base: la regla 9 no se puede verificar y bloquea con `ev_neto_no_calculable`.
+BASIS_NONE: Final[str] = "none"
+
+
 class GateOutput(BaseModel):
     """La salida completa del gate: la decision, su trazabilidad y el hash de todo lo anterior.
 
@@ -750,12 +772,38 @@ class GateOutput(BaseModel):
         default=None, description="coste total en %: null mientras el slippage no sea medido"
     )
     slippage_state: str = Field(description="measured / assumed / unmeasured, tal cual llego")
+    ev_basis: str = Field(
+        default=BASIS_NONE,
+        description=(
+            "base declarada de la regla 9 (#131): 'measured' (se decide sobre el EV neto), "
+            "'declared' (supuesto cuantificado por el `R` de #60: se decide sobre el coste "
+            "declarado, §19.12) o 'none' (sin base: la regla 9 bloquea)"
+        ),
+    )
     ev_declared_pct: Decimal | None = Field(
         default=None,
         description="EV con el coste declarado, en %: se publica siempre que haya probabilidad",
     )
     ev_net_pct: Decimal | None = Field(
-        default=None, description="EV con el coste total, en %: null si el total es null, nunca 0"
+        default=None,
+        description=(
+            "EV con el coste total, en %: null si el total es null, nunca 0. Con base "
+            "`declared` es la **sensibilidad** bajo el supuesto, no el numero que decide"
+        ),
+    )
+    ev_decision_pct: Decimal | None = Field(
+        default=None,
+        description=(
+            "EV que **decide** la regla 9 y el tier, en %: el neto con base `measured` y el "
+            "declarado con base `declared`; None si no hay base (la regla 9 bloquea)"
+        ),
+    )
+    ev_net_is_sensitivity: bool = Field(
+        default=False,
+        description=(
+            "True sii `ev_net_pct` es la **sensibilidad** bajo el supuesto declarado (base "
+            "`declared`) y no la medicion que decide: sale de un supuesto, no de una medicion"
+        ),
     )
     stop_pct: Decimal = Field(description="distancia al stop en % del precio")
     target_pct: Decimal | None = Field(
@@ -848,8 +896,13 @@ def _json_payload(output: GateOutput) -> dict[str, object]:
         "cost_pct": _num(output.cost_pct),
         "cost_total_pct": None if output.cost_total_pct is None else _num(output.cost_total_pct),
         "slippage_state": output.slippage_state,
+        "ev_basis": output.ev_basis,
         "ev_declared_pct": None if output.ev_declared_pct is None else _num(output.ev_declared_pct),
         "ev_net_pct": None if output.ev_net_pct is None else _num(output.ev_net_pct),
+        "ev_decision_pct": (
+            None if output.ev_decision_pct is None else _num(output.ev_decision_pct)
+        ),
+        "ev_net_is_sensitivity": output.ev_net_is_sensitivity,
         "stop_pct": _num(output.stop_pct),
         "target_pct": None if output.target_pct is None else _num(output.target_pct),
         "notional_usd": None if output.notional_usd is None else _num(output.notional_usd),
@@ -954,8 +1007,11 @@ def _decision_reason(output: GateOutput) -> str:
     """El motivo que viaja al motor: estado, direccion, tier y bloqueos, sin adornos."""
     direction = "nothing" if output.direction is None else output.direction.value
     parts = [f"status={output.status.value}", f"direction={direction}", f"tier={output.tier}"]
-    if output.ev_net_pct is not None:
-        parts.append(f"ev_net_pct={_num(output.ev_net_pct)}")
+    if output.ev_decision_pct is not None:
+        label = "ev_net_pct" if output.ev_basis == BASIS_MEASURED else "ev_declared_pct"
+        parts.append(f"{label}={_num(output.ev_decision_pct)}")
+    if output.ev_net_is_sensitivity and output.ev_net_pct is not None:
+        parts.append(f"ev_net_pct={_num(output.ev_net_pct)}(sensibilidad: supuesto declarado)")
     for blocker in output.blockers:
         parts.append(f"{blocker['code']}(regla {blocker['rule']})")
     return "; ".join(parts)
@@ -1044,6 +1100,8 @@ class _Context:
     cost_total_pct: Decimal | None
     ev_declared_pct: Decimal
     ev_net_pct: Decimal | None
+    ev_basis: str
+    ev_decision_pct: Decimal | None
     capital_usd: Decimal
     snapshot_ok: bool
     stop_pct: Decimal
@@ -1190,6 +1248,50 @@ def _parameters_payload(params: GateParameters) -> dict[str, str | None]:
     return payload
 
 
+def _cost_basis(cost: CostBreakdown) -> str:
+    """La base sobre la que se verifica la regla 9, **declarada** y sin fusionar los estados.
+
+    - ``measured``: el *slippage* es una **medición**; se decide sobre el **EV neto** (todo
+      cobrado), que es el más estricto y el único caso en el que un supuesto no participa.
+    - ``declared``: el *slippage* es el **supuesto declarado cuantificado** por el `R` decidido en
+      **#60** (20 % de `R` = 20 bp). ``plan.md`` §19.12 manda decidir sobre el **coste declarado**
+      (la tabla de §3.3 **sin** el término supuesto) y publicar el EV bajo el supuesto como
+      **sensibilidad**.
+    - ``none``: no hay base — el *slippage* no está medido y el supuesto **no** está cuantificado
+      (``slippage.r_pct`` es ``null``) — así que la regla 9 no se puede verificar y bloquea.
+
+    Cuantificar el supuesto **no** lo vuelve una medición: el estado del *slippage* viaja tal cual
+    y la base lo nombra, de modo que la salida nunca presenta un supuesto como dato medido.
+    """
+    slippage = cost.slippage
+    if slippage.state is MeasureState.MEASURED:
+        return BASIS_MEASURED
+    if slippage.state is MeasureState.ASSUMED and slippage.r_pct is not None:
+        return BASIS_DECLARED
+    return BASIS_NONE
+
+
+def _require_r_coherence(cost: CostBreakdown, params: GateParameters) -> None:
+    """Los dos `r_pct` están **conectados**: el del supuesto y el `R` decidido del escenario (#131).
+
+    Si el *slippage* llega **cuantificado** (``slippage.r_pct`` con valor) y no coincide con
+    ``params.r_pct`` —el `R` que el propietario decidió en #60—, el gate no puede decidir con dos
+    tamaños de `R` distintos: lanza su error de entrada tipado en vez de elegir uno. Sin
+    cuantificar no hay nada que comparar (el supuesto viaja con ``r_pct: null``) y no se exige
+    nada: el camino diario decide con el `R` del escenario.
+    """
+    declared = params.r_pct
+    quantified = cost.slippage.r_pct
+    if quantified is None or declared is None:
+        return
+    if quantified != declared:
+        raise GateInputError(
+            f"cost.slippage.r_pct: el supuesto está cuantificado con `R` = {_num(quantified)} % y "
+            f"params.r_pct declara {_num(declared)} %: es el **mismo** tamaño de `R` (#60) y no "
+            "puede llegar distinto por los dos caminos"
+        )
+
+
 def _context(
     *,
     session: object,
@@ -1232,6 +1334,8 @@ def _context(
         )
     if not isinstance(params, GateParameters):
         raise GateInputError(f"params: se espera GateParameters, no {type(params).__name__}")
+    # Los dos `r_pct` —el del escenario y el que cuantifica el supuesto— tienen que coincidir.
+    _require_r_coherence(cost, params)
     if cost.nights != 0:  # regla 6: intradia puro
         raise GateInputError(
             f"cost.nights = {cost.nights}: la regla 6 no admite una posicion overnight; el coste "
@@ -1290,6 +1394,13 @@ def _context(
     cost_pct = cost.c_declared_pct
     cost_total_pct = cost.c_total_pct
     favourable = _probability_for(direction, probability)
+    ev_basis = _cost_basis(cost)
+    ev_declared_pct = favourable * move - cost_pct
+    ev_net_pct = None if cost_total_pct is None else favourable * move - cost_total_pct
+    # La regla 9 se verifica sobre la base declarada: con el supuesto **cuantificado** por el `R`
+    # de #60 la base es el coste declarado (§19.12) y el EV bajo el supuesto queda de sensibilidad;
+    # con el *slippage* **medido** la base es el neto. Sin base, `None` y la regla 9 bloquea.
+    ev_decision_pct = ev_declared_pct if ev_basis == BASIS_DECLARED else ev_net_pct
     # La clausura (regla 19) se pregunta al calendario una sola vez; la media sesion (regla 18)
     # sigue consultando `is_half_day`, que es el metodo que la prueba de reuso espia.
     info = calendar.session(day)
@@ -1304,8 +1415,10 @@ def _context(
         cost=cost,
         cost_pct=cost_pct,
         cost_total_pct=cost_total_pct,
-        ev_declared_pct=favourable * move - cost_pct,
-        ev_net_pct=None if cost_total_pct is None else favourable * move - cost_total_pct,
+        ev_declared_pct=ev_declared_pct,
+        ev_net_pct=ev_net_pct,
+        ev_basis=ev_basis,
+        ev_decision_pct=ev_decision_pct,
         capital_usd=capital,
         snapshot_ok=flag,
         stop_pct=stop,
@@ -1431,21 +1544,22 @@ def _blockers(context: _Context, decided: _Decided) -> tuple[dict[str, str], ...
 # Tier (regla 10) y reglas 16, 8, 9 y el sizing (regla 2)
 # ─────────────────────────────────────────────────────────────────────────────
 def _tier(context: _Context, decided: _Decided) -> Tier:
-    """El tier derivado de §12: A si supera su multiplo del coste **y** su probabilidad minima.
+    """El tier derivado de §12 sobre la **misma base** con la que se verifica la regla 9 (#131).
 
-    Sin EV neto (``c_total_pct`` es ``null``) no hay multiplo que comparar: el tier es ``C``,
-    porque el A y el B se definen sobre el **EV neto** y un supuesto no los demuestra.
+    El A y el B se definen sobre el EV (y su multiplo del coste declarado), asi que se derivan
+    sobre `ev_decision_pct`: el **neto** cuando el *slippage* esta medido, y el **declarado**
+    cuando el supuesto esta cuantificado por el `R` de #60 (§19.12). Sin base, el tier es ``C``.
     """
-    ev_net = context.ev_net_pct
-    if ev_net is None:
+    ev = context.ev_decision_pct
+    if ev is None:
         return TIER_C
     favourable = _probability_for(context.direction, context.prob_up_calibrated)
     if (
-        ev_net > decided.tier_a_cost_multiple * context.cost_pct
+        ev > decided.tier_a_cost_multiple * context.cost_pct
         and favourable > decided.tier_a_min_probability
     ):
         return TIER_A
-    if ev_net > decided.tier_b_cost_multiple * context.cost_pct:
+    if ev > decided.tier_b_cost_multiple * context.cost_pct:
         return TIER_B
     return TIER_C
 
@@ -1466,6 +1580,21 @@ def _sizing(
         )
         leverage = (notional / capital_usd).quantize(LEVERAGE_QUANTUM, rounding=ROUND_HALF_UP)
     return notional, leverage
+
+
+def _sensitivity_note(context: _Context) -> str:
+    """El recordatorio de que el neto bajo el supuesto es una **sensibilidad**, no una medición.
+
+    Se publica **siempre** que la base sea la declarada —también cuando el neto bajo el supuesto
+    sale **negativo**—: es el dato que dice en voz alta que la observación decide sobre el coste
+    declarado (§19.12) y que el supuesto (20 % de `R` = 20 bp, #64) puede comerse el *edge* (§3.3).
+    """
+    if context.ev_basis != BASIS_DECLARED or context.ev_net_pct is None:
+        return ""
+    return (
+        f"; sensibilidad bajo el supuesto declarado (20 % de R = 20 bp, #64): "
+        f"ev_neto_pct = {_num(context.ev_net_pct)}"
+    )
 
 
 def _trading_rules(
@@ -1501,19 +1630,21 @@ def _trading_rules(
                 _RULE_OK,
                 f"target_pct = {_num(target)} >= {_num(minimum)} = 2 x coste declarado",
             )
-    ev_net = context.ev_net_pct
-    if ev_net is None:
+    ev = context.ev_decision_pct
+    if ev is None:
         detail = (
-            f"slippage.state = '{context.cost.slippage.state.value}': c_total_pct es null, el EV "
-            "neto tambien y la regla 9 no se puede verificar (nunca se sustituye por 0). Medir el "
-            "slippage es #62 y el tamano de R que lo convertiria en % del nocional es #60"
+            f"slippage.state = '{context.cost.slippage.state.value}': c_total_pct es null y el "
+            "supuesto no esta cuantificado, asi que no hay EV con el que verificar la regla 9 "
+            "(nunca se sustituye por 0). Medir el slippage es #62; cuantificar el supuesto con el "
+            "`R` ya decidido en #60 y publicar el EV bajo el supuesto como sensibilidad es #131"
         )
         ledger.block("9", detail)
         blockers.append({"rule": "9", "code": CODE_EV_NET_NOT_COMPUTABLE, "detail": detail})
-    elif ev_net <= decided.ev_threshold_pct:
+    elif ev <= decided.ev_threshold_pct:
         detail = (
-            f"ev_net_pct = {_num(ev_net)} <= umbral declarado {_num(decided.ev_threshold_pct)}: "
-            "la regla 9 exige un EV neto estrictamente mayor"
+            f"ev_{context.ev_basis}_pct = {_num(ev)} <= umbral declarado "
+            f"{_num(decided.ev_threshold_pct)}: la regla 9 exige un EV estrictamente mayor "
+            f"(base declarada: {context.ev_basis})" + _sensitivity_note(context)
         )
         ledger.block("9", detail)
         blockers.append({"rule": "9", "code": CODE_EV_BELOW_THRESHOLD, "detail": detail})
@@ -1521,7 +1652,9 @@ def _trading_rules(
         ledger.mark(
             "9",
             _RULE_OK,
-            f"ev_net_pct = {_num(ev_net)} > umbral declarado {_num(decided.ev_threshold_pct)}",
+            f"ev_{context.ev_basis}_pct = {_num(ev)} > umbral declarado "
+            f"{_num(decided.ev_threshold_pct)}; base = {context.ev_basis}"
+            + _sensitivity_note(context),
         )
     if tier not in decided.authorized_tiers:
         detail = (
@@ -1576,8 +1709,11 @@ def _output(
         cost_pct=context.cost_pct,
         cost_total_pct=context.cost_total_pct,
         slippage_state=str(context.cost.slippage.state.value),
+        ev_basis=context.ev_basis,
         ev_declared_pct=context.ev_declared_pct,
         ev_net_pct=context.ev_net_pct,
+        ev_decision_pct=context.ev_decision_pct,
+        ev_net_is_sensitivity=context.ev_basis == BASIS_DECLARED,
         stop_pct=context.stop_pct,
         target_pct=context.target_pct,
         stop_px=None,

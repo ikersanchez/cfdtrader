@@ -127,6 +127,7 @@ from cfdtrader.analysis.model_comparison import BASELINE_VARIANT_ID, VARIANT_ID
 from cfdtrader.analysis.pipeline_report import (
     EXPECTED_MOVE_BASIS,
     GARCH_COLUMN,
+    SCENARIO_R_PCT,
     SCENARIO_STOP_SIGMA_MULTIPLE,
     SCENARIO_TARGET_STOP_MULTIPLE,
     scenario_parameters,
@@ -201,7 +202,11 @@ HONESTY_FENCE: Final[tuple[str, ...]] = (
     "no hay edge demostrado",
     "ejecucion: manual (el sistema no coloca ordenes; las decide el operador)",
     "naturaleza: apoyo a la decision, no una estrategia validada",
-    f"escenario declarado: {SCENARIO_LABEL} (scenario_parameters); #59 y #60 siguen OPEN",
+    f"escenario declarado: {SCENARIO_LABEL} (scenario_parameters); el `R` = {SCENARIO_R_PCT} % "
+    "lo decidio #60 y el broker (#59) sigue OPEN",
+    "coste: la regla 9 se decide sobre el coste **declarado** (§19.12); el EV neto bajo el "
+    "supuesto de *slippage* (20 % de `R` = 20 bp, #64) se publica como **sensibilidad**, no como "
+    "una medicion (#62)",
 )
 
 #: Claves del bloque de la pista que el modelo lineal tiene que publicar en su ultimo fold.
@@ -704,6 +709,8 @@ def _recommendation_lines(output: GateOutput) -> list[str]:
         f"prob_calibrada: {output.prob_up_calibrated!r}",
         f"ev_declarado_pct: {_decimal_or_null(output.ev_declared_pct)}",
         f"ev_neto_pct: {_decimal_or_null(output.ev_net_pct)}",
+        f"base_del_ev: {output.ev_basis}",
+        f"ev_neto_es_sensibilidad: {str(output.ev_net_is_sensitivity).lower()}",
         f"stop_pct: {_decimal_or_null(output.stop_pct)}",
         f"objetivo_pct: {_decimal_or_null(output.target_pct)}",
         f"tier: {output.tier}",
@@ -1407,9 +1414,14 @@ def _deliver(
         with observer.stage("predict"):
             prob_up_raw, probability = _predictions(model_path, features)
         move = _expected_move_pct(row)
+        # #131: el supuesto de *slippage* se **cuantifica** con el `R` que el propietario decidio
+        # en #60 (`SCENARIO_R_PCT`, la unica fuente del valor): 20 % de `R` = 20 bp. Sigue siendo
+        # un supuesto —`assumed`, `is_measurement = false`—; lo que cambia es que el gate ya puede
+        # verificar la regla 9 sobre el **coste declarado** (§19.12) y publicar el EV bajo el
+        # supuesto como **sensibilidad** en vez de dejarlo en `null`.
         cost = cost_breakdown(
             model=declared_cost_model(),
-            slippage=declared_slippage_assumption(),
+            slippage=declared_slippage_assumption(SCENARIO_R_PCT),
             notional_usd=NOTIONAL_USD,
             side=Side.LONG,
             nights=0,

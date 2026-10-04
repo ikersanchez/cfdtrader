@@ -159,6 +159,7 @@ __all__ = [
     "REPORT_PREFIX",
     "RULE_11_BAND",
     "SCENARIO_ID",
+    "SCENARIO_R_PCT",
     "SERIES_UNITS",
     "SESSION_RULES",
     "TASK",
@@ -219,6 +220,11 @@ PROVENANCE: Final[dict[str, str]] = {
 #: Multiplos de S1 sobre sigma: ``stop = 1,0 x sigma`` y ``target = 2 x stop`` (reglas 7 y 8).
 SCENARIO_STOP_SIGMA_MULTIPLE: Final[Decimal] = Decimal("1")
 SCENARIO_TARGET_STOP_MULTIPLE: Final[Decimal] = Decimal("2")
+
+#: Tamano de `R` del escenario declarado S1, en % del nocional: lo **decidio** el propietario en
+#: **#60** (`plan.md` §12 y §19.12). Es la **unica** fuente del valor: el camino diario lo importa
+#: de aqui para cuantificar el supuesto de *slippage* (#131) en vez de reescribir el literal.
+SCENARIO_R_PCT: Final[Decimal] = Decimal("1")
 
 #: La columna de ``regime_v1`` de la que sale el movimiento esperado y su base declarada.
 GARCH_COLUMN: Final[str] = "garch_forecast"
@@ -762,7 +768,7 @@ def scenario_parameters(*, cost_pct: Decimal) -> GateParameters:
         max_daily_loss_pct=Decimal("2"),
         max_weekly_loss_pct=Decimal("5"),
         max_monthly_loss_pct=Decimal("10"),
-        r_pct=Decimal("1"),
+        r_pct=SCENARIO_R_PCT,
         tier_a_cost_multiple=Decimal("3"),
         tier_b_cost_multiple=Decimal("2"),
         tier_a_min_probability=Decimal("0.58"),
