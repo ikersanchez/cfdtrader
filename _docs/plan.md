@@ -2,8 +2,8 @@
 
 | Campo | Valor |
 |---|---|
-| **Versión** | **2.7** |
-| **Fecha** | 2026-10-03 |
+| **Versión** | **2.8** |
+| **Fecha** | 2026-10-04 |
 | **Estado** | Diseño — pendiente de ejecutar Fase 0 |
 | **Instrumento** | **SPX500:CFD**, cotizando en el horario de la sesión regular estadounidense; las horas se calculan en `America/New_York` y se presentan en `Europe/Madrid` |
 | **Ámbito** | Decisión de apoyo (*decision support*). La ejecución es siempre manual. |
@@ -1151,6 +1151,21 @@ El registro debe distinguir con claridad tres situaciones **que no son lo mismo*
 
 - **Valla de honestidad (se mantiene).** Cerrar la Fase 3 **no** es una afirmación de *edge*: el carril B sigue bloqueado por §11.6 (`phase2_ready = false`) y la ejecución es **manual**.
 
+### 19.9 Cierre de la Fase 3 — resultado de la puerta de salida (2026-10-04)
+
+✅ **¿Supera la Fase 3 su puerta de salida (tarea 38 / §16)? — RESUELTA (2026-10-04): `not_evaluable`.** Es el veredicto que la puerta declaró **válido de antemano** (§19.8); lo publica la **tarea #38** en el artefacto `_docs/overlay_evaluation_2026-10-04.md`.
+
+| Evidencia | Resultado medido |
+|---|---|
+| Veredicto de la puerta (tarea #38) | **`not_evaluable`** |
+| Brier y Sharpe OOS, con y sin overlay | **no medidos** (no hay medición pareada que comparar) |
+| Archivo histórico de noticias | **no** disponible (`tech_stack.md` §4.9) |
+
+- **La puerta se resuelve en su condición (c), con veredicto explícito.** El backtest corre **siempre sin overlay** porque **no hay archivo histórico de noticias** con `published_at` fiable (`tech_stack.md` §4.9): sin medición pareada (con/sin overlay), el Brier y el Sharpe OOS **no son obtenibles hacia atrás**, así que **no se inventa ningún número** y `not_evaluable` es el veredicto honesto, no un fracaso que maquillar.
+- **Se aplica la consecuencia declarada de antemano** (§16 y §19.8), sin reabrirla: el LLM queda **solo como redactor** del informe y la evidencia se traslada al ***paper trading*** de la Fase 4 (**#45**), con registro prospectivo —recomendación con overlay, sin overlay y acción humana; P&L y atribución hacia delante al cierre—.
+- **El camino diario sigue sin el LLM en el camino crítico** (condición (d)): la recomendación se emite sin el overlay.
+- **Valla de honestidad (se mantiene).** Cerrar la Fase 3 **no** es una afirmación de *edge*: la Fase 3 avanza por el **carril A** (§19.7) y **§11.6 no se altera** —el carril B sigue bloqueado y `phase2_ready = false`—. La ejecución es **manual**.
+
 ---
 
 ## 20. Marco regulatorio y fiscal (España) — resumen, no asesoramiento
@@ -1261,3 +1276,4 @@ El registro debe distinguir con claridad tres situaciones **que no son lo mismo*
 | 2026-10-01 | **2.5** | 🛑 **La Fase 2 no supera su puerta de salida (tarea 29 / §11.6).** Nuevo **§19.6** con la decisión del propietario (**`reframe`**) y la evidencia medida: Fase 0 en **`fail`** con el drift en el tramo **nocturno** (intradía limpio **no significativo**), Fase 2 con criterio principal **`not_evaluable`**, **`no_cell_crosses = true`**, agregado **`fail`** y **`phase2_ready = false`**; potencia de §11.5 (**~4.900** operaciones frente a las **150** del S1) ⇒ **no concluyente**. La **Fase 3 (`#30`–`#38`) queda bloqueada**. Cabecera a 2.5 | No se empieza una fase sin superar la puerta de salida de la anterior: registrar la decisión del propietario del 2026-10-01, sin fijar digests de artefactos regenerables |
 | 2026-10-01 | **2.6** | 🧭 **Reencuadre del objetivo en dos carriles.** Nuevo **§19.7**: el **carril A** (asistente de decisión, ejecución manual) puede construirse y usarse **sin superar §11.6**; el **carril B** (estrategia validada) **sigue gated** por §11.6. La regla de fases de `_docs/tasks.md` y la viñeta de bloqueo de §19.6 quedan **acotadas al carril B**, y se registra la **valla de honestidad** (toda salida del asistente avisa de que **no hay edge demostrado**). Cabecera a 2.6 | Registrar la decisión del propietario del 2026-10-01 sin reabrir §11.6 ni fijar digests de artefactos regenerables |
 | 2026-10-03 | **2.7** | 🚪 **Puerta de salida de la Fase 3 declarada, antes de ver resultados.** **§16** (Fase 3) gana la puerta de la tarea 38 con sus cuatro condiciones —acotado e inofensivo **con pruebas**; registrado en el diario; evaluación incremental **diseñada, ejecutada y reportada**; y camino diario **sin el LLM en el camino crítico**— y la advertencia de que **no es una afirmación de *edge*** (carril A). Nuevo **§19.8** con las cuatro decisiones del propietario del 2026-10-03: la puerta admite **`not_evaluable`** con su consecuencia declarada **de antemano**; OPEX, triple *witching* y roll del ES **informativos**, sin regla 21; la primera versión de la orquestación **sin `interrupt`**; y fuente del calendario externo (**`yfinance`** + calendario declarado). **§7.3** ajusta el párrafo de LangGraph a la decisión. Cabecera a 2.7 | §11.6 exige **pre-registrar** los criterios y no modificarlos tras ver los resultados —declarar la puerta al final sería mover la portería—, y §17 prohíbe dar por resuelta una decisión sin registrarla antes. Decisión del propietario del 2026-10-03 |
+| 2026-10-04 | **2.8** | ✅ **Cierre de la Fase 3: la puerta se resuelve con `not_evaluable`.** Nuevo **§19.9** transcribe el veredicto que publica la **tarea #38** (`_docs/overlay_evaluation_2026-10-04.md`): el backtest corre **siempre sin overlay** porque no hay archivo histórico de noticias (`tech_stack.md` §4.9), así que la medición pareada (Brier y Sharpe OOS con/sin overlay) **no es obtenible hacia atrás** y **no se inventa ningún número**. Se aplica la consecuencia declarada **de antemano** en §16/§19.8 —el LLM queda **solo como redactor** y la evidencia se traslada al *paper trading* de la Fase 4 (#45)—, y la puerta queda satisfecha en su condición **(c)** con veredicto explícito. **§11.6 no se toca**: el carril B sigue bloqueado y `phase2_ready = false`. Cabecera a 2.8 | Registrar el resultado de la puerta de salida de la Fase 3 en el documento que la declaró, sin fijar digests de artefactos regenerables |

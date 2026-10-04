@@ -2,10 +2,10 @@
 
 | Campo | Valor |
 |---|---|
-| **Versión** | **2.8** · instrumento S&P 500 |
-| **Fecha** | 2026-10-03 |
+| **Versión** | **2.9** · instrumento S&P 500 |
+| **Fecha** | 2026-10-04 |
 | **Estado** | ✅ **Especificación cerrada.** Cambios posteriores solo mediante entrada en el registro y motivo medido |
-| **Documento padre** | `plan.md` v2.7 (fuente de verdad funcional) |
+| **Documento padre** | `plan.md` v2.8 (fuente de verdad funcional) |
 | **Ámbito** | Stack técnico del sistema descrito en `plan.md` |
 | **Instrumento** | **SPX500:CFD**, horario definido en `America/New_York` y presentado en `Europe/Madrid` |
 | **Restricciones rectoras** | Ejecución en **PC propio** · prioridad a **software libre y open source** · coste marginal objetivo **≈0 €** |
@@ -987,3 +987,4 @@ Como el sistema decide **una vez al día**, los artefactos de decisión son **un
 | 2026-10-01 | **2.6** | 🧭 **§11 bis acotada al carril B por el reencuadre.** Las decisiones **4** (**#59**) y **5** (**#60**) siguen sin marca de resuelta; con el reencuadre (`plan.md` §19.7) esas decisiones pendientes **limitan al carril B** y ya no bloquean construir y usar el **carril A** (asistente de decisión, ejecución manual, sin superar §11.6). Cabecera a 2.6 y fila `Documento padre` a `plan.md` v2.6 | Alinear el documento con el reencuadre del objetivo en dos carriles, sin fijar digests de artefactos regenerables |
 | 2026-10-03 | **2.7** | 🚪 **Puntero al documento padre.** La Fase 3 declara su **puerta de salida** (`plan.md` §16 y §19.8): se admite **`not_evaluable`** como veredicto válido con su consecuencia declarada **de antemano**, OPEX y compañía quedan **informativos** (sin regla 21), la primera versión de la orquestación de §4.10 va **sin `interrupt`**, y el calendario externo se ingiere con **`yfinance`** más un calendario declarado. **Sin cambio de contenido en este documento**: sólo la cabecera y el puntero al padre. Cabecera a 2.7 y fila `Documento padre` a `plan.md` v2.7 | Mantener el puntero al padre coherente con `plan.md` v2.7 sin tocar la especificación ya cerrada ni añadir digests de artefactos regenerables |
 | 2026-10-03 | **2.8** | 💰 **§6.3: tabla de precios verificada e identificadores vigentes.** Se publica la tarifa **por id concreto** en EUR/Mtok —`deepseek-flash` y `deepseek-v4-pro`, con entrada (sin caché y con caché) y salida—, **verificada el 2026-10-03** contra la página del proveedor y convertida al tipo de referencia del **BCE del 2026-10-02** (`1 EUR = 1,1225 USD`); se declara la regla **peak/off-peak** (la tarifa publicada es la off-peak, que es la del pipeline a 12:00–13:00 UTC) y que la entrada con caché del proveedor es **#116**. Se corrige el identificador: **`deepseek-chat` no existe** y la asignación de la estrategia de dos modelos pasa a declararse (`LLM_MODEL_EXTRACT`/`LLM_MODEL_REPORT`). Cabecera a 2.8 | #118: las dos filas de `ops.llm_calls` traían `cost_estimate: null` y el guardián cerraba con 0,0 €, así que los topes diario y mensual de §6.3.4 **no podían dispararse nunca** y eran decorativos |
+| 2026-10-04 | **2.9** | 🚪 **Puntero al documento padre.** La Fase 3 **cierra** su puerta de salida con veredicto **`not_evaluable`** (tarea #38): el backtest corre **siempre sin overlay** por la ausencia de archivo histórico de noticias (**§4.9**), así que la medición pareada con/sin overlay no es obtenible hacia atrás; el LLM queda **solo como redactor** y la evidencia se traslada al *paper trading* de la Fase 4 (#45). **Sin cambio de contenido en este documento**: sólo la cabecera y el puntero al padre. Cabecera a 2.9 y fila `Documento padre` a `plan.md` v2.8 | Mantener el puntero al padre coherente con `plan.md` v2.8 sin tocar la especificación ya cerrada ni añadir digests de artefactos regenerables |
