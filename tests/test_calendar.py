@@ -396,6 +396,80 @@ def test_132_2026_is_now_declared_with_its_sixteen_days() -> None:
     assert config.pending == {}, "y no queda ningun año pendiente"
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# #132 · El parser de la fuente: leerla sin que se cuele nada
+# ─────────────────────────────────────────────────────────────────────────────
+_SOURCE_FIXTURE = """
+<h4>2029 FOMC Meetings</h4>
+January 30-31 Statement: PDF | HTML Minutes: PDF | HTML (Released February 21, 2029)
+March 20-21* Statement: PDF | HTML
+October 30 - November 1 Statement: PDF | HTML
+December 11-12* Statement: PDF | HTML
+Note: A two-day meeting is scheduled for January 29-30, 2030.
+<h4>2028 FOMC Meetings</h4>
+January 25-26
+"""
+
+
+def test_132_the_parser_reads_the_announced_year_and_ignores_the_noise() -> None:
+    """Ni la fecha de publicacion de las actas ni la nota del año siguiente son dias de reunion."""
+    from cfdtrader.data.calendar import parse_declared_meetings
+
+    days = parse_declared_meetings(_SOURCE_FIXTURE, 2029)
+    assert [day.isoformat() for day in days] == [
+        "2029-01-30",
+        "2029-01-31",
+        "2029-03-20",
+        "2029-03-21",
+        "2029-10-30",
+        "2029-11-01",
+        "2029-12-11",
+        "2029-12-12",
+    ]
+    assert date(2029, 2, 21) not in days, "la publicacion de las actas no es una reunion"
+    assert not any(day.year == 2030 for day in days), (
+        "la nota nombra el año **siguiente**: no cuela"
+    )
+    assert parse_declared_meetings(_SOURCE_FIXTURE, 2028) == (
+        date(2028, 1, 25),
+        date(2028, 1, 26),
+    ), "cada bloque se lee por separado"
+
+
+def test_132_an_absent_year_is_empty_and_never_an_invention() -> None:
+    """`()` es «ese año no aparece en el texto», no «ese año no tiene reuniones»."""
+    from cfdtrader.data.calendar import parse_declared_meetings
+
+    assert parse_declared_meetings(_SOURCE_FIXTURE, 2031) == ()
+    assert parse_declared_meetings("", 2026) == ()
+    assert parse_declared_meetings("sin años aqui", 2026) == ()
+
+
+def test_132_the_parser_reproduces_the_declared_years() -> None:
+    """El parser (sobre el maquetado real que se copio) da lo mismo que el artefacto declarado.
+
+    El bloque de abajo es el de 2026 tal y como lo sirve la fuente —descargado el 2026-10-04—, con
+    su ruido (actas, notas, materiales). Si el parser se desvia, esto lo dice sin tocar la red.
+    """
+    from cfdtrader.data.calendar import fomc_dates_for, load_fomc_calendar, parse_declared_meetings
+
+    source_2026 = """
+    2026 FOMC Meetings January 27-28 Statement: PDF (Released February 18, 2026)
+    March 17-18* Statement: PDF (Released April 08, 2026)
+    April 28-29 Statement: PDF (Released May 20, 2026)
+    June 16-17* Statement: PDF (Released July 08, 2026)
+    July 28-29 Statement: PDF (Released August 19, 2026)
+    September 15-16* Statement: PDF (Released October 07, 2026)
+    October 27-28 Statement: PDF
+    December 8-9* Statement: PDF
+    Note: A two-day meeting is scheduled for January 26-27, 2027.
+    """
+
+    config = load_fomc_calendar()
+    assert config is not None
+    assert parse_declared_meetings(source_2026, 2026) == fomc_dates_for(config, 2026)
+
+
 def test_132_a_year_declared_and_pending_at_once_is_rejected(tmp_path: Path) -> None:
     """Las dos cosas a la vez harían mentir al aviso según cuál se leyera primero."""
     from cfdtrader.data.calendar import load_fomc_calendar

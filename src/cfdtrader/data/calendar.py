@@ -28,11 +28,12 @@ regla del *gate*, no del calendario).
 from __future__ import annotations
 
 import calendar as _calendar
+import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Final, cast
 from zoneinfo import ZoneInfo
 
 import holidays
@@ -49,6 +50,7 @@ __all__ = [
     "MADRID",
     "SESSION_CLOSE_ET",
     "SESSION_OPEN_ET",
+    "SOURCE_MONTHS",
     "CalendarConfig",
     "FomcCalendarConfig",
     "MarketCalendar",
@@ -57,6 +59,7 @@ __all__ = [
     "fomc_dates_for",
     "load_calendar",
     "load_fomc_calendar",
+    "parse_declared_meetings",
     "pending_reason",
 ]
 
@@ -522,6 +525,83 @@ def fomc_dates_for(config: FomcCalendarConfig, year: int) -> tuple[date, ...] | 
     hacia indistinguible «hoy no hay FOMC» de «la regla 17 no puede dispararse» (#114).
     """
     return config.meetings.get(year)
+
+
+#: Los doce meses tal y como los publica la fuente (en orden), para leer su calendario.
+SOURCE_MONTHS: Final[tuple[str, ...]] = (
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)
+
+#: Una reunion: `Mes D-D` o `Mes D - Mes D` (a caballo entre dos meses, p. ej. `October 31 -
+#: November 1`). **El rango es obligatorio a proposito**: exigirlo evita confundir la fecha de
+#: publicacion de las actas —`(Released February 18, 2026)`— con un dia de reunion.
+_MEETING_RANGE: Final[re.Pattern[str]] = re.compile(
+    r"(January|February|March|April|May|June|July|August|September|October|November|December)"
+    r"\s+(\d{1,2})\s*[-\u2013]\s*(?:(" + "|".join(SOURCE_MONTHS) + r")\s+)?(\d{1,2})"
+)
+
+
+def parse_declared_meetings(text: str, year: int) -> tuple[date, ...]:
+    """Los dias de reunion de ``year`` **leidos del texto** de la fuente (tarea #132).
+
+    Funcion **pura**: recibe el texto y devuelve las fechas; no abre red, ni ficheros, ni el reloj.
+    Existe porque leer esa pagina tiene una trampa **medida** —le paso a #124 con 2026 y volvio a
+    pasar en #132—: los lectores que la sirven troceada **truncan el centro** y la seccion del año
+    buscado cae justo en el hueco. La receta que si funciona es descargarla **entera** y parsearla
+    aqui, con `urllib` del sistema (sin lector de por medio):
+
+    .. code-block:: bash
+
+        uv run python -c "import urllib.request as u; print(u.urlopen(u.Request('https://www.
+        federalreserve.gov/monetarypolicy/fomccalendars.htm',
+        headers={'User-Agent': 'cfdtrader'})).read().decode('utf-8', 'replace'))" > /tmp/fomc.html
+
+    Una lista vacia significa «ese año **no aparece** en el texto», nunca «ese año no tiene
+    reuniones»: esa distincion es la que sostiene el aviso del camino diario.
+
+    **Alcance, y es un limite real:** este parser lee el maquetado de los años **anunciados**
+    (`Mes D-D`, con los dos dias en el mismo bloque), que es donde vive el calendario
+    **prospectivo** —lo unico que se declara: 2026, 2027 y los que vengan—. Los años **historicos**
+    de esa misma pagina usan otro maquetado (mes y dias en celdas separadas, y reuniones a caballo
+    entre meses como `Oct/Nov 31-1`) y **no** quedan cubiertos: no se declaran, asi que no hacen
+    falta. Si algun dia hay que leerlos, es otra tarea y con su propia prueba.
+    """
+    start = text.find(f"{year} FOMC Meetings")
+    if start < 0:
+        return ()
+    block = text[start + len(f"{year} FOMC Meetings") :]
+    following = re.search(r"\b\d{4} FOMC Meetings\b", block)
+    # La fuente cierra cada año con una **nota** que puede nombrar la reunion del año **siguiente**
+    # («Note: A two-day meeting is scheduled for January 25-26, 2028»): sin cortarla, esa fecha se
+    # colaria como si fuera de este año. Se corta por el primero de los dos finales.
+    note = block.find("Note:")
+    stops = [
+        index
+        for index in (following.start() if following is not None else None, note)
+        if index is not None and index >= 0
+    ]
+    if stops:
+        block = block[: min(stops)]
+    plain = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", block))
+
+    days: list[date] = []
+    for month_name, first, next_month, second in _MEETING_RANGE.findall(plain):
+        month = SOURCE_MONTHS.index(month_name) + 1
+        days.append(date(year, month, int(first)))
+        month_2 = SOURCE_MONTHS.index(next_month) + 1 if next_month else month
+        days.append(date(year + 1 if month_2 < month else year, month_2, int(second)))
+    return tuple(sorted(set(days)))
 
 
 def pending_reason(config: FomcCalendarConfig, year: int) -> str | None:
