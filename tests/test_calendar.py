@@ -330,9 +330,10 @@ def test_124_the_declared_calendar_declares_its_source_date_and_meetings() -> No
     config = load_fomc_calendar()
     assert config is not None, f"falta el artefacto {DEFAULT_FOMC_CALENDAR_PATH}"
     assert config.source.startswith("https://www.federalreserve.gov/")
-    assert config.verified_on == date(2026, 10, 3)
+    assert config.verified_on == date(2026, 10, 4)
     assert config.tentative_note.strip(), "la fuente avisa de que las fechas son provisionales"
     assert len(config.meetings[2027]) == 16, "las ocho reuniones de 2027, con sus dos dias"
+    assert len(config.meetings[2026]) == 16, "y las ocho de 2026, recuperadas en #132"
 
 
 def test_124_an_undeclared_year_is_none_and_not_an_empty_tuple() -> None:
@@ -341,7 +342,7 @@ def test_124_an_undeclared_year_is_none_and_not_an_empty_tuple() -> None:
 
     config = load_fomc_calendar()
     assert config is not None
-    assert fomc_dates_for(config, 2026) is None, "2026 no se pudo verificar y no se inventa"
+    assert fomc_dates_for(config, 2030) is None, "2030 no esta declarado y no se inventa"
     declared = fomc_dates_for(config, 2027)
     assert declared is not None
     assert list(declared) == sorted(set(declared)), "sin repetidas y en orden"
@@ -378,22 +379,21 @@ def test_124_a_year_declared_without_meetings_is_rejected(tmp_path: Path) -> Non
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# #132 · El hueco declarado como dato: 2026 pendiente, con su motivo y su fecha
+# #132 · El año que faltaba: recuperado de la fuente y declarado
 # ─────────────────────────────────────────────────────────────────────────────
-def test_132_the_undeclared_year_is_declared_as_pending_with_its_reason() -> None:
-    """«No está declarado» y «no está declarado **por esto**» no son lo mismo (tarea #132)."""
+def test_132_2026_is_now_declared_with_its_sixteen_days() -> None:
+    """El año que quedaba pendiente está declarado, con sus ocho reuniones y sus dos días (#132)."""
     from cfdtrader.data.calendar import fomc_dates_for, load_fomc_calendar, pending_reason
 
     config = load_fomc_calendar()
     assert config is not None
-    assert fomc_dates_for(config, 2026) is None, (
-        "2026 no se pudo recuperar: no se inventa ninguna fecha"
-    )
-    reason = pending_reason(config, 2026)
-    assert reason is not None and reason.strip(), "el hueco tiene que traer su motivo"
-    assert "seccion" in reason or "corta" in reason, "el motivo dice **qué** falló"
-    assert config.pending[2026].attempted_on == date(2026, 10, 4), "el intento queda fechado"
-    assert pending_reason(config, 2027) is None, "2027 está declarado: no hay nada pendiente"
+    declared = fomc_dates_for(config, 2026)
+    assert declared is not None, "2026 sigue siendo «nadie lo ha declarado»: no es lo que toca"
+    assert len(declared) == 16, "las ocho reuniones, con sus dos dias"
+    assert list(declared) == sorted(set(declared)), "sin repetidas y en orden"
+    assert declared[0] == date(2026, 1, 27) and declared[-1] == date(2026, 12, 9)
+    assert pending_reason(config, 2026) is None, "no puede estar declarado y pendiente a la vez"
+    assert config.pending == {}, "y no queda ningun año pendiente"
 
 
 def test_132_a_year_declared_and_pending_at_once_is_rejected(tmp_path: Path) -> None:

@@ -9,46 +9,50 @@
 # La propia Fed advierte —y por eso está copiado aquí— que las fechas son **provisionales** hasta
 # la reunión inmediatamente anterior.
 #
-# ⚠️ **2026 NO está declarado en `meetings`, y no es un olvido.** Su sección no se pudo recuperar
-# de la fuente. El **2026-10-04** se intentó por tres vías y las tres fallaron sin ambigüedad:
+# Cómo se recuperó la sección de 2026 (2026-10-04). Los **lectores** de página se cortan antes de
+# 2026 —la página (167 KB) no cabe entera y 2026 cae en el hueco; probados dos lectores— y las rutas
+# por año dan **404** (comprobado también en el índice de URLs de Wayback, que confirma que **no**
+# existe una página por año). Lo que sí funciona es **pedir la página y parsearla en local**: 165.456
+# bytes, con el bloque de 2026 entero. La conclusión es que el problema era el lector, no la fuente.
 #
-#   1. la página completa (167 KB): el lector trunca el centro y la sección de 2026 cae en el hueco;
-#   2. la misma página con un lector de texto (64 KB): trunca a 50 KB y 2026 cae en el mismo hueco;
-#   3. rutas por año (`fomchistorical2025.htm`, `fomchistorical2026.htm`) y el índice de notas de
-#      prensa por año: **404**.
-#
-# **No se inventa ninguna fecha.** El hueco se declara como **dato** en `pending` —con su motivo y
-# la fecha del intento—, no como un comentario: así el aviso del camino diario lo **nombra** y viaja
-# al `manifest`, en vez de dejar un genérico que se lee como «hoy no hay FOMC».
-#
-# **Procedimiento para reintentarlo** (tarea #132): (1) leer la fuente con un lector que no trunque
-# por el centro, o pedirla por tramos; (2) o que el propietario aporte las fechas desde la fuente
-# —precedente: la tabla de costes del bróker, `plan.md` §3.3— y se declaren con su procedencia.
+# Contraste independiente: las ocho reuniones de 2026 coinciden (a) con la lista que aportó el
+# propietario el 2026-10-04 y (b) con el último dato publicado en FRED, que fecha la reunión de
+# septiembre el **2026-09-16**, coherente con «September 15-16».
 #
 # Y la regla que sostiene todo esto: un año **ausente** produce un aviso visible, nunca un conjunto
 # vacío silencioso: «hoy no hay FOMC» y «nadie ha declarado el calendario» son cosas distintas y el
-# camino diario tiene que poder distinguirlas.
+# camino diario tiene que poder distinguirlas. Si un año no se puede recuperar, se declara en
+# `pending` con su motivo —y el aviso lo **nombra**— en vez de inventarle una fecha.
 
 version: 1
 source: https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm
-verified_on: 2026-10-03
+verified_on: 2026-10-04
 tentative_note: >-
   Each meeting date is tentative until confirmed at the meeting immediately preceding it.
-
-# Años que se intentaron recuperar y **no** se pudieron declarar. No son «años sin reuniones»: son
-# años cuyo calendario **nadie ha declarado**.
-pending:
-  2026:
-    reason: >-
-      la extracción de la fuente se corta antes de la sección de 2026: probados dos lectores (página
-      completa y lector de texto) y tres rutas alternativas, todas sin la sección o con 404
-    attempted_on: 2026-10-04
 
 # Días de reunión por año: cada año lleva **las ocho reuniones** con sus dos días, tal como la Fed
 # las publica. Decidir si bloquea sólo el día del comunicado (el segundo, 14:00 ET) o también el
 # primero es una decisión de estrategia (`plan.md` §19), no de este artefacto: aquí se declara lo
 # que la fuente dice.
 meetings:
+  2026:
+    # Las ocho reuniones de 2026, con sus dos días, leídas del bloque de la fuente el 2026-10-04.
+    - 2026-01-27
+    - 2026-01-28
+    - 2026-03-17
+    - 2026-03-18
+    - 2026-04-28
+    - 2026-04-29
+    - 2026-06-16
+    - 2026-06-17
+    - 2026-07-28
+    - 2026-07-29
+    - 2026-09-15
+    - 2026-09-16
+    - 2026-10-27
+    - 2026-10-28
+    - 2026-12-08
+    - 2026-12-09
   2027:
     - 2027-01-26
     - 2027-01-27

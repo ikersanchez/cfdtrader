@@ -774,9 +774,9 @@ def test_main_emits_the_recommendation_state(
     assert "ev_neto_pct: null" in captured.out
     assert "gate_sha256: sha256:" in captured.out
     assert "no hay edge demostrado" in captured.out
-    # 2026 no esta declarado en `config/fomc_calendar.yaml`: el camino diario lo dice en voz alta
-    # en vez de pasar un conjunto vacio en silencio (#124). Era `captured.err == ""` antes.
-    assert "no esta declarado en el calendario de FOMC" in captured.err
+    # 2026 **ya esta declarado** (tarea #132): el aviso **desaparece**. Era
+    # `assert "..." in captured.err` mientras el año estaba pendiente, y `err == ""` antes de #124.
+    assert "no esta declarado en el calendario de FOMC" not in captured.err
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -809,18 +809,42 @@ def _journal_row(journal_root: Path) -> dict[str, object]:
     return Journal(journal_root).read_decision(JOURNAL_DATE)
 
 
-def test_132_the_aviso_names_the_pending_year_and_its_reason() -> None:
-    """#132: el aviso no dice solo «falta el calendario», dice **por que** falta y desde cuando."""
+def test_132_a_declared_year_does_not_warn_and_a_pending_one_is_named(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#132/#114: declarado → sin aviso; pendiente → aviso que **nombra** el hueco y su fecha."""
+    from cfdtrader.data.calendar import FomcCalendarConfig, PendingYear
+
     dates, note, declared = run_daily._declared_fomc_dates(2026)  # pyright: ignore[reportPrivateUsage]
+    assert len(dates) == 16, "2026 esta declarado con sus ocho reuniones"
+    assert declared is True
+    assert "pendiente" not in note
 
-    assert dates == () and declared is False
-    assert "no esta declarado en el calendario de FOMC" in note, (
-        "la frase que ya existia se conserva"
+    pending = FomcCalendarConfig(
+        version=1,
+        source="https://example.invalid/fomc",
+        verified_on=date(2026, 10, 4),
+        tentative_note="tentative",
+        pending={
+            2030: PendingYear(
+                reason="la fuente se corta antes de 2030", attempted_on=date(2026, 10, 4)
+            )
+        },
     )
-    assert "pendiente" in note, "el hueco declarado tiene que **nombrarse**"
-    assert "2026-10-04" in note, "y con la fecha del intento"
 
-    _, generic, _ = run_daily._declared_fomc_dates(2030)  # pyright: ignore[reportPrivateUsage]
+    def _pending_config(path: Path | str | None = None) -> FomcCalendarConfig:
+        """El calendario pautado: se prueba el **aviso**, no la lectura del fichero."""
+        return pending
+
+    monkeypatch.setattr(run_daily, "load_fomc_calendar", _pending_config)
+
+    dates, named, declared = run_daily._declared_fomc_dates(2030)  # pyright: ignore[reportPrivateUsage]
+    assert dates == () and declared is False
+    assert "no esta declarado en el calendario de FOMC" in named, "la frase de #114 se conserva"
+    assert "pendiente" in named and "2026-10-04" in named, "con la fecha del intento"
+    assert "se corta antes de 2030" in named, "el motivo declarado viaja al aviso"
+
+    _, generic, _ = run_daily._declared_fomc_dates(2040)  # pyright: ignore[reportPrivateUsage]
     assert "pendiente" not in generic, "un año sin intento declarado no finge que lo hubo"
 
 
@@ -2202,8 +2226,8 @@ def test_a3_a_market_closed_day_is_a_justified_nothing_in_the_journal(
         assert "no_recommendation" not in captured.out, session
         assert "direccion: LONG" not in captured.out, session
         assert "direccion: SHORT" not in captured.out, session
-        # 2026 no esta declarado en `config/fomc_calendar.yaml`: el aviso sale en voz alta (#124).
-        assert "no esta declarado en el calendario de FOMC" in captured.err, session
+        # 2026 **ya esta declarado** (#132): el aviso de #124 ya no sale para ese año.
+        assert "no esta declarado en el calendario de FOMC" not in captured.err, session
 
         record = read_decision(journal_root, session)
         assert record["status"] == "recommendation"
@@ -2311,8 +2335,8 @@ def test_a6_a_half_session_is_a_justified_nothing(
     assert "direccion: NOTHING" in captured.out
     assert "bloqueo: 18:media_sesion" in captured.out
     assert "no_recommendation" not in captured.out
-    # 2026 no esta declarado en `config/fomc_calendar.yaml`: el aviso sale en voz alta (#124).
-    assert "no esta declarado en el calendario de FOMC" in captured.err
+    # 2026 **ya esta declarado** (#132): el aviso de #124 ya no sale para ese año.
+    assert "no esta declarado en el calendario de FOMC" not in captured.err
 
     record = read_decision(journal_root, STALE_SESSION)
     assert record["status"] == "recommendation"
@@ -2351,8 +2375,8 @@ def test_a8_observation_mode_is_not_an_actionable_hint(
     assert "reincorporacion" in captured.out
     assert "5 de 5" in captured.out
     assert "no_recommendation" not in captured.out
-    # 2026 no esta declarado en `config/fomc_calendar.yaml`: el aviso sale en voz alta (#124).
-    assert "no esta declarado en el calendario de FOMC" in captured.err
+    # 2026 **ya esta declarado** (#132): el aviso de #124 ya no sale para ese año.
+    assert "no esta declarado en el calendario de FOMC" not in captured.err
 
     record = read_decision(journal_root, NEXT_SESSION)
     assert record["status"] == "recommendation"
@@ -2677,8 +2701,8 @@ def test_124_a_declared_year_reaches_the_gate_and_an_undeclared_one_is_announced
     assert "federalreserve.gov" in note and "verificado" in note
     assert capsys.readouterr().err == "", "un año declarado no avisa de nada"
 
-    empty, absence, is_declared = _DECLARED_FOMC(2026)
-    assert empty == () and is_declared is False
+    events, absence, is_declared = _DECLARED_FOMC(2030)
+    assert events == () and is_declared is False
     assert "no esta declarado" in absence
     assert "regla 17" in absence, "el aviso dice que la regla 17 no puede dispararse"
 
