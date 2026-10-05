@@ -108,6 +108,7 @@ def test_a2_the_quantified_assumption_derives_exactly_and_is_still_assumed() -> 
     assert quantified.is_measurement is False
     assert quantified.r_pct == SCENARIO_R_PCT
     assert quantified.pct_of_notional == EXPECTED_SLIPPAGE_PCT
+    assert quantified.pct_of_r is not None and quantified.r_pct is not None
     assert quantified.pct_of_notional == quantified.pct_of_r * quantified.r_pct / Decimal(100)
     assert quantified.decided_on == "2026-09-18"
     # El marcador de la decision de #60 es el propio `r_pct`: no hay campo nuevo que se pueda
@@ -181,7 +182,7 @@ def test_a6_a7_the_declared_basis_decides_and_publishes_the_sensitivity() -> Non
     assert output.ev_decision_pct == output.ev_declared_pct
     assert output.ev_decision_pct > params.ev_threshold_pct  # type: ignore[operator]
     assert output.ev_net_is_sensitivity is True
-    assert output.ev_net_pct == output.ev_declared_pct - EXPECTED_SLIPPAGE_PCT
+    assert output.ev_net_pct == output.ev_declared_pct - EXPECTED_SLIPPAGE_PCT  # type: ignore[operator]
     assert output.tier == gate.TIER_A
     assert _codes(output) == {}
     assert "sensibilidad bajo el supuesto declarado" in _rule_detail(output, "9")

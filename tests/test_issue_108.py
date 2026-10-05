@@ -12,9 +12,9 @@ de un artefacto regenerable (``_docs/team/pm.md``, #89/#95/#96).
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 import pytest
 
@@ -45,11 +45,11 @@ def _artifacts() -> list[Path]:
 
 def _issue_values(node: object, key: str | None = None) -> Iterator[str]:
     """Recorre el payload y devuelve los valores de las claves de seguimiento."""
-    if isinstance(node, dict):
-        for child_key, child in node.items():
-            yield from _issue_values(child, child_key)
+    if isinstance(node, Mapping):
+        for child_key, child in cast("Mapping[object, object]", node).items():
+            yield from _issue_values(child, str(child_key))
     elif isinstance(node, list):
-        for item in node:
+        for item in cast("list[object]", node):
             yield from _issue_values(item, key)
     elif isinstance(node, str) and key in ISSUE_KEYS:
         yield node
@@ -59,7 +59,7 @@ def test_108_no_published_artifact_presents_50_as_a_closed_frontier() -> None:
     """Ningun artefacto publicado declara `#50` (cerrada) como frontera pendiente."""
     offenders: dict[str, list[str]] = {}
     for path in _artifacts():
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = cast("Mapping[str, object]", json.loads(path.read_text(encoding="utf-8")))
         hits = [value for value in _issue_values(payload) if CLOSED_FRONTIER in value]
         if hits:
             offenders[path.name] = hits
@@ -70,7 +70,7 @@ def test_108_the_cfd_follow_up_is_107_somewhere() -> None:
     """Algun artefacto publicado declara `#107` como seguimiento del CFD."""
     seen = False
     for path in _artifacts():
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = cast("Mapping[str, object]", json.loads(path.read_text(encoding="utf-8")))
         if any(CFD_FOLLOW_UP in value for value in _issue_values(payload)):
             seen = True
     assert seen, f"ningun artefacto declara `{CFD_FOLLOW_UP}` como seguimiento del CFD"
@@ -87,13 +87,15 @@ def test_108_the_pipeline_does_not_present_60_as_an_open_blocker() -> None:
     if not pipelines:
         pytest.skip("no hay artefacto del pipeline publicado")
     for path in pipelines:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = cast("Mapping[str, object]", json.loads(path.read_text(encoding="utf-8")))
         net = payload.get("net_metrics")
-        if not isinstance(net, dict):
+        if not isinstance(net, Mapping):
             continue
-        assert net.get("state") != "not_computable", (
-            f"{path.name}: `net_metrics` sigue no computable"
-        )
-        follow_ups = net.get("follow_ups")
+        net_map = cast("Mapping[str, object]", net)
+        state = net_map.get("state")
+        assert state != "not_computable", f"{path.name}: `net_metrics` sigue no computable"
+        follow_ups = net_map.get("follow_ups")
         if isinstance(follow_ups, list):
-            assert "#60" not in follow_ups, f"{path.name} presenta #60 (cerrada) como seguimiento"
+            assert "#60" not in cast("list[object]", follow_ups), (
+                f"{path.name} presenta #60 (cerrada) como seguimiento"
+            )

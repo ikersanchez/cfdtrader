@@ -16,7 +16,7 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, cast
 
 from cfdtrader.analysis import pipeline_report
 from cfdtrader.analysis.pipeline_report import (
@@ -26,6 +26,7 @@ from cfdtrader.analysis.pipeline_report import (
     SCENARIO_R_PCT,
 )
 from cfdtrader.backtest.costs import SlippageParameter, declared_slippage_assumption
+from cfdtrader.backtest.engine import BacktestRun, SessionOutcome
 
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[1]
 SOURCE: Final[Path] = REPO_ROOT / "src" / "cfdtrader" / "analysis" / "pipeline_report.py"
@@ -45,19 +46,22 @@ _STATUS_SKIPPED: Final[str] = "skipped"
 _STATUS_TRADED: Final[str] = "traded"
 
 
-def _outcome(*, gross: float, declared_pct: str, status: str = _STATUS_TRADED) -> SimpleNamespace:
+def _outcome(*, gross: float, declared_pct: str, status: str = _STATUS_TRADED) -> SessionOutcome:
     """Una sesion minima con lo que la derivacion necesita (no hace falta el motor entero)."""
-    return SimpleNamespace(
-        session=date(2026, 9, 17),
-        status=status,
-        gross=gross,
-        cost=SimpleNamespace(c_declared_pct=Decimal(declared_pct)),
+    return cast(
+        "SessionOutcome",
+        SimpleNamespace(
+            session=date(2026, 9, 17),
+            status=status,
+            gross=gross,
+            cost=SimpleNamespace(c_declared_pct=Decimal(declared_pct)),
+        ),
     )
 
 
-def _run(outcomes: list[SimpleNamespace]) -> SimpleNamespace:
+def _run(outcomes: list[SessionOutcome]) -> BacktestRun:
     """Un ``BacktestRun`` minimo: ``_sessions_of_run`` solo recorre ``folds[].sessions``."""
-    return SimpleNamespace(folds=[SimpleNamespace(sessions=tuple(outcomes))])
+    return cast("BacktestRun", SimpleNamespace(folds=[SimpleNamespace(sessions=tuple(outcomes))]))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
