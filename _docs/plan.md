@@ -2,8 +2,8 @@
 
 | Campo | Valor |
 |---|---|
-| **Versión** | **2.14** |
-| **Fecha** | 2026-10-04 |
+| **Versión** | **2.15** |
+| **Fecha** | 2026-10-05 |
 | **Estado** | Diseño — pendiente de ejecutar Fase 0 |
 | **Instrumento** | **SPX500:CFD**, cotizando en el horario de la sesión regular estadounidense; las horas se calculan en `America/New_York` y se presentan en `Europe/Madrid` |
 | **Ámbito** | Decisión de apoyo (*decision support*). La ejecución es siempre manual. |
@@ -1256,6 +1256,28 @@ podía evaluar. El instrumento es un módulo **nuevo**, `analysis/phase2_net.py`
   sigue bloqueado (`phase2_ready = false`) y el `stop` es la **acción de §11.6 sobre el criterio**,
   no un cambio de rumbo del proyecto. `§11.6` **no** se altera.
 
+### 19.14 Arranque de la observación de la Fase 4 (2026-10-05)
+
+✅ **Ejecutado (2026-10-05, tarea #45).** Con `R` decidido (#60) y cableado (#131) y la puerta de
+§16 pre-registrada (#130), la observación de la Fase 4 **arranca** con un módulo nuevo,
+`analysis/paper_trading.py`.
+
+- **Qué hace.** **Recompta** el resultado de cada recomendación **desde lo persistido** —la fila de
+  `journal.decisions` (`trade_date`, `direction`, `stop_pct`, `target_pct`, `cost_pct`) más el
+  almacén de mercado de esa sesión— porque `journal.trades` (§12.5) está reservado a la operación
+  **real** (#47) y en observación queda **vacío**: el resultado no se lee, se recomputa.
+- **El coste es el declarado de §3.3 (#11)**, el mismo que el gate cobró en la decisión: **no** se
+  define un segundo coste.
+- **La puerta, al pie de la letra (§16).** Estadístico = media del retorno neto por sesión de las
+  recomendaciones **emitidas**; referencia = media y **σ** de la serie **declarada** del brazo
+  `coste_declarado` de #28 (`arms.coste_declarado.declared_series`, la comparable con una
+  observación que decide sobre coste declarado, §19.12); regla `|media_paper − media_backtest| >
+  2σ/√N`; con `N < 30` el veredicto es **`not_evaluable`**, nunca un aprobado por silencio.
+- **Valla de honestidad.** El informe declara que **no hay edge demostrado** (Fase 2
+  `not_evaluable`/`fail`, `phase2_ready = false`), que es **carril A** con **ejecución manual** y que
+  `§11.6` **no** se altera. Esto **arranca** la observación, **no** la aprueba: `§11.6` **no** se
+  toca y el carril B sigue bloqueado.
+
 ---
 
 ## 20. Marco regulatorio y fiscal (España) — resumen, no asesoramiento
@@ -1373,3 +1395,4 @@ podía evaluar. El instrumento es un módulo **nuevo**, `analysis/phase2_net.py`
 | 2026-10-04 | **2.12** | 🔌 **#131: el `R` decidido en #60 queda cableado en el camino diario.** El supuesto de *slippage* se **cuantifica** (`declared_slippage_assumption(r_pct=…)`: 20 % de 1,00 % = **20 bp**), el motor de costes deja de publicar `r_pct: null` (`c_total` = `c_declared` + 0,2 %) y el gate verifica la **regla 9** sobre el **coste declarado** (base `declared`, §19.12), publicando el EV bajo el supuesto como **sensibilidad** (`ev_net_is_sensitivity`), **también cuando es negativa**. Los dos `r_pct` —el del escenario y el que cuantifica el supuesto— tienen que **coincidir** o el gate lanza su error de entrada. **§3.3** y **§19.12** dejan de declarar el cableado como pendiente. Cabecera a 2.12 | Sin `R` cableado el `EV` neto era `null`, la regla 9 bloqueaba y la Fase 4 habría observado `N = 0` (#45 ⇒ `not_evaluable`). El supuesto **sigue** siendo un supuesto: medirlo es #62 |
 | 2026-10-04 | **2.13** | 📉 **#133: el informe del pipeline publica el neto bajo el supuesto declarado.** Los tres brazos ganan `net_series` y `net_metrics` —etiquetados `assumed`, `is_measurement: false`, con el valor del supuesto (20 bp) y el `R` de #60— y el bloque `net_metrics` de nivel superior deja de ser `not_computable` y de culpar a #60: los seguimientos pasan a **#62** (medirlo) y **#88** (reemitir el veredicto con las cifras). El neto se **re-deriva** (`c_total = c_declared + 20 bp`): ni el motor ni el gate ni ninguna **decisión** de brazo cambian, y la lectura declarada queda intacta. **§19.12** gana la entrada correspondiente. Cabecera a 2.13 | El `null` no era «no se puede calcular»: era un motivo obsoleto. Publicar la lectura neta **etiquetada** es lo que permite que #88 reemita el veredicto de Fase 2 sin recurrir a la lectura optimista |
 | 2026-10-04 | **2.14** | 🧾 **#88: el veredicto de Fase 2 se reemite sobre la base neta.** Nuevo **§19.13** y módulo `analysis/phase2_net.py` (T29b, hermano de #93): las **nueve** filas de §11.6 se evalúan sobre la base neta bajo el supuesto declarado (20 bp de #64/#60), con la mitad de acierto decidida por `hit_rate_per_trade` (#92) y las tres comparaciones por bootstrap pareado (`liston_b` queda `not_evaluable`: su listón de primera clase es #70). **Resultado medido:** fila principal **`fail`** (`hit_rate_per_trade` 0,3533 con IC [0,2800; 0,4267], Sharpe −2,33 con IC [−3,89; −0,83]), **peor que no operar** (diferencia −0,0570 %, IC [−0,0901; −0,0229]), mejor que *siempre largo* `open→close` (+0,1237 %); agregado **`fail`**, veredicto **`stop`**, `phase2_ready = false`. Se re-deriva el pipeline en vivo porque el artefacto publicado es anterior a #133 (refrescarlo es #108). **§11.6, §19.6 y §19.7 no se tocan** | La base declarada era *inconclusa* y la neta **falla**: publicar la lectura neta etiquetada (#133) obliga a reemitir el veredicto con ella. El supuesto **sigue** siendo un supuesto (`is_measurement: false`): medirlo es #62 |
+| 2026-10-05 | **2.15** | 🟢 **#45: arranca la observación de la Fase 4.** Nuevo **§19.14** y módulo `analysis/paper_trading.py`: el resultado de cada recomendación se **recomputa** desde `journal.decisions` + el almacén (nunca se lee `journal.trades`, reservado a #47) con el coste **declarado** de §3.3 (#11), y la puerta de §16 se aplica al pie de la letra —estadístico = media del retorno neto por sesión de las recomendaciones emitidas; referencia = media y **σ** de la **serie declarada** de `arms.coste_declarado` de #28; regla `|Δ| > 2σ/√N`; `N < 30 ⇒ not_evaluable`—. El informe declara la **valla de honestidad** (sin edge, carril A, ejecución manual). **`§11.6` no se toca** y el carril B sigue bloqueado. Cabecera a 2.15 | Con `R` cableado (#131) y la puerta pre-registrada (#130), el reloj de observación ya puede arrancar; el arnés que recalcula la serie es lo que faltaba para que el veredicto del *paper* sea computable desde lo persistido |
