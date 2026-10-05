@@ -1515,21 +1515,22 @@ def test_the_real_store_reproduces_the_declared_coverage() -> None:
     result = label_history(store=Store(REPOSITORY_DATA), now=datetime(2026, 9, 18, tzinfo=UTC))
     coverage = _dict(result.inputs["intraday_coverage"])
     sigma = _dict(result.inputs["sigma"])
-    assert _number(coverage["sessions"]) == 60
+    assert _number(coverage["sessions"]) == 72
     assert "2026-06-24" in str(coverage["first_bar_utc"])
     assert _number(coverage["bars_at_0845_et"]) == 0
-    assert _number(coverage["stored_daily_sessions"]) == 5460
+    assert _number(coverage["stored_daily_sessions"]) == 5473
     assert _number(_dict(_dict(result.sample["reasons"])[REASON_NO_FORECAST])["count"]) == 505
     assert _number(sigma["warmup_sessions"]) == MIN_TRAIN
     assert result.forecast_candidate == "garch"
     assert 0.97 < _number(result.sample["fallback_share"]) < 0.99
     assert _number(result.sample["labelled"]) > 2600
     assert len(result.limitations) >= 7
-    assert _number(_dict(result.inputs["clean_sample"])["clean_sessions"]) == 3192
+    # Recuento del almacen **vivo**: se actualiza con el refresco de #45 (2026-10-05, ver #135).
+    assert _number(_dict(result.inputs["clean_sample"])["clean_sessions"]) == 3205
     # A6/A7 sobre el almacen real: el `open` diario **es** el *print* de la subasta.
     auction = _dict(_dict(report_payload(result)["entry_price"])["auction_verification"])
     assert auction["status"] == "ok"
-    assert _number(auction["sessions_compared"]) == 59
-    assert _number(auction["identical"]) == 59
+    assert _number(auction["sessions_compared"]) == 60
+    assert _number(auction["identical"]) == 60
     assert _number(auction["max_abs_diff_bp"]) == 0.0
     assert auction["mismatches"] == []

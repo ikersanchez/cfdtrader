@@ -594,16 +594,18 @@ def test_a6_clean_rule_reasons_are_declared() -> None:
 def test_a7_reconciliation_without_filling_gaps(real_report: BacktestReport) -> None:
     """A7: las cifras reales de la reconciliacion, incluida la identidad completa."""
     reconciliation = _block(real_report, "reconciliation")
-    assert reconciliation["raw_market_daily_rows"] == 5460
-    assert reconciliation["rows_with_previous_session"] == 5459
+    # Recuentos del almacen **vivo**: se actualizan con el refresco de #45 (ingesta del 2026-10-05).
+    # Son cifras medidas, no un digest: si el almacen crece, cambian (ver #135).
+    assert reconciliation["raw_market_daily_rows"] == 5473
+    assert reconciliation["rows_with_previous_session"] == 5472
     assert reconciliation["clean_from"] == "2014-01-01"
-    assert reconciliation["clean_sessions"] == 3192
-    assert reconciliation["sessions_since_cutoff"] == 3195
+    assert reconciliation["clean_sessions"] == 3205
+    assert reconciliation["sessions_since_cutoff"] == 3208
     assert reconciliation["excluded_by_clean_rule"] == 3
     assert reconciliation["stale_open_in_window"] == 3
-    assert reconciliation["no_forecast"] == 505
-    assert reconciliation["labelled"] == 2687
-    expected = "3195 = 3 (stale_open) + 505 (no_forecast) + 2687 (etiquetadas)"
+    assert reconciliation["no_forecast"] == 517
+    assert reconciliation["labelled"] == 2688
+    expected = "3208 = 3 (stale_open) + 517 (no_forecast) + 2688 (etiquetadas)"
     assert reconciliation["identity"] == expected
     assert reconciliation["no_forecast_reason"]
 
