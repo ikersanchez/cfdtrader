@@ -1281,7 +1281,7 @@ def test_a28_declared_limits_block(real_report: BacktestReport) -> None:
         "series_id": "^GSPC",
         "proxy_of": PRICE_PROXY_OF,
         "is_proxy": True,
-        "issue": "#50",
+        "issue": "#107",
     }
     assert PRICE_PROXY_OF == "SPX500:CFD"
     assert limits["financing_cut"] is None
@@ -1470,7 +1470,7 @@ def test_a33_machine_readable_boundaries() -> None:
         "#15",
         "#18",
         "#27",
-        "#50",
+        "#107",
         "#59",
         "#60",
         "#62",

@@ -33,7 +33,7 @@ reimplementarla.
 Limitación que el informe declara en vez de esconder: esto se mide sobre
 **``^GSPC``**, que es el subyacente, no el ``SPX500:CFD``. El CFD lo replica con
 diferencial y financiación, así que **el signo de la conclusión se traslada, la
-magnitud no**. No hay fuente del CFD (issue #50) y sustituirlo en silencio por
+magnitud no**. No hay fuente del CFD (issue #107) y sustituirlo en silencio por
 el índice es exactamente lo que la tarea #3 prohíbe.
 """
 
@@ -327,7 +327,7 @@ def decompose(frame: pl.DataFrame, *, series_id: str, source: str, as_of: dateti
         limitations=(
             "Medido sobre el índice (^GSPC), que es el subyacente del CFD y no el CFD: "
             "el signo de la conclusión se traslada, la magnitud no (diferencial y financiación).",
-            "No existe fuente del intradía ni del bid/ask del SPX500:CFD (issue #50); "
+            "No existe fuente del intradía ni del bid/ask del SPX500:CFD (issue #107); "
             "la tarea #3 prohíbe sustituirlo en silencio por ^GSPC o ES=F.",
             "El `open` diario del índice en Yahoo es el **cierre anterior repetido** en parte "
             "del histórico (96 % de las sesiones de 2005, 0 % desde 2016): en esas sesiones el "

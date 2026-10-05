@@ -336,7 +336,7 @@ def test_the_report_is_written_with_the_verdict_and_the_declared_limits(tmp_path
 
     markdown = markdown_path.read_text(encoding="utf-8")
     assert "El drift está en el tramo nocturno" in markdown
-    assert "#50" in markdown  # la ausencia de fuente del CFD se declara, no se esconde
+    assert "#107" in markdown  # la ausencia de fuente del CFD se declara, no se esconde
     assert "Puerta de la Fase 0" in markdown
 
 

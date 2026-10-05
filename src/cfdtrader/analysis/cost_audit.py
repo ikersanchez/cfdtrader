@@ -1543,7 +1543,7 @@ LIMITATIONS: Final[tuple[str, ...]] = (
     "el nocional se liquida en USD (declaración del usuario) y va con fuente y motivo; nunca "
     "es el sustituto de un desconocido.",
     "**El spread y el tracking difference solo están medidos si alguien los anota a mano**: "
-    "no hay fuente pública gratuita del bid/ask del `SPX500:CFD` (#50), así que la plantilla "
+    "no hay fuente pública gratuita del bid/ask del `SPX500:CFD` (#107), así que la plantilla "
     "vacía es el estado normal hasta que un humano la rellene.",
 )
 

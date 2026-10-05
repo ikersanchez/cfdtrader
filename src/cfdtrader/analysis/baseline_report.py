@@ -1191,7 +1191,7 @@ def _limits_block() -> dict[str, object]:
         "costs": "declared_not_measured",
         "slippage_state": "assumed (#64), nunca medido",
         "financing_cut": "sin verificar (#59)",
-        "prices": "proxy de ^GSPC (#50)",
+        "prices": "proxy de ^GSPC (#107)",
         "threshold": DECISION_THRESHOLD,
         "threshold_issue": "#27 (umbral economico y sizing)",
         "llm_overlay": "disabled",

@@ -1201,7 +1201,7 @@ FOLLOW_UPS: Final[tuple[dict[str, str], ...]] = (
         ),
     },
     {
-        "issue": "#50",
+        "issue": "#107",
         "topic": "fuente del `SPX500:CFD`",
         "why": (
             "los precios son *proxy* de `^GSPC` mientras no haya fuente del CFD; el signo de las "
@@ -1574,7 +1574,7 @@ def _payload(
             "`fail` y la tabla es de coste declarado (`basis: declared_cost`)",
             "la mitad (b) es `not_evaluable`: no se ha medido el *slippage* ni decidido `R`, "
             "asi que no hay comparacion neta que hacer",
-            "los precios son *proxy* de `^GSPC` mientras no haya fuente del `SPX500:CFD` (#50) y "
+            "los precios son *proxy* de `^GSPC` mientras no haya fuente del `SPX500:CFD` (#107) y "
             "el corte de financiacion sigue sin verificar (#59)",
             "el no-*look-ahead* se audita mutando una sesion posterior y re-corriendo el motor "
             "sobre una copia en memoria; la suite de integridad completa es #17",

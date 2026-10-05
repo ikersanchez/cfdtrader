@@ -24,7 +24,7 @@ Qué **no** decide, y por tanto no puede inventar:
   ``state: "unresolved"``. En particular, ``R`` sin decidir deja la mitad (b) en
   ``not_evaluable`` **aunque el *slippage* llegue a medirse**;
 - la medición del ***slippage*** real (10-15 ejecuciones a la apertura -> #62), la fuente
-  de bid/ask del CFD (-> #50) y el arreglo del `open` repetido del índice (-> #52);
+  de bid/ask del CFD (-> #107) y el arreglo del `open` repetido del índice (-> #52);
 - el **precio de entrada** ya **no** figura entre las decisiones abiertas: el propietario
   lo **cerró** el **2026-09-18** (el `open` de la subasta de apertura de 09:30 ET, fuente
   ``session_open``, que **coincide** con ``plan.md`` §4.1). Su cierre se publica en
@@ -177,7 +177,7 @@ GATE_A_LIMITATIONS: Final[tuple[dict[str, str], ...]] = (
             "la medición es sobre `^GSPC`, el subyacente, y **no** sobre el `SPX500:CFD`: el "
             "signo de la conclusión se traslada, la magnitud no (diferencial y financiación)"
         ),
-        "issue": "#50",
+        "issue": "#107",
     },
     {
         "limitation": (
@@ -199,10 +199,10 @@ GATE_A_LIMITATIONS: Final[tuple[dict[str, str], ...]] = (
         "limitation": (
             "el precio de entrada del etiquetado es el `open` de la subasta de apertura del "
             "**índice** `^GSPC` (**decisión cerrada** el 2026-09-18, #61): no es la cotización "
-            "del `SPX500:CFD` (#50) y los números publicados **heredan** el *look-ahead* de la "
+            "del `SPX500:CFD` (#107) y los números publicados **heredan** el *look-ahead* de la "
             "muestra completa de #7 (#63), así que **no** son una validación de la estrategia"
         ),
-        "issue": "#50, #63",
+        "issue": "#107, #63",
     },
     {
         "limitation": (
@@ -404,7 +404,7 @@ WHAT_WOULD_CHANGE_THE_VERDICT: Final[tuple[dict[str, str], ...]] = (
         ),
         "half": "a",
         "owner": "#9 (dueño de este informe) con #6 (estudio del drift)",
-        "issues": "#50, #52",
+        "issues": "#107, #52",
     },
     {
         "condition": (
@@ -1961,7 +1961,7 @@ def consolidate(inputs: Phase0Inputs, *, now: datetime) -> Phase0Report:
             "missing": [
                 {
                     "what": "medir el drift sobre el CFD con el `open` real (mitad a)",
-                    "issue": "#50 y #52",
+                    "issue": "#107 y #52",
                 },
                 {
                     "what": "medir el *slippage* de ejecución y cerrar `R` (mitad b)",

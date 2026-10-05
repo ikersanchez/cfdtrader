@@ -235,8 +235,8 @@ LIMITATIONS: Final[tuple[str, ...]] = (
     "**El diferencial se cobra constante**: el ensanchamiento por tramo de sesión y por "
     "tamaño que #8 mide **no** se cobra aquí, con el sesgo que eso introduce (#66).",
     "**El precio de ejecución real (bid/ask del `SPX500:CFD`) y la fuente intradía son "
-    "#50**, y la verificación del diferencial sobre datos limpios es #52: aquí no se lee "
-    "ningún precio.",
+    "#107** (la decisión del *proxy* es #50), y la verificación del diferencial sobre datos "
+    "limpios es #52: aquí no se lee ningún precio.",
     "**Las decisiones declaradas aquí se documentan en `plan.md` y `tech_stack.md` desde "
     "#65** (incluida la frontera «#8 mide / #11 cobra»).",
 )
@@ -249,7 +249,7 @@ FOLLOW_UPS: Final[tuple[dict[str, str], ...]] = (
         "why": "hoy se cobra el declarado constante; #8 ya sabe medir el ensanchamiento",
     },
     {
-        "issue": "#50",
+        "issue": "#107",
         "topic": "fuente intradía y bid/ask real del `SPX500:CFD`",
         "why": "traería el diferencial asimétrico entrada/salida y el real por tramo",
     },
@@ -605,7 +605,7 @@ class CostModel(BaseModel):
 
     ``spread_entry_pct`` y ``spread_exit_pct`` son **dos** mitades: el diferencial se cobra
     media al entrar y media al salir. Un diferencial **asimétrico** es declarable solo si
-    cada mitad lleva su ``source`` (el bid/ask real del CFD es #50). Un ``fx_pct`` distinto
+    cada mitad lleva su ``source`` (el bid/ask real del CFD es #107). Un ``fx_pct`` distinto
     de 0 exige ``fx_source`` y ``fx_reason`` (la exposición de divisa es #27).
     """
 
@@ -655,7 +655,7 @@ class CostModel(BaseModel):
             raise CostModelError(
                 "model.spread_entry_source/model.spread_exit_source: un diferencial asimétrico "
                 "(spread_entry_pct != spread_exit_pct) exige la `source` de **cada** mitad; el "
-                "bid/ask real del CFD es #50"
+                "bid/ask real del CFD es #107"
             )
         if self.fx_pct != Decimal(0) and not (self.fx_source and self.fx_reason):
             raise CostModelError(
@@ -1241,7 +1241,7 @@ def _spread_block(model: CostModel, notional_usd: Decimal) -> dict[str, Any]:
         },
         "asymmetry_rule": (
             "un diferencial asimétrico (entrada != salida) es declarable **solo** si cada mitad "
-            "lleva su `source`; el bid/ask real del `SPX500:CFD` es #50 y queda fuera de alcance"
+            "lleva su `source`; el bid/ask real del `SPX500:CFD` es #107 y queda fuera de alcance"
         ),
     }
 

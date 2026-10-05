@@ -65,7 +65,7 @@ registro declarado ``ENTRY_PRICE_SOURCES``:
   **decision del propietario del 2026-09-18** (registrada en la decision abierta 6 →
   **#61**) y **coincide** con lo que ya prescribe ``plan.md`` §4.1, que **no** se
   reescribe. Sigue siendo un **proxy declarado**: el precio usado es el del indice
-  ``^GSPC``, **no** la cotizacion del ``SPX500:CFD`` (**#50**).
+  ``^GSPC``, **no** la cotizacion del ``SPX500:CFD`` (**#107**).
 - ``t0_snapshot_0845_et`` — la **propuesta anterior del propietario, descartada el
   2026-09-18** (snapshot congelado de ``t0``, 08:45 ET). Sigue **declarada** a
   proposito: es la prueba de que **no hay *fallback* silencioso**. **No disponible**:
@@ -111,9 +111,9 @@ Limitaciones
 ------------
 
 Las declaradas, con los numeros medidos, van en el artefacto (``limitations``): el
-intradia solo cubre ~60 sesiones (``#50``, ``#57``), el precio de entrada es el
+intradia solo cubre ~60 sesiones (``#107``, ``#57``), el precio de entrada es el
 ``open`` de la subasta de ``^GSPC`` —decision ya cerrada, con anclaje **proxy** del
-CFD (``#50``)—, los numeros heredan el *look-ahead* de la muestra completa de #7
+CFD (``#107``)—, los numeros heredan el *look-ahead* de la muestra completa de #7
 (``#63``) y la etiqueta no lleva spread ni
 *slippage* por operacion (``#11``), la muestra usa el corte limpio de ``#52``, el
 calentamiento de #7 queda sin etiqueta, las medias sesiones se etiquetan pero el gate
@@ -203,7 +203,7 @@ __all__ = [
     "write_outputs",
 ]
 
-#: Serie cuyo intradia se usa para ordenar las barreras. El CFD no tiene fuente (#50).
+#: Serie cuyo intradia se usa para ordenar las barreras. El CFD no tiene fuente (#107).
 SERIES_ID: Final[str] = MARKET_SERIES_ID
 
 #: Intervalo exigido: solo ``^GSPC`` de 5 minutos (A13). ``ES=F`` **no** se usa.
@@ -305,7 +305,7 @@ ENTRY_PRICE_OWNER_DECISION: Final[str] = (
 ENTRY_PRICE_PREVIOUS_DECISION: Final[str] = "t0 a las 08:45 ET (snapshot congelado)"
 #: El precio usado es el del **indice**, no el del CFD: es un *proxy* declarado (A3).
 ENTRY_PRICE_PROXY_OF: Final[str] = "SPX500:CFD"
-ENTRY_PRICE_PROXY_ISSUE: Final[int] = 50
+ENTRY_PRICE_PROXY_ISSUE: Final[int] = 107
 
 #: Tolerancia declarada de la verificacion de la subasta: el `open` diario y la primera
 #: barra de las 09:30 ET deben coincidir dentro de **1 bp** (A6, procedencia #64). No
@@ -1262,7 +1262,7 @@ def label_history(
     coverage["daily_sessions_with_ohlc"] = int(str(sample_summary["sessions"]))
     coverage["daily_sessions"] = coverage["stored_daily_sessions"]
     coverage["bars_at_0845_et"] = _bars_at_0845_et(store)
-    coverage["follow_up_issues"] = [50, 57]
+    coverage["follow_up_issues"] = [107, 57]
 
     # A6/A7: verificacion del anclaje contra la primera barra de las 09:30 ET. Es de
     # **solo lectura**: no cambia ninguna etiqueta ni excluye ninguna sesion.
@@ -1359,7 +1359,7 @@ def label_history(
         "unidades: **fraccion** en el calculo (sigma, `target_pct`, `stop_pct`, `c` y los "
         "retornos) y **bp** (x 10^4) al informar, como `analysis/drift.py`",
         f"solo se usa el intradia de `{SERIES_ID}` a {INTERVAL}: `{INTRADAY_UNUSED_SERIES}` no "
-        "ordena barreras (A13; la fuente intradia y su compra son #50)",
+        "ordena barreras (A13; la fuente intradia y su compra son #107)",
         "cuando una barra toca las dos barreras el orden es desconocido y la etiqueta es la "
         "**adversa** en las dos direcciones: el sesgo es conservador por construccion",
         "`p*` y el veredicto de Fase 0 son de #9: aqui no se calculan",
@@ -1396,12 +1396,12 @@ def _limitations(
     return (
         f"solo {intraday_sessions} sesiones del almacen tienen intradia de `{SERIES_ID}` 5m, asi "
         f"que {fallback_share:.1%} de las {labelled} etiquetas vienen del respaldo diario "
-        "**conservador**: `p_target` es una **cota inferior** (#50 fuente intradia; #57 RV "
+        "**conservador**: `p_target` es una **cota inferior** (#107 fuente intradia; #57 RV "
         "intradia)",
         "el precio de entrada usado es el `open` de la subasta de apertura (09:30 ET) de "
         "`^GSPC`: la decision del propietario esta **cerrada** (2026-09-18) y **coincide** con "
         "`plan.md` §4.1, que **no** se reescribe; el precio sigue siendo el del **indice** y "
-        "**no** el del **CFD** (#50; registro de la decision en #61), y los numeros publicados "
+        "**no** el del **CFD** (#107; registro de la decision en #61), y los numeros publicados "
         "**heredan el *look-ahead* de la muestra completa de #7** (#63) y **no** son una "
         "validacion de la estrategia",
         "la etiqueta es de `^GSPC`, **no** del CFD, y **no** lleva spread ni *slippage* por "
@@ -1886,7 +1886,7 @@ def render_markdown(run: LabelsRun) -> str:
         "# Etiquetado tri-barrera (tarea #10)",
         "",
         f"- **Serie:** `{run.series_id}` (intradia `{run.interval}`) — **etiqueta de indice**",
-        "- **no del CFD**: las barreras se miden con el indice, no con el CFD (#50)",
+        "- **no del CFD**: las barreras se miden con el indice, no con el CFD (#107)",
         f"- **Calculado:** {run.as_of.isoformat()} · candidato de #7: `{run.forecast_candidate}` "
         f"(`{run.selection_verdict}`) · `k` persistido = {run.k_sigma}",
         f"- **Sesiones etiquetadas:** {labelled} ({full_sessions} completas, "
@@ -1988,7 +1988,7 @@ def render_markdown(run: LabelsRun) -> str:
         f"**{coverage['daily_sessions']}** sesiones diarias almacenadas. "
         f"`{INTRADAY_UNUSED_SERIES}` se cuenta "
         f"({unused['sessions']} sesiones) pero "
-        "**no** ordena barreras (#50).",
+        "**no** ordena barreras (#107).",
         f"- Sesiones ordenadas con intradia: **{coverage['ordered_with_intraday']}**; con respaldo "
         f"diario: **{coverage['ordered_with_fallback']}**.",
         f"- **Sesgo declarado:** `{sample['bias']}` — {sample['bias_sentence']}.",

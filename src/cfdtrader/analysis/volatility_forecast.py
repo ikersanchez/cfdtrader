@@ -128,7 +128,7 @@ __all__ = [
     "write_report",
 ]
 
-#: Serie analizada: el subyacente del CFD. El CFD no tiene fuente (#50).
+#: Serie analizada: el subyacente del CFD. El CFD no tiene fuente (#107).
 SERIES_ID: Final[str] = "^GSPC"
 
 #: Serie del VIX, que en el S&P 500 es un índice real y líquido, no un proxy.
@@ -992,7 +992,7 @@ def analyse(
         rank_correlation_note=walk.rank_correlation_note,
         limitations=(
             "Se mide sobre `^GSPC`, **no** sobre el CFD: no hay fuente del bid/ask ni del "
-            "intradía del SPX500:CFD (issue #50).",
+            "intradía del SPX500:CFD (issue #107).",
             "El objetivo es un **proxy** de la varianza, no la varianza observada. La "
             "referencia intradía (RV de barras de 5 min) es la issue #57.",
             "La muestra anterior al corte limpio está contaminada por el artefacto del "

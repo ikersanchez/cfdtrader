@@ -2011,6 +2011,25 @@ def _regeneration_block(
                 ),
             }
         )
+    previous_published = any(
+        cast("bool", row["previous_published_direction_counts"]) for row in rows
+    )
+    traded_rule = (
+        "`delta_traded` es el efecto **medido** del arreglo; el artefacto previo **si** "
+        "publicaba `direction_counts` por brazo, asi que el delta de direcciones tambien es "
+        "comparable brazo a brazo"
+        if previous_published
+        else "`delta_traded` es el efecto **medido** del arreglo: el artefacto previo no "
+        "publicaba `direction_counts`, asi que las direcciones no se pueden diferenciar; "
+        "solo el recuento de operadas (y el sesgo corto corregido) es comparable"
+    )
+    directions_note = (
+        "el artefacto previo de #28 **si** publicaba `direction_counts` por brazo: el delta de "
+        "direcciones es comparable brazo a brazo"
+        if previous_published
+        else "el artefacto previo de #28 no publicaba `direction_counts` por brazo: el sesgo "
+        "corto se veia en el conteo agregado, no en el brazo"
+    )
     return {
         "previous_artifact": previous_name,
         "subject": "#98",
@@ -2019,19 +2038,10 @@ def _regeneration_block(
             "del decididor (no sobre `output.direction`, que el gate de `escenario` devuelve "
             "`nothing` en las 500 sesiones): el lado largo (`p > 0.58`) vuelve a alcanzar el tier A"
         ),
-        "traded_rule": (
-            "`delta_traded` es el efecto **medido** del arreglo: el artefacto previo no "
-            "publicaba `direction_counts`, asi que las direcciones no se pueden diferenciar; "
-            "solo el recuento de operadas (y el sesgo corto corregido) es comparable"
-        ),
+        "traded_rule": traded_rule,
         "rows": rows,
-        "previous_published_directions": any(
-            cast("bool", row["previous_published_direction_counts"]) for row in rows
-        ),
-        "directions_note": (
-            "el artefacto previo de #28 no publicaba `direction_counts` por brazo: el sesgo corto "
-            "se veia en el conteo agregado, no en el brazo"
-        ),
+        "previous_published_directions": previous_published,
+        "directions_note": directions_note,
         "note": (
             "el bloque se **mide** contra el artefacto previo declarado; el `report_sha256` del "
             "informe se recomputa con el bloque dentro"
@@ -2379,7 +2389,7 @@ def _payload(
         "basis": BASIS_DECLARED_COST,
         "is_validation": False,
         "series_id": SERIES_ID,
-        "renamed_series": {"proxy_of": PRICE_PROXY_OF, "issue": "#50"},
+        "renamed_series": {"proxy_of": PRICE_PROXY_OF, "issue": "#107"},
         "universe": _universe_payload(universe, features),
         "plan": _plan_payload(split_plan),
         "model": _model_payload(

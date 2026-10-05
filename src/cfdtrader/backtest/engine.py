@@ -257,7 +257,7 @@ ENGINE_DOES_NOT_DO: Final[tuple[dict[str, str], ...]] = (
     },
     {
         "id": "no_tiene_intradia_real",
-        "issue": "#50",
+        "issue": "#107",
         "statement": (
             "no trae la fuente intradia real ni el bid/ask del SPX500:CFD: el diferencial "
             "es el declarado y simetrico de #11 y los precios son proxies"
@@ -382,7 +382,7 @@ FOLLOW_UPS: Final[tuple[dict[str, str], ...]] = (
         "why": "features + modelo + gate + motor sobre el historico real",
     },
     {
-        "issue": "#50",
+        "issue": "#107",
         "topic": "fuente intradia y bid/ask real del SPX500:CFD",
         "why": "traeria el diferencial asimetrico y los precios de ejecucion reales",
     },
@@ -447,7 +447,7 @@ LIMITATIONS: Final[tuple[str, ...]] = (
     "`illustrative` con `decision: false` y **nunca** alimenta el P&L.",
     "**El corte de financiacion sigue sin verificar** (#8/#59) y asumir una hora de corte "
     "fija esta prohibido: el motor no lo deduce de ningun *timestamp*.",
-    "**Los precios son *proxies*** de `^GSPC` y no del `SPX500:CFD` (#50), y la muestra de "
+    "**Los precios son *proxies*** de `^GSPC` y no del `SPX500:CFD` (#107), y la muestra de "
     "intradia real es corta: la mayoria de las sesiones usan el respaldo diario (#10, #57).",
     "**La sigma con *look-ahead*** heredada de la seleccion de candidato de #7 sigue sin "
     "arreglar (#63), asi que las barreras de #10 pueden estar informadas por el futuro.",

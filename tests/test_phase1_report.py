@@ -881,7 +881,7 @@ def test_a17_limits_inherited_without_fusing(
     assert prices["series_id"] == "^GSPC"
     assert prices["proxy_of"] == "SPX500:CFD"
     assert prices["is_proxy"] is True
-    assert prices["issue"] == "#50"
+    assert prices["issue"] == "#107"
     assert limits["net_metrics_state"] == "not_computable"
     assert "no son una validacion" in cast("str", limits["statement"])
     assert limits["evidence"] == EVIDENCE_ARTIFACT
@@ -1132,7 +1132,7 @@ def test_a26_machine_readable_boundaries() -> None:
         "#62",
         "#60",
         "#70",
-        "#50",
+        "#107",
         "#51",
         "#28",
         "#29",

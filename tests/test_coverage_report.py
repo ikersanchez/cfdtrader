@@ -44,7 +44,7 @@ CFD_ENTRY = UnavailableSeries(
     bid_ask=False,
     reason="no hay fuente pública del intradía ni del bid/ask del SPX500:CFD",
     checked_on=datetime(2026, 9, 17, tzinfo=UTC).date(),
-    follow_up_issue=50,
+    follow_up_issue=107,
     documentation="_docs/data_sources.md",
 )
 
@@ -277,7 +277,7 @@ def test_report_is_written_as_json_and_markdown(tmp_path: Path) -> None:
     markdown = markdown_path.read_text(encoding="utf-8")
     assert "## Diario" in markdown and "## Intradía" in markdown
     assert f"BLOQUEO `{BLOCKER_CFD_MISSING}`" in markdown
-    assert "#50" in markdown
+    assert "#107" in markdown
 
 
 def test_intraday_and_daily_are_separated_in_the_markdown() -> None:
@@ -305,7 +305,7 @@ def test_phase1_is_blocked_without_a_cfd_source(tmp_path: Path) -> None:
     assert [blocker.code for blocker in report.blockers] == [BLOCKER_CFD_MISSING]
     blocker = report.blockers[0]
     assert blocker.series_id == "SPX500:CFD"
-    assert blocker.follow_up_issue == 50
+    assert blocker.follow_up_issue == 107
 
 
 def test_require_ready_exits_with_two_but_still_writes_the_report(

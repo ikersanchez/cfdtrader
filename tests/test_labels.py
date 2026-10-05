@@ -852,7 +852,7 @@ def test_the_entry_price_sources_are_declared(run: LabelsRun) -> None:
     assert entry["diverges_from_owner_decision"] is False
     assert entry["contradicts_plan_md_4_1"] is False
     assert entry["not_tradable"] is False
-    assert entry["follow_up_issue"] == 50
+    assert entry["follow_up_issue"] == 107
     assert entry["decision_issue"] == 61
     # A1: el rastro de lo sustituido queda declarado y **no** como decision vigente.
     assert "08:45" in str(entry["previous_owner_decision"])
@@ -1422,7 +1422,7 @@ def test_the_limitations_are_declared_with_the_measured_numbers(run: LabelsRun) 
     limitations = cast("list[str]", payload["limitations"])
     assert isinstance(limitations, list) and len(limitations) >= 7
     joined = " ".join(limitations)
-    for expected in ("#50", "#57", "#61", "#11", "#52", "#60", "cota inferior", "media"):
+    for expected in ("#107", "#57", "#61", "#11", "#52", "#60", "cota inferior", "media"):
         assert expected in joined, f"falta {expected!r} en las limitaciones"
     markdown = render_markdown(run)
     assert "## Limitaciones (declaradas, no escondidas)" in markdown
@@ -1492,9 +1492,9 @@ def test_a_custom_k_is_published_as_its_own_scenario(writable_root: Path) -> Non
 
 
 def test_the_run_declares_the_follow_up_issues_of_the_limitations(run: LabelsRun) -> None:
-    """A17/A33: ``#50`` (fuente intradia) y ``#57`` (RV intradia) aparecen declaradas."""
+    """A17/A33: ``#107`` (fuente intradia) y ``#57`` (RV intradia) aparecen declaradas."""
     coverage = _dict(run.inputs["intraday_coverage"])
-    assert coverage["follow_up_issues"] == [50, 57]
+    assert coverage["follow_up_issues"] == [107, 57]
     unused = _dict(_dict(coverage["unused_series"])["ES=F"])
     assert "A13" in str(unused["reason"])
     assert "solo con" in str(unused["reason"])

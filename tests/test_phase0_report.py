@@ -973,7 +973,7 @@ def test_a12_half_a_is_fail_and_not_softened(tmp_path: Path) -> None:
 def test_a13_gate_a_limitations_are_published_with_their_links(tmp_path: Path) -> None:
     payload = report_for(ready_inputs(tmp_path))
     issues = {entry["issue"] for entry in payload["gate_a"]["limitations"]}
-    assert {"#50", "#52"} <= issues
+    assert {"#107", "#52"} <= issues
     assert "#63" in " ".join(entry["issue"] for entry in payload["gate_a"]["limitations"]), (
         "el *look-ahead* heredado de #7 se declara (#63)"
     )
@@ -1417,7 +1417,7 @@ def test_a27_no_evidence_case_never_recommends_continue(tmp_path: Path) -> None:
     basis = payload["no_basis_for_continuation"]
     assert "No hay base para recomendar «continuar»" in basis["statement"]
     issues = " ".join(item["issue"] for item in basis["missing"])
-    assert "#50" in issues
+    assert "#107" in issues
     assert "#60" in issues
     assert all(item["what"] for item in basis["missing"])
 
@@ -1436,7 +1436,7 @@ def test_a28_what_would_change_the_verdict_is_concrete_and_owned(tmp_path: Path)
     halves = {entry["half"] for entry in payload}
     assert halves == {"a", "b"}
     links = " ".join(entry["issues"] for entry in payload)
-    for issue in ("#50", "#52", "#62", "#60"):
+    for issue in ("#107", "#52", "#62", "#60"):
         assert issue in links
     for entry in payload:
         assert entry["condition"]

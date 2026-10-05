@@ -118,10 +118,10 @@ __all__ = [
     "run_all_baselines",
 ]
 
-#: Serie analizada: el subyacente del CFD. El CFD no tiene fuente propia (#50).
+#: Serie analizada: el subyacente del CFD. El CFD no tiene fuente propia (#107).
 SERIES_ID: Final[str] = "^GSPC"
 
-#: Instrumento del que los precios son **proxy** mientras no haya fuente del CFD (#50).
+#: Instrumento del que los precios son **proxy** mientras no haya fuente del CFD (#107).
 PRICE_PROXY_OF: Final[str] = "SPX500:CFD"
 
 #: Intervalo del unico intradia real disponible (5 minutos de ``^GSPC``).
@@ -244,7 +244,7 @@ ADAPTER_DOES_NOT_DO: Final[tuple[dict[str, str], ...]] = (
     },
     {
         "id": "no_tiene_intradia_real",
-        "issue": "#50",
+        "issue": "#107",
         "statement": (
             "no trae la fuente intradia real ni el `bid`/`ask` del SPX500:CFD: los precios son "
             "proxies de `^GSPC` y el diferencial es el declarado de #11"
@@ -329,7 +329,7 @@ FOLLOW_UPS: Final[tuple[dict[str, str], ...]] = (
         "why": "de ahi sale el nocional real y las barreras que activan el camino intradia",
     },
     {
-        "issue": "#50",
+        "issue": "#107",
         "topic": "intradia real y `bid`/`ask` del SPX500:CFD",
         "why": "los precios seguiran siendo proxies hasta que exista la fuente del CFD",
     },
@@ -395,7 +395,7 @@ LIMITATIONS: Final[tuple[str, ...]] = (
     "**El corte de financiacion sigue sin verificar** (#8/#59): `financing_cut` viaja como "
     "`None` y asumir una hora de corte fija esta prohibido; la ventana de sesion la da el "
     "`MarketCalendar`, nunca una hora escrita a mano.",
-    "**Los precios son *proxies*** de `^GSPC` y no del `SPX500:CFD` (#50), y la muestra de "
+    "**Los precios son *proxies*** de `^GSPC` y no del `SPX500:CFD` (#107), y la muestra de "
     "intradia real es corta: la mayoria de las sesiones usan el respaldo diario (#10, #57).",
     "**La sigma con *look-ahead*** heredada de la seleccion de candidato de #7 sigue sin "
     "arreglar (#63): las barreras de #10 pueden estar informadas por el futuro.",
@@ -1235,7 +1235,7 @@ def _limits_payload(*, model: CostModel, slippage: SlippageParameter) -> dict[st
             "series_id": SERIES_ID,
             "proxy_of": PRICE_PROXY_OF,
             "is_proxy": True,
-            "issue": "#50",
+            "issue": "#107",
         },
         "financing_cut": None,
         "financing_cut_verified": False,

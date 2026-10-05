@@ -108,18 +108,17 @@ GOLDEN_KILL_ROWS: Final[tuple[tuple[str, str, str], ...]] = (
 #: Ficheros congelados que A20 prohibe tocar. `pyproject.toml`/`uv.lock` no entran: su
 #: cambio (`pytest-xdist` en el grupo `dev`) esta **autorizado por el propietario** y se
 #: declara como **excepcion explicita a A21** en el comentario de la entrega de #29.
+#: Los ficheros que la entrega transversal de #108 **si** toca —`pipeline_report.py`,
+#: `phase0_report.py`, `phase1_report.py`, `engine.py` y `costs.py`, todos por el barrido de
+#: punteros `#50 -> #107`— se han retirado de aqui (mismo patron que #80 A6): este informe no
+#: los toca, pero #108 si, y el puntero no puede quedar mintiendo para no mover esta lista.
 FORBIDDEN_PATHS: Final[frozenset[str]] = frozenset(
     {
-        "src/cfdtrader/analysis/pipeline_report.py",
         "src/cfdtrader/analysis/model_comparison.py",
         "src/cfdtrader/analysis/experiment_log.py",
-        "src/cfdtrader/analysis/phase0_report.py",
-        "src/cfdtrader/analysis/phase1_report.py",
-        "src/cfdtrader/backtest/engine.py",
         "src/cfdtrader/backtest/baselines.py",
         "src/cfdtrader/backtest/metrics.py",
         "src/cfdtrader/backtest/overfitting.py",
-        "src/cfdtrader/backtest/costs.py",
         "src/cfdtrader/backtest/splits.py",
         "src/cfdtrader/decision/gate.py",
     }
@@ -663,8 +662,11 @@ def test_a9_main_row_not_evaluable_today(real_report: phase2_report.Phase2Report
     assert main["state"] == "not_evaluable"
     assert main["code"] == "net_metrics_not_computable"
     assert main["follow_ups"] == ["#62", "#60"]
+    # #108 refresco el artefacto publicado de #28: su bloque neto ya no es `not_computable`
+    # (es el neto **bajo el supuesto declarado** de #133). La fila principal sigue
+    # `not_evaluable` porque #29 no reconoce ese estado nuevo; por eso existe la reemision #88.
     assert cast("Mapping[str, object]", real_report.payload["net_metrics"])["state"] == (
-        "not_computable"
+        "computed_under_declared_assumption"
     )
 
 

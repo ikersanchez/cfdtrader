@@ -92,15 +92,14 @@ STEM: Final[str] = "phase2_net_2026-09-23"
 
 #: Ficheros que A17 prohibe tocar: todo lo que este informe **consume** (los suyos propios y los de
 #: #28, #29, #93), mas las tres piezas congeladas del motor y del gate.
+#: Los ficheros que la entrega transversal de #108 **si** toca —`pipeline_report.py`,
+#: `phase0_report.py`, `costs.py` y `engine.py`, por el barrido de punteros `#50 -> #107`— se
+#: han retirado de aqui (mismo patron que #80 A6).
 FROZEN_PATHS: Final[frozenset[str]] = frozenset(
     {
-        "src/cfdtrader/analysis/pipeline_report.py",
         "src/cfdtrader/analysis/phase2_report.py",
         "src/cfdtrader/analysis/phase2_dominance.py",
-        "src/cfdtrader/analysis/phase0_report.py",
-        "src/cfdtrader/backtest/costs.py",
         "src/cfdtrader/backtest/metrics.py",
-        "src/cfdtrader/backtest/engine.py",
         "src/cfdtrader/decision/gate.py",
     }
 )
@@ -1032,11 +1031,15 @@ def test_a15_declared_limits_and_follow_ups(net_report: NetReport) -> None:
 
 
 def test_a15_the_published_artifact_state_is_declared(net_report: NetReport) -> None:
-    """A15: el informe dice de que artefacto parte y si su bloque neto es anterior a #133."""
+    """A15: el informe dice de que artefacto parte y el estado de su bloque neto.
+
+    Desde que **#108** refresco el artefacto publicado, su bloque neto ya es el **neto bajo el
+    supuesto declarado** de #133 (antes decia `not_computable`).
+    """
     published = as_map(net_report.payload["published_artifact"])
     assert published["name"] == PIPELINE_ARTIFACT.name
-    assert published["net_metrics_state"] == "not_computable"
-    assert published["is_net_computable"] is False
+    assert published["net_metrics_state"] == "computed_under_declared_assumption"
+    assert published["is_net_computable"] is True
     assert as_text(published, "rederived_report_sha256").startswith("sha256:")
 
 

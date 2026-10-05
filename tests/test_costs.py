@@ -1074,7 +1074,7 @@ def test_a28_the_markdown_has_the_declared_table_and_the_three_states() -> None:
         assert f"`{state}`" in markdown
     for limitation in ("59 sesiones", "5 min", "^GSPC", "no** sobre el CFD"):
         assert limitation in markdown, limitation
-    for issue in ("#50", "#59", "#60", "#62", "#65", "#66"):
+    for issue in ("#107", "#59", "#60", "#62", "#65", "#66"):
         assert issue in markdown, issue
 
 
@@ -1307,12 +1307,12 @@ def test_a34_the_limitations_are_published_in_json_and_markdown() -> None:
         "#62",
         "#60",
         "#66",
-        "#50",
+        "#107",
         "#52",
         "#65",
     ):
         assert needle in limitations, needle
-    for needle in ("#66", "#50", "#52", "#59", "#60", "#62", "#65"):
+    for needle in ("#66", "#107", "#52", "#59", "#60", "#62", "#65"):
         assert needle in markdown, needle
     assert all(item["issue"] in markdown for item in payload["follow_ups"])
 
