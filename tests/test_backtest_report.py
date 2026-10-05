@@ -535,11 +535,11 @@ def test_a6_universe_declared_and_counted(real_report: BacktestReport) -> None:
     """A6: el universo real declarado, con su serie y sus dos extremos."""
     universe = _block(real_report, "universe")
     assert universe["series_id"] == SERIES_ID == "^GSPC"
-    assert universe["labelled_sessions"] == 2687
-    assert universe["sessions"] == 2687
+    # Relativo, no un total del almacen vivo (#135): el universo es la muestra etiquetada y sus
+    # tres vistas coinciden. Los extremos dejan de fijarse salvo el primero (estable: corte #52).
+    assert universe["labelled_sessions"] == universe["sessions"] == len(real_report.universe.inputs)
     assert universe["first_session"] == "2016-01-07"
-    assert universe["last_session"] == "2026-09-16"
-    assert len(real_report.universe.inputs) == 2687
+    assert cast("str", universe["last_session"]) >= "2016-01-07"
 
 
 def test_a6_excluded_sessions_carry_a_reason(tmp_path: Path) -> None:
@@ -594,19 +594,24 @@ def test_a6_clean_rule_reasons_are_declared() -> None:
 def test_a7_reconciliation_without_filling_gaps(real_report: BacktestReport) -> None:
     """A7: las cifras reales de la reconciliacion, incluida la identidad completa."""
     reconciliation = _block(real_report, "reconciliation")
-    # Recuentos del almacen **vivo**: se actualizan con el refresco de #45 (ingesta del 2026-10-05).
-    # Son cifras medidas, no un digest: si el almacen crece, cambian (ver #135).
-    assert reconciliation["raw_market_daily_rows"] == 5473
-    assert reconciliation["rows_with_previous_session"] == 5472
+    raw = cast("int", reconciliation["raw_market_daily_rows"])
+    with_prev = cast("int", reconciliation["rows_with_previous_session"])
+    clean = cast("int", reconciliation["clean_sessions"])
+    sessions = cast("int", reconciliation["sessions_since_cutoff"])
+    excluded = cast("int", reconciliation["excluded_by_clean_rule"])
+    stale = cast("int", reconciliation["stale_open_in_window"])
+    no_forecast = cast("int", reconciliation["no_forecast"])
+    labelled = cast("int", reconciliation["labelled"])
+    # Las identidades cierran sin rellenar huecos y no fijan el total del almacen vivo (#135):
+    assert with_prev == raw - 1  # la primera fila del almacen no tiene sesion previa
+    assert clean == sessions - excluded
+    assert sessions == stale + no_forecast + labelled
+    assert reconciliation["identity"] == (
+        f"{sessions} = {stale} (stale_open) + {no_forecast} (no_forecast) "
+        f"+ {labelled} (etiquetadas)"
+    )
+    # `clean_from` es un literal **estable** (la regla limpia de #52), no un recuento del almacen.
     assert reconciliation["clean_from"] == "2014-01-01"
-    assert reconciliation["clean_sessions"] == 3205
-    assert reconciliation["sessions_since_cutoff"] == 3208
-    assert reconciliation["excluded_by_clean_rule"] == 3
-    assert reconciliation["stale_open_in_window"] == 3
-    assert reconciliation["no_forecast"] == 517
-    assert reconciliation["labelled"] == 2688
-    expected = "3208 = 3 (stale_open) + 517 (no_forecast) + 2688 (etiquetadas)"
-    assert reconciliation["identity"] == expected
     assert reconciliation["no_forecast_reason"]
 
 
@@ -639,7 +644,8 @@ def test_a9_session_inputs_match_the_store(real_report: BacktestReport) -> None:
         for row in session_stale_open(daily).sort("session").iter_rows(named=True)
     }
     inputs = real_report.universe.inputs
-    assert len(inputs) == 2687
+    # Relativo (#135): el universo coincide con su recuento declarado, sin fijar el total.
+    assert len(inputs) == cast("int", _block(real_report, "universe")["sessions"])
     for item in inputs:
         row = rows[item.session]
         assert (item.open_px, item.high_px, item.low_px, item.close_px) == (
@@ -659,9 +665,9 @@ def test_a10_intraday_counts_and_window(tmp_path: Path, real_report: BacktestRep
     universe = _block(real_report, "universe")
     with_intraday = cast("int", universe["sessions_with_intraday_path"])
     with_fallback = cast("int", universe["sessions_with_daily_fallback"])
-    assert with_intraday == 59
-    assert with_fallback == 2628
-    assert with_intraday + with_fallback == universe["sessions"] == 2687
+    # Relativo (#135): las dos vias suman el universo; los totales absolutos dejan de fijarse.
+    assert with_intraday + with_fallback == universe["sessions"]
+    assert with_intraday > 0 and with_fallback > 0
 
     session = date(2024, 6, 3)  # lunes de sesion completa en EDT
     moments = ((13, 25), (13, 30), (15, 0), (20, 0), (20, 5))
@@ -862,8 +868,9 @@ def test_a14_plan_is_the_declared_one(real_report: BacktestReport) -> None:
     assert plan["embargo_sessions"] == 5
     assert plan["max_train_size"] is None
     assert plan["label_horizon"] == 0
-    assert plan["n_test"] == 500
-    assert plan["not_in_any_test"] == 2187
+    assert plan["n_test"] == 500  # pre-registrado: 10 splits x 50 (estable)
+    # Relativo (#135): lo que no entra en ningun test es el universo menos el `n_test`.
+    assert plan["not_in_any_test"] == cast("int", _block(real_report, "universe")["sessions"]) - 500
     assert plan["purge_total"] == 0
     assert plan["embargo_total"] == 45
     assert plan["embargo_in_train_total"] == 0
@@ -1086,7 +1093,8 @@ def test_a21_net_metrics_are_not_computable(real_report: BacktestReport) -> None
 def test_a22_conservation_identities(real_report: BacktestReport) -> None:
     """A22: ninguna sesion del universo desaparece sin aparecer en un recuento."""
     n_inputs = len(real_report.universe.inputs)
-    assert n_inputs == 2687
+    # Relativo (#135): el universo coincide con su recuento declarado, sin fijar el total.
+    assert n_inputs == cast("int", _block(real_report, "universe")["sessions"])
     not_in_any_test: set[object] = set()
     for row in _rows(real_report):
         traded = cast("int", row["traded"])
@@ -1099,7 +1107,8 @@ def test_a22_conservation_identities(real_report: BacktestReport) -> None:
         assert conservation["n_inputs"] == n_inputs
         assert cast("int", row["n_test"]) + cast("int", row["not_in_any_test"]) == n_inputs
         not_in_any_test.add(row["not_in_any_test"])
-    assert not_in_any_test == {2187}
+    # Relativo (#135): fuera de todo test queda el universo menos el `n_test` pre-registrado.
+    assert not_in_any_test == {n_inputs - 500}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

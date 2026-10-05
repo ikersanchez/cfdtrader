@@ -244,16 +244,18 @@ def test_a3_the_universe_is_the_labelled_sample_and_the_objective_is_ret_long_po
     published = baseline_report._universe_block(  # pyright: ignore[reportPrivateUsage]
         real_universe, real_frame
     )
-    assert published["n_sessions"] == 2687
+    # Relativo (#135): el universo de features coincide con el de #69 y con su marco; los totales
+    # absolutos del almacen vivo (ultima sesion, `n_half_days`) dejan de fijarse.
+    assert published["n_sessions"] == len(real_universe.inputs)
     assert published["first_session"] == "2016-01-07"
-    assert published["last_session"] == "2026-09-16"
     assert published["n_nulls_in_features"] == 0
 
     assert real_frame.n_design_rows == len(real_universe.inputs)
     assert real_frame.design.sessions == tuple(item.session for item in real_universe.inputs)
-    assert real_frame.n_positives == 1399
-    assert real_frame.n_positives / real_frame.n_design_rows == pytest.approx(0.5207, abs=1e-4)
-    assert real_frame.n_half_days == 21
+    assert real_frame.n_positives == int(real_frame.design.frame.get_column("y").sum())
+    # Proporcion de positivos: un **rango** estructural (la clase no esta muy desbalanceada), no un
+    # valor fijo del almacen vivo (#135).
+    assert 0.5 < real_frame.n_positives / real_frame.n_design_rows < 0.55
 
     holds = (
         real_frame.design.frame.select(((pl.col("ret_long") > 0) == (pl.col("y") == 1)).all())

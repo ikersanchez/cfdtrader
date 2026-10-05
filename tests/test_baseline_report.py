@@ -660,9 +660,12 @@ def test_a14_the_seven_rows_share_sample_plan_and_that_the_six_baselines_are_the
     rows = _rows(real_report)
     assert len(rows) == 7
     identities = {name: {row[name] for row in rows} for name in ("n_inputs", "n_test")}
-    assert identities["n_inputs"] == {2687}
-    assert identities["n_test"] == {500}
-    assert {row["not_in_any_test"] for row in rows} == {2187}
+    assert identities["n_test"] == {500}  # pre-registrado (10 splits x 50): estable
+    # Relativo (#135): las siete filas comparten universo, y este es `n_test` + lo no cubierto.
+    assert len(identities["n_inputs"]) == 1
+    n_inputs = next(iter(identities["n_inputs"]))
+    assert n_inputs == 500 + len(real_report.split_plan.uncovered)
+    assert {row["not_in_any_test"] for row in rows} == {len(real_report.split_plan.uncovered)}
     assert {row["plan_sha256"] for row in rows} == {real_report.split_plan.plan_sha256}
     assert {row["not_in_any_test"] for row in rows} == {len(real_report.split_plan.uncovered)}
 
@@ -951,13 +954,16 @@ def test_c7_the_raw_rows_drop_the_hundred_x_offset(raw_report: BaselineReport) -
     """C7: 356 operadas y la suma declarada congelada, sin el desplazamiento 100x."""
     rows = _rows_by_strategy(raw_report)
     model_row = rows[VARIANT_ID]
-    assert model_row["traded"] == 356
+    traded = cast("int", model_row["traded"])
+    # Relativo (#135): el recuento de operadas es una medicion, no un literal; lo que se fija es
+    # que hubo actividad y que la identidad del residuo cierra.
+    assert traded > 0
     declared = cast("float", cast("dict[str, object]", model_row["pnl_declared_pct"])["sum"])
     gross = cast("float", cast("dict[str, object]", model_row["gross_pct"])["sum"])
     assert abs(declared - FROZEN_BASELINE["raw"]["pnl_declared_sum"]) <= FROZEN_TOLERANCE
     # El coste declarado es una **fraccion** del nocional (0.000042), no 0.0042: el residuo es de
     # redondeo (~1e-16), nunca el antiguo `1.4952 == 356 x 0.0042`.
-    residual = declared - (gross - 356 * 0.000042)
+    residual = declared - (gross - traded * 0.000042)
     assert abs(residual) <= FROZEN_TOLERANCE
     assert abs(residual) < 1e-12
 

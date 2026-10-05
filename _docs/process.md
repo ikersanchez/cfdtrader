@@ -71,3 +71,26 @@ cycle ~49 min. Target with these rules: ~25 min per issue.
 
 When a phase goes over, the fix is fewer criteria (PM), one round
 (engineer) or a shorter verdict (QA) - never a weaker check.
+
+
+Regeneration after an ingest (#135)
+-----------------------------------
+
+The store grows with every ingest (`cfdtrader.data.market`, `.macro`,
+`.news`, `.earnings`). The Fase 0/1/2 artifacts are *derived* from the store,
+so an ingest that changes the measured window invalidates them, and the tests
+must not pin **absolute** store counts. Two rules:
+
+1. **Relative, never absolute.** Assertions about the live store use the
+   **identities** the report already publishes (e.g. `clean = stale_open +
+   no_forecast + labelled`) and **deltas** against the previous artifact, not
+   totals like `raw_market_daily_rows == 5460`. A literal is only allowed for a
+   **stable** value: the document, a table's rows, the feature specs, a
+   pre-registered plan parameter.
+2. **Regenerate in order** after an ingest (`labels`/`volatility_forecast`
+   first, then `backtest_report` -> `phase1_report` -> `baseline_report` ->
+   `model_comparison` -> `pipeline_report` -> `gate_sweep`/`phase2_*`), passing
+   `--previous-artifact` where the CLI accepts it. Regenerating the published
+   artifacts in `data/` does **not** change the git tree (`data/` is ignored).
+
+The observation's daily start is therefore: **ingest, then regenerate.**
