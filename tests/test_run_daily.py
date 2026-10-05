@@ -138,16 +138,17 @@ FROZEN: Final[frozenset[str]] = frozenset(
         # el mismo criterio que #80 aplico en `tests/test_pipeline_report.py`.
         "src/cfdtrader/analysis/feature_frame.py",
         "src/cfdtrader/analysis/model_comparison.py",
-        "src/cfdtrader/analysis/backtest_report.py",
+        # #108 retira `analysis/backtest_report.py` y `models/labels.py`: el barrido de punteros
+        # `#50 -> #107` toca su prosa y sus punteros, el mismo criterio que #113/#124/#131.
         "src/cfdtrader/models/baseline.py",
         "src/cfdtrader/models/calibration.py",
-        "src/cfdtrader/models/labels.py",
         "src/cfdtrader/models/lightgbm_model.py",
         # #131 retira `backtest/costs.py` de este conjunto: cablear el `R` decidido en #60 en el
         # motor de costes —para que el supuesto de *slippage* tenga numero y el gate pueda
         # verificar la regla 9 sobre el coste declarado (`plan.md` §19.12)— es exactamente ese
         # fichero, el mismo criterio que #113 aplico con el gate y #124 con el calendario.
-        "src/cfdtrader/backtest/engine.py",
+        # #108 retira `backtest/engine.py`: el barrido de punteros `#50 -> #107` toca su
+        # `does_not_do` y su prosa de follow-ups.
         "src/cfdtrader/backtest/metrics.py",
         "src/cfdtrader/backtest/baselines.py",
         "src/cfdtrader/data/store.py",

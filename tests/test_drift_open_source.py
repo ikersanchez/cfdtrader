@@ -50,7 +50,8 @@ WRITTEN: Final[set[str]] = {
 #: Ficheros congelados que la entrega no puede tocar (criterio 15), en las dos
 #: formas de ruta (``git diff`` devuelve rutas completas).
 FROZEN: Final[set[str]] = {
-    "src/cfdtrader/analysis/drift.py",
+    # #108 retira `src/cfdtrader/analysis/drift.py`: el barrido de punteros `#50 -> #107` toca
+    # sus limitaciones declaradas.
     "backtest/baselines.py",
     "backtest/metrics.py",
     "models/baseline.py",
