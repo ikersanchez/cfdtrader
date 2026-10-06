@@ -60,8 +60,8 @@ uv run python -m cfdtrader.models.labels               --data-root data --report
 uv run python -m cfdtrader.analysis.volatility_forecast --data-root data --now 2026-09-18T00:00:00+00:00
 uv run python -m cfdtrader.analysis.backtest_report    --data-root data --reports-dir data/derived/reports --as-of 2026-09-19T00:00:00+00:00
 uv run python -m cfdtrader.analysis.phase1_report      --data-root data --reports-dir data/derived/reports --as-of 2026-09-19T22:00:00+00:00
-uv run python -m cfdtrader.analysis.baseline_report    --data-root data --reports-dir data/derived/reports --runs-root runs --as-of 2026-09-22T22:00:00+00:00
-uv run python -m cfdtrader.analysis.baseline_report    --data-root data --reports-dir data/derived/reports --runs-root runs --as-of 2026-09-22T22:00:00+00:00 --raw
+uv run python -m cfdtrader.analysis.baseline_report    --data-root data --reports-dir data/derived/reports --runs-root runs --as-of 2026-09-22T22:00:00+00:00 --previous-artifact data/derived/reports/baseline_2026-09-22.json
+uv run python -m cfdtrader.analysis.baseline_report    --data-root data --reports-dir data/derived/reports --runs-root runs --as-of 2026-09-22T22:00:00+00:00 --raw --previous-artifact data/derived/reports/baseline_2026-09-22.json
 uv run python -m cfdtrader.analysis.model_comparison   --data-root data --reports-dir data/derived/reports --runs-root runs --as-of 2026-09-22T22:00:00+00:00 --previous-artifact data/derived/reports/model_comparison_2026-09-22.json
 uv run python -m cfdtrader.analysis.pipeline_report    --data-root data --reports-dir data/derived/reports --as-of 2026-09-23T22:00:00+00:00 --previous-artifact data/derived/reports/pipeline_backtest_2026-09-23.json
 uv run python -m cfdtrader.analysis.gate_sweep         --data-root data --reports-dir data/derived/reports --as-of 2026-09-23T22:00:00+00:00
