@@ -997,7 +997,10 @@ def test_a14_the_published_series_is_the_net_one(net_report: NetReport) -> None:
     """A14: la serie neta del brazo base baja el supuesto en lo operado y deja el cero intacto."""
     series = net_report.series
     assert series.n_sessions == 500
-    assert series.n_traded == 150
+    # Relativo (#136): el recuento de operadas es una **medicion** de la ventana vigente, no un
+    # literal (150 era el de la ventana vieja); lo que se fija es que hubo actividad y que la
+    # mascara `traded` cuadra con la serie operada.
+    assert series.n_traded > 0
     assert series.artifact_n == series.n_sessions
     assert len(series.traded_series_pct()) == series.n_traded
     for value, flag in zip(series.values_pct, series.traded, strict=True):

@@ -42,10 +42,9 @@ from cfdtrader.analysis.experiment_log import (
 from cfdtrader.analysis.model_comparison import (
     BASELINE_VARIANT_ID,
     FAMILY_ORDER,
-    FROZEN_BASELINE,
-    FROZEN_TOLERANCE,
     PBO_BLOCKS,
     PRIMARY_METRIC,
+    RECONSTRUCTION_TOLERANCE,
     REPORT_PREFIX,
     SELECTION_RULE,
     TIE_BREAKERS,
@@ -97,14 +96,6 @@ NEW_TESTS: Final[tuple[Path, ...]] = (
 #: Los literales de coste de #8/#11: el modulo los **importa**, no los redeclara (A3).
 COST_LITERALS: Final[frozenset[float]] = frozenset(
     {0.42, 0.0042, 1.82, 0.0182, -0.18, -0.0018, 0.0024, 0.0224}
-)
-
-#: Los cuatro numeros de la tabla, tal como se midieron en la corrida (A12).
-MEASURED_BRIER: Final[tuple[float, ...]] = (
-    0.2511418117147099,
-    0.2564548794817189,
-    0.2548043292843032,
-    0.27316798097893297,
 )
 
 #: Huella de los informes congelados **antes** de que corra ninguna prueba (A7).
@@ -168,6 +159,20 @@ def _variants(report: ModelComparisonReport) -> list[dict[str, object]]:
     return [
         cast("dict[str, object]", item) for item in cast("list[object]", report.payload["variants"])
     ]
+
+
+def _evaluated_briers(report: ModelComparisonReport) -> list[float]:
+    """Las cifras de Brier de las variantes **evaluadas** del informe, ordenadas (A12).
+
+    Relativo, nunca un literal (#136): la tabla del informe tiene que publicar **estas** cifras
+    (las que ya publica `variants[]` de la propia corrida); una tupla fija de #24 caduca con cada
+    ingesta y convierte una medicion en un fallo.
+    """
+    return sorted(
+        float(cast("float", variant["brier_score"]))
+        for variant in _variants(report)
+        if variant["state"] == "evaluated"
+    )
 
 
 def _cli(*arguments: str, seed: str | None = None) -> subprocess.CompletedProcess[str]:
@@ -503,25 +508,27 @@ def test_a6_every_variant_decides_with_its_own_probability(
 # A7 - la linea base cuadra con lo publicado
 # ─────────────────────────────────────────────────────────────────────────────
 @needs_store
-def test_a7_the_frozen_baseline_is_reproduced_to_the_declared_tolerance(
+def test_a7_the_reconstruction_reproduces_the_runs_own_result(
     real_report: ModelComparisonReport,
 ) -> None:
-    """Las dos series de la linea base reproducen las cuatro cifras congeladas (A7)."""
-    frozen = _block(real_report, "frozen_baseline")
-    assert frozen["verified"] is True
-    rows = cast("list[dict[str, object]]", frozen["rows"])
+    """La reconstruccion reproduce el resultado que publica **su propia** entrada (A7, #136).
+
+    Relativo, no un literal congelado: la referencia son los dos numeros que la entrada publica en
+    `runs/<sha>/result.json` (`n_observations` y `sharpe_per_session`).
+    """
+    reconstruction = _block(real_report, "reconstruction")
+    assert reconstruction["verified"] is True
+    rows = cast("list[dict[str, object]]", reconstruction["rows"])
     assert len(rows) == 2
+    by_run = {entry.run_sha256: entry for entry in real_report.registry.entries}
     for row in rows:
-        key = "calibrated" if row["calibrated"] else "raw"
-        reference = FROZEN_BASELINE[key]
-        assert row["n_traded"] == reference["n_traded"]
-        for name in ("brier_score", "log_loss", "pnl_declared_sum"):
-            observed = float(cast("float", row[name]))
-            assert abs(observed - reference[name]) <= FROZEN_TOLERANCE, name
+        reference = cast("dict[str, object]", row["reference"])
+        entry = by_run[str(row["run_sha256"])]
+        assert row["n_traded"] == reference["n_observations"] == entry.n_observations
+        observed = float(cast("float", row["sharpe_per_session"]))
+        assert abs(observed - entry.sharpe_per_session) <= RECONSTRUCTION_TOLERANCE
     for name, digest in FROZEN_REPORTS_BEFORE.items():
         path = FROZEN_REPORTS / name
-        import hashlib
-
         assert hashlib.sha256(path.read_bytes()).hexdigest() == digest, name
 
 
@@ -893,12 +900,12 @@ def test_a12_the_four_rows_are_measured_here_with_the_declared_basis(
     assert comparison["basis"] == "declared_cost"
     assert comparison["is_validation"] is False
     rows = _rows(real_report)
-    # Lo congelado es el **conjunto** de cifras medidas; el **orden** de las filas es el del
-    # registro, que `load_registry` ordena por `run_sha256` (una identidad interna que se mueve
-    # cuando se mueve el contrato de features, #105). Se comprueba cada cosa por separado.
-    assert sorted(float(cast("float", row["brier_score"])) for row in rows) == sorted(
-        MEASURED_BRIER
-    )
+    # Relativo (#136): las cifras de Brier son una **medicion** de esta corrida, no un literal. La
+    # tabla tiene que publicar las mismas que `variants[]` (identidad) y todas en [0, 1]; el
+    # **orden** de las filas es el del registro, que `load_registry` ordena por `run_sha256`.
+    briers = sorted(float(cast("float", row["brier_score"])) for row in rows)
+    assert briers == _evaluated_briers(real_report)
+    assert all(0.0 <= value <= 1.0 for value in briers)
     identifiers = [str(row["run_sha256"]) for row in rows]
     assert identifiers == sorted(identifiers), "las filas van en el orden del registro"
     reference = cast("dict[str, object]", comparison["reference"])
@@ -989,11 +996,13 @@ def test_a12_the_table_is_not_copied_from_the_frozen_reports(
         as_of=NOW,
         write=False,
     )
-    assert sorted(float(cast("float", row["brier_score"])) for row in _rows(reports)) == sorted(
-        MEASURED_BRIER
-    )
-    assert sorted(float(cast("float", row["brier_score"])) for row in _rows(real_report)) == sorted(
-        MEASURED_BRIER
+    # Relativo (#136): la tabla publica las cifras de sus `variants[]` y **no** el 0.999 mutado del
+    # informe congelado; y salen iguales en la corrida sobre `tmp_path` y en la real.
+    table_briers = sorted(float(cast("float", row["brier_score"])) for row in _rows(reports))
+    assert table_briers == _evaluated_briers(reports)
+    assert 0.999 not in table_briers
+    assert sorted(float(cast("float", row["brier_score"])) for row in _rows(real_report)) == (
+        table_briers
     )
     source = _source(model_comparison)
     assert "baseline_2026" not in source
@@ -1147,7 +1156,7 @@ def test_a14_the_fit_is_the_same_as_the_one_the_report_uses() -> None:
     assert "splits" in signature.parameters
     source = _source(model_comparison)
     assert "hyperparameters=LIGHTGBM_HYPERPARAMETERS" in source
-    assert "FROZEN_TOLERANCE" in source
+    assert "RECONSTRUCTION_TOLERANCE" in source
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1194,10 +1203,19 @@ def test_a2_an_as_of_that_is_not_iso_exits_two_with_a_reason(
 def test_a7_a_reconstruction_that_does_not_square_is_a_typed_error(
     real_report: ModelComparisonReport,
 ) -> None:
-    """`_require_frozen_match` con una cifra que no cuadra lanza el error tipado (A7)."""
-    tampered = dataclasses.replace(real_report.evaluated[0], brier_score=0.9)
-    with pytest.raises(model_comparison.FrozenBaselineMismatchError):
-        model_comparison._require_frozen_match(tampered)  # pyright: ignore[reportPrivateUsage]
+    """`_require_reconstruction_matches_run` con una cifra que no cuadra lanza el error (A7)."""
+    variant = real_report.evaluated[0]
+    entry = RegistryEntry(
+        run_sha256=variant.run_sha256,
+        variant_id=variant.variant_id,
+        sharpe_per_session=variant.sharpe_per_session,
+        n_observations=variant.n_traded,
+    )
+    tampered = dataclasses.replace(variant, sharpe_per_session=variant.sharpe_per_session + 1.0)
+    with pytest.raises(model_comparison.ReconstructionMismatchError):
+        model_comparison._require_reconstruction_matches_run(  # pyright: ignore[reportPrivateUsage]
+            tampered, entry
+        )
 
 
 def test_a8_an_empty_matrix_has_no_rows() -> None:

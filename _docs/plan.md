@@ -2,8 +2,8 @@
 
 | Campo | Valor |
 |---|---|
-| **Versión** | **2.15** |
-| **Fecha** | 2026-10-05 |
+| **Versión** | **2.16** |
+| **Fecha** | 2026-10-06 |
 | **Estado** | Diseño — pendiente de ejecutar Fase 0 |
 | **Instrumento** | **SPX500:CFD**, cotizando en el horario de la sesión regular estadounidense; las horas se calculan en `America/New_York` y se presentan en `Europe/Madrid` |
 | **Ámbito** | Decisión de apoyo (*decision support*). La ejecución es siempre manual. |
@@ -1278,6 +1278,39 @@ podía evaluar. El instrumento es un módulo **nuevo**, `analysis/phase2_net.py`
   `§11.6` **no** se altera. Esto **arranca** la observación, **no** la aprueba: `§11.6` **no** se
   toca y el carril B sigue bloqueado.
 
+### 19.15 Se relativiza el guardián de reconstrucción de `model_comparison` (2026-10-06)
+
+🟢 **Ejecutado (2026-10-06, #136).** Refrescar el almacén para arrancar la Fase 4 cambió un
+**resultado** de la cadena, no un reajuste numérico: el literal `FROZEN_BASELINE` —las cuatro cifras
+de la linea base de #24/#25, congeladas sobre la ventana de **2 687** sesiones— **dejó de
+reproducirse** en cuanto la ingesta añadió la sesión `2026-09-17` (ventana de **2 688**). Con él,
+`model_comparison` pasó a `not_evaluable` con la familia **lineal** declarada no reconstruible
+—`FrozenBaselineMismatchError` y, en las entradas de la ventana vieja, `MissingDecisionError`— y
+`phase2_dominance` quedó sin poder emitir su `pbo`.
+
+- **Qué se cambia.** El guardián de reconstrucción (A7) pasa a ser **relativo**
+  (`_docs/process.md`, regla 1): la reconstrucción desde `runs/<sha>/model.json` se verifica contra el
+  resultado que la **propia** entrada publica en `runs/<sha>/result.json` (`n_observations` y
+  `sharpe_per_session`), **no** contra una cifra histórica fijada a mano. `FROZEN_BASELINE`,
+  `FROZEN_TOLERANCE` y `FrozenBaselineMismatchError` desaparecen en favor de
+  `RECONSTRUCTION_TOLERANCE` y `ReconstructionMismatchError`, y el bloque del payload pasa de
+  `frozen_baseline` a `reconstruction` (con la referencia que publica cada entrada).
+- **Guardián de ventana.** Una entrada construida sobre **otra** ventana (`plan_sha256` o
+  `matrix_sha256` distintos de los de la corrida) **no** es reconstruible y se declara con
+  `StaleRunWindowError`: el fallo queda con su motivo real —«se construyó sobre otra ventana»— en vez
+  de una discrepancia de cifras, y la receta `ingesta → regeneración` (`_docs/process.md`) es lo que
+  la devuelve al registro.
+- **Qué se regenera.** `runs/` se limpia de las cuatro entradas de la ventana vieja (estado **local**,
+  gitignorado) y se **regenera el baseline crudo** de la ventana actual (`a2bd4731…`, 358 operadas);
+  con las cuatro entradas al día, `model_comparison` vuelve a **`selected`** (4 de 4 medidas) y
+  `phase2_dominance` reemite su veredicto (`not_evaluable`, `declared_base_inconclusive_within_declared_bound`,
+  agregado `fail`, 9 filas). Los tests que fijaban cifras absolutas (`MEASURED_BRIER`,
+  `n_observations == 356`, C7) pasan a **identidades** relativas.
+- **Valla de honestidad (inalterada).** `§11.6`, `§19.6`, `§19.7` y `§19.12` **no** se tocan: esto
+  arregla el **guardián**, no el veredicto —la Fase 2 sigue `fail`/`not_evaluable` con
+  `phase2_ready = false`, la observación es **carril A** con ejecución manual y el carril B sigue
+  bloqueado—. Tampoco mueve la puerta de Fase 4.
+
 ---
 
 ## 20. Marco regulatorio y fiscal (España) — resumen, no asesoramiento
@@ -1396,3 +1429,4 @@ podía evaluar. El instrumento es un módulo **nuevo**, `analysis/phase2_net.py`
 | 2026-10-04 | **2.13** | 📉 **#133: el informe del pipeline publica el neto bajo el supuesto declarado.** Los tres brazos ganan `net_series` y `net_metrics` —etiquetados `assumed`, `is_measurement: false`, con el valor del supuesto (20 bp) y el `R` de #60— y el bloque `net_metrics` de nivel superior deja de ser `not_computable` y de culpar a #60: los seguimientos pasan a **#62** (medirlo) y **#88** (reemitir el veredicto con las cifras). El neto se **re-deriva** (`c_total = c_declared + 20 bp`): ni el motor ni el gate ni ninguna **decisión** de brazo cambian, y la lectura declarada queda intacta. **§19.12** gana la entrada correspondiente. Cabecera a 2.13 | El `null` no era «no se puede calcular»: era un motivo obsoleto. Publicar la lectura neta **etiquetada** es lo que permite que #88 reemita el veredicto de Fase 2 sin recurrir a la lectura optimista |
 | 2026-10-04 | **2.14** | 🧾 **#88: el veredicto de Fase 2 se reemite sobre la base neta.** Nuevo **§19.13** y módulo `analysis/phase2_net.py` (T29b, hermano de #93): las **nueve** filas de §11.6 se evalúan sobre la base neta bajo el supuesto declarado (20 bp de #64/#60), con la mitad de acierto decidida por `hit_rate_per_trade` (#92) y las tres comparaciones por bootstrap pareado (`liston_b` queda `not_evaluable`: su listón de primera clase es #70). **Resultado medido:** fila principal **`fail`** (`hit_rate_per_trade` 0,3533 con IC [0,2800; 0,4267], Sharpe −2,33 con IC [−3,89; −0,83]), **peor que no operar** (diferencia −0,0570 %, IC [−0,0901; −0,0229]), mejor que *siempre largo* `open→close` (+0,1237 %); agregado **`fail`**, veredicto **`stop`**, `phase2_ready = false`. Se re-deriva el pipeline en vivo porque el artefacto publicado es anterior a #133 (refrescarlo es #108). **§11.6, §19.6 y §19.7 no se tocan** | La base declarada era *inconclusa* y la neta **falla**: publicar la lectura neta etiquetada (#133) obliga a reemitir el veredicto con ella. El supuesto **sigue** siendo un supuesto (`is_measurement: false`): medirlo es #62 |
 | 2026-10-05 | **2.15** | 🟢 **#45: arranca la observación de la Fase 4.** Nuevo **§19.14** y módulo `analysis/paper_trading.py`: el resultado de cada recomendación se **recomputa** desde `journal.decisions` + el almacén (nunca se lee `journal.trades`, reservado a #47) con el coste **declarado** de §3.3 (#11), y la puerta de §16 se aplica al pie de la letra —estadístico = media del retorno neto por sesión de las recomendaciones emitidas; referencia = media y **σ** de la **serie declarada** de `arms.coste_declarado` de #28; regla `|Δ| > 2σ/√N`; `N < 30 ⇒ not_evaluable`—. El informe declara la **valla de honestidad** (sin edge, carril A, ejecución manual). **`§11.6` no se toca** y el carril B sigue bloqueado. Cabecera a 2.15 | Con `R` cableado (#131) y la puerta pre-registrada (#130), el reloj de observación ya puede arrancar; el arnés que recalcula la serie es lo que faltaba para que el veredicto del *paper* sea computable desde lo persistido |
+| 2026-10-06 | **2.16** | 🧮 **#136: el guardián de reconstrucción de `model_comparison` se relativiza.** El literal `FROZEN_BASELINE` (las cuatro cifras de #24/#25 sobre la ventana de 2 687 sesiones) deja de reproducirse en cuanto la ingesta añade `2026-09-17` (2 688) y la comparación caía a `not_evaluable` con la familia lineal no reconstruible. El guardián (A7) pasa a **relativo**: la reconstrucción desde `runs/<sha>/model.json` se verifica contra el resultado que **la propia entrada** publica (`result.json`: `n_observations`, `sharpe_per_session`). Nuevos `RECONSTRUCTION_TOLERANCE`/`ReconstructionMismatchError`/`StaleRunWindowError` (una entrada de otra ventana —`plan_sha256`/`matrix_sha256` distintos— se declara con su motivo); el payload pasa de `frozen_baseline` a `reconstruction`. `runs/` (local) se limpia de la ventana vieja y se regenera el crudo actual: `model_comparison` vuelve a **`selected`** (4/4) y `phase2_dominance` reemite (`not_evaluable`, agregado `fail`, 9 filas). Nuevo **§19.15**. Cabecera a 2.16 | Un literal de una **medición** caduca con cada ingesta y convierte un resultado en un fallo (`_docs/process.md`, regla 1). `§11.6`/`§19.6`/`§19.7`/`§19.12` **no** se tocan: se arregla el guardián, no el veredicto |

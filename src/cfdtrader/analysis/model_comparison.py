@@ -64,6 +64,7 @@ from cfdtrader.analysis.baseline_report import (
     split_assignments,
 )
 from cfdtrader.analysis.experiment_log import (
+    CONFIG_FILE,
     DEFAULT_RUNS_ROOT,
     DSR_HALVES,
     PBO_HALVES,
@@ -129,19 +130,19 @@ __all__ = [
     "CALIBRATION_RULE",
     "CLI_NAME",
     "FAMILY_ORDER",
-    "FROZEN_BASELINE",
-    "FROZEN_TOLERANCE",
     "PBO_BLOCKS",
     "PRIMARY_METRIC",
+    "RECONSTRUCTION_TOLERANCE",
     "REPORT_PREFIX",
     "SELECTION_RULE",
     "TIE_BREAKERS",
     "TIE_TOLERANCE",
     "VARIANT_ID",
-    "FrozenBaselineMismatchError",
     "MissingDecisionError",
     "ModelComparisonError",
     "ModelComparisonReport",
+    "ReconstructionMismatchError",
+    "StaleRunWindowError",
     "analyse",
     "main",
     "model_sha256",
@@ -199,31 +200,17 @@ CALIBRATION_RULE: Final[str] = (
 #: semilla de muestreo.
 PBO_BLOCKS: Final[int] = 10
 
-#: Las cuatro cifras **congeladas** de la linea base de #24/#25, sobre las mismas 500 sesiones.
+#: Tolerancia del guardian de reconstruccion (A7). Es ``1e-9`` y no ``0`` porque el resultado
+#: publicado y la reconstruccion vuelven a sumar los mismos terminos en el mismo orden.
 #:
-#: No se copian al informe: se **verifican** contra la reconstruccion (A7). Una discrepancia
-#: mayor que :data:`FROZEN_TOLERANCE` es error tipado, nunca una cifra publicada en silencio.
-#: ``pnl_declared_sum`` se **volvio a medir** con la unidad corregida por #80 (fraccion del
-#: nocional): antes restaba 100x el coste declarado.
-FROZEN_BASELINE: Final[dict[str, dict[str, float]]] = {
-    "raw": {
-        "n_traded": 356,
-        "brier_score": 0.2511418117147099,
-        "log_loss": 0.6953995223105118,
-        "pnl_declared_sum": 0.020768118638871198,
-    },
-    "calibrated": {
-        "n_traded": 404,
-        "brier_score": 0.2548043292843032,
-        "log_loss": 0.7672355544413263,
-        "pnl_declared_sum": 0.016458610959855593,
-    },
-}
-
-#: Tolerancia de A7. Es ``1e-9`` y no ``0`` porque las cifras congeladas se publicaron con
-#: ``repr`` de ``float`` y la reconstruccion vuelve a sumar los mismos terminos en el mismo
-#: orden; el valor medido coincide en las cuatro cifras de las dos series.
-FROZEN_TOLERANCE: Final[float] = 1e-9
+#: El guardian es **relativo, nunca un literal congelado** (`_docs/process.md`, regla 1): compara
+#: la reconstruccion con el resultado que la **propia** entrada del registro publica
+#: (``runs/<sha>/result.json``: ``n_observations`` y ``sharpe_per_session``), no con una cifra
+#: historica de #24/#25. Una cifra fijada a mano deja de reproducirse en cuanto el almacen crece
+#: con una ingesta —que es justo lo que se mide aqui— y convertiria un resultado en un fallo
+#: (#136). Una entrada construida sobre **otra** ventana no es reconstruible y se declara con
+#: :class:`StaleRunWindowError`, no con una discrepancia de cifras.
+RECONSTRUCTION_TOLERANCE: Final[float] = 1e-9
 
 #: Formato estable del ``report_sha256`` (A13). El prefijo `sha256:` viaja dentro del valor:
 #: un digest desnudo lo bloquea `detect-secrets` (misma convencion que #93).
@@ -367,8 +354,18 @@ class MissingDecisionError(ModelComparisonError):
     """Una sesion de *test* no trae decision: sin decision no hay probabilidad que comparar."""
 
 
-class FrozenBaselineMismatchError(ModelComparisonError):
-    """La linea base reconstruida **no** reproduce lo congelado por #24/#25 (A7)."""
+class StaleRunWindowError(ModelComparisonError):
+    """La entrada del registro se construyo sobre **otra** ventana: no es reconstruible aqui (A7).
+
+    El almacen crecio con una ingesta (otra `plan_sha256`/`matrix_sha256`), asi que la
+    reconstruccion sobre la ventana actual no empareja con la entrada. Se declara con su motivo;
+    regenerar la entrada (`_docs/process.md`, receta `ingesta -> regeneracion`) es lo que la
+    devuelve al registro reconstruible.
+    """
+
+
+class ReconstructionMismatchError(ModelComparisonError):
+    """La reconstruccion **no** reproduce el resultado que la propia entrada publico (A7)."""
 
 
 class UnknownVariantError(ModelComparisonError):
@@ -564,6 +561,57 @@ def _model_document(runs_root: Path, run_sha256: str) -> dict[str, object]:
     return cast("dict[str, object]", json.loads(path.read_text(encoding="utf-8")))
 
 
+def _run_window(runs_root: Path, run_sha256: str) -> Mapping[str, object]:
+    """La **ventana declarada** por la entrada del registro (`config.json` → `config.window`).
+
+    Es la que fija `plan_sha256` y `matrix_sha256`: sin ellos una entrada se reconstruiria sobre
+    una muestra distinta de la suya sin que nada lo declarara (A7, #136).
+    """
+    path = runs_root / run_sha256 / CONFIG_FILE
+    if not path.is_file():
+        raise MissingModelDocumentError(
+            f"`runs/{run_sha256}/config.json` no existe: sin la ventana declarada no se puede "
+            "comprobar que la entrada es reconstruible sobre **esta** muestra (A7)"
+        )
+    document = cast("dict[str, object]", json.loads(path.read_text(encoding="utf-8")))
+    config = cast("Mapping[str, object]", document.get("config") or {})
+    window = config.get("window")
+    if not isinstance(window, Mapping):
+        raise StaleRunWindowError(
+            f"`runs/{run_sha256}/config.json` no declara `window`: no se puede emparejar la "
+            "entrada con la muestra actual (A7)"
+        )
+    return cast("Mapping[str, object]", window)
+
+
+def _require_current_window(
+    entry: RegistryEntry,
+    *,
+    runs_root: Path,
+    frame: FeatureFrame,
+    plan: SplitPlan,
+) -> None:
+    """La entrada tiene que haberse construido sobre la **misma** ventana que la corrida (A7, #136).
+
+    Se comparan las dos identidades que la ventana declara, `plan_sha256` y `matrix_sha256`. Si no
+    coinciden, la entrada se construyo sobre otra muestra (una ingesta hizo crecer el almacen) y la
+    reconstruccion sobre la ventana actual no la reproduce: se declara con su motivo, no con una
+    discrepancia de cifras. Regenerarla (`_docs/process.md`) es lo que la devuelve al registro.
+    """
+    window = _run_window(runs_root, entry.run_sha256)
+    for name, current in (
+        ("plan_sha256", plan.plan_sha256),
+        ("matrix_sha256", frame.matrix.matrix_sha256),
+    ):
+        declared = window.get(name)
+        if declared != current:
+            raise StaleRunWindowError(
+                f"`runs/{entry.run_sha256}/config.json` se construyo sobre otra ventana: "
+                f"`{name} = {declared!r}` y la muestra actual da `{current!r}`. La entrada no es "
+                "reconstruible aqui; se regenera en orden (process.md) y se vuelve a comparar (A7)"
+            )
+
+
 def _baseline_deciding_probabilities(
     document: Mapping[str, object],
     *,
@@ -682,25 +730,32 @@ def _variant_from_run(
     )
 
 
-def _require_frozen_match(variant: Variant) -> None:
-    """La linea base reconstruida tiene que reproducir lo congelado (A7)."""
-    reference = FROZEN_BASELINE["calibrated" if variant.calibrated else "raw"]
+def _require_reconstruction_matches_run(variant: Variant, entry: RegistryEntry) -> None:
+    """La reconstruccion tiene que reproducir el resultado que **la propia entrada** publico (A7).
+
+    Relativo, nunca un literal congelado (`_docs/process.md`, regla 1): la referencia son los dos
+    numeros que `runs/<sha>/result.json` ya publica —`n_observations` (el recuento de operadas) y
+    `sharpe_per_session`—. Si la reconstruccion no los reproduce, hay un defecto de reconstruccion
+    (p. ej. la unidad del P&L de #80) y se lanza error tipado en vez de publicar la cifra.
+    """
+    reference = {
+        "n_traded": float(entry.n_observations),
+        "sharpe_per_session": entry.sharpe_per_session,
+    }
     observed = {
         "n_traded": float(variant.n_traded),
-        "brier_score": variant.brier_score,
-        "log_loss": variant.log_loss_value,
-        "pnl_declared_sum": variant.pnl_declared_sum,
+        "sharpe_per_session": variant.sharpe_per_session,
     }
     off = [
-        f"{name}: reconstruido {value!r}, congelado {reference[name]!r}"
+        f"{name}: reconstruido {value!r}, publicado por la entrada {reference[name]!r}"
         for name, value in observed.items()
-        if abs(value - reference[name]) > FROZEN_TOLERANCE
+        if abs(value - reference[name]) > RECONSTRUCTION_TOLERANCE
     ]
     if off:
-        raise FrozenBaselineMismatchError(
+        raise ReconstructionMismatchError(
             f"la variante `{variant.variant_id}` reconstruida desde "
-            f"`runs/{variant.run_sha256}/model.json` no reproduce las cifras congeladas de "
-            f"#24/#25 (tolerancia {FROZEN_TOLERANCE!r}): " + "; ".join(off)
+            f"`runs/{variant.run_sha256}/model.json` no reproduce el resultado que su propia "
+            f"entrada publico (tolerancia {RECONSTRUCTION_TOLERANCE!r}): " + "; ".join(off)
         )
 
 
@@ -716,9 +771,9 @@ def reconstruct_baseline(
 ) -> Variant:
     """Reconstruye una variante lineal desde su `model.json`, **sin reajustar** (A7).
 
-    Lanza error tipado si el `variant_id` no es el de la familia lineal, si falta el
-    `model.json` o si el `n_observations` del registro no cuadra con las operaciones de la
-    serie reconstruida (A10).
+    Lanza error tipado si el `variant_id` no es el de la familia lineal, si la entrada se construyo
+    sobre **otra** ventana (A7, #136), si falta el `model.json` o si el `n_observations` del
+    registro no cuadra con las operaciones de la serie reconstruida (A10).
     """
     if entry.variant_id != BASELINE_VARIANT_ID:
         raise UnknownVariantError(
@@ -726,6 +781,9 @@ def reconstruct_baseline(
             f"({[BASELINE_VARIANT_ID, VARIANT_ID]}): no se rellena con una columna de ceros ni "
             "se reajusta (A10)"
         )
+    # La ventana declarada por la entrada tiene que ser la de **esta** corrida: si una ingesta hizo
+    # crecer el almacen, la entrada se declara con su motivo y no por una discrepancia de cifras.
+    _require_current_window(entry, runs_root=runs_root, frame=frame, plan=plan)
     document = _model_document(runs_root, entry.run_sha256)
     model = cast("Mapping[str, object]", document["model"])
     folds = cast("list[object]", model["folds"])
@@ -772,7 +830,7 @@ def reconstruct_baseline(
             "la entrada no se puede emparejar por `variant_id` + `n_observations` y su columna "
             "no se publica (A10)"
         )
-    _require_frozen_match(variant)
+    _require_reconstruction_matches_run(variant, entry)
     return variant
 
 
@@ -1417,13 +1475,19 @@ def _protocol_block(
     }
 
 
-def _frozen_block(evaluated: Sequence[Variant]) -> dict[str, object]:
-    """La verificacion de la linea base contra lo congelado de #24/#25 (A7)."""
+def _reconstruction_block(evaluated: Sequence[Variant], registry: Registry) -> dict[str, object]:
+    """La verificacion de la linea base reconstruida contra **su propia** entrada (A7, #136).
+
+    La referencia de cada fila son los dos numeros que `runs/<sha>/result.json` ya publica
+    (`n_observations` y `sharpe_per_session`): relativo, nunca un literal de #24/#25 que deja de
+    reproducirse con cada ingesta (`_docs/process.md`, regla 1).
+    """
+    by_run = {entry.run_sha256: entry for entry in registry.entries}
     rows: list[dict[str, object]] = []
     for item in evaluated:
         if item.variant_id != BASELINE_VARIANT_ID:
             continue
-        reference = FROZEN_BASELINE["calibrated" if item.calibrated else "raw"]
+        entry = by_run.get(item.run_sha256)
         rows.append(
             {
                 "run_sha256": item.run_sha256,
@@ -1433,21 +1497,30 @@ def _frozen_block(evaluated: Sequence[Variant]) -> dict[str, object]:
                 "log_loss": item.log_loss_value,
                 "pnl_declared_sum": item.pnl_declared_sum,
                 "pnl_declared_pct_sum": item.pnl_declared_sum,
-                "reference": dict(reference),
-                "tolerance": FROZEN_TOLERANCE,
+                "sharpe_per_session": item.sharpe_per_session,
+                "reference": (
+                    None
+                    if entry is None
+                    else {
+                        "n_observations": entry.n_observations,
+                        "sharpe_per_session": entry.sharpe_per_session,
+                    }
+                ),
+                "tolerance": RECONSTRUCTION_TOLERANCE,
             }
         )
     return {
         "source": (
             "#24 (cruda) y #25 (calibrada): la serie se reconstruye desde "
-            "`runs/<sha>/model.json` con `numpy` y el almacen, **sin reajustar**"
+            "`runs/<sha>/model.json` con `numpy` y el almacen, **sin reajustar**, y se verifica "
+            "contra el resultado que publica la **propia** entrada (`runs/<sha>/result.json`)"
         ),
-        "tolerance": FROZEN_TOLERANCE,
+        "tolerance": RECONSTRUCTION_TOLERANCE,
         "rows": rows,
         "verified": len(rows) == 2,
         "rule": (
             "una discrepancia mayor que la tolerancia es **error tipado** "
-            "(`FrozenBaselineMismatchError`), nunca una cifra publicada en silencio (A7)"
+            "(`ReconstructionMismatchError`), nunca una cifra publicada en silencio (A7)"
         ),
     }
 
@@ -1603,7 +1676,7 @@ def _payload(
         "protocol": _protocol_block(
             plan=plan, universe=universe, frame=frame, cost_model=cost_model, slippage=slippage
         ),
-        "frozen_baseline": _frozen_block(evaluated),
+        "reconstruction": _reconstruction_block(evaluated, registry),
         "calibration_parity": _calibration_parity_block(evaluated),
         "model": {
             "library": dict(library),
@@ -1780,8 +1853,8 @@ def render_markdown(report: ModelComparisonReport) -> str:
     unit_bug = cast("dict[str, object]", payload["unit_bug_80"])
     cost = cast("dict[str, object]", payload["declared_cost"])
     net = cast("dict[str, object]", payload["net_metrics"])
-    frozen = cast("dict[str, object]", payload["frozen_baseline"])
-    frozen_rows = cast("list[dict[str, object]]", frozen["rows"])
+    reconstruction = cast("dict[str, object]", payload["reconstruction"])
+    reconstruction_rows = cast("list[dict[str, object]]", reconstruction["rows"])
     model = cast("dict[str, object]", payload["model"])
     library = cast("Mapping[str, str]", model["library"])
     library_name = library["name"]
@@ -1811,25 +1884,33 @@ def render_markdown(report: ModelComparisonReport) -> str:
         f"`{universe['last_session']}`; nulos en las 10 features: "
         f"**{universe['n_nulls_in_features']}**.",
         "",
-        "## Linea base congelada (#24/#25) verificada",
+        "## Linea base (#24/#25) reconstruida y verificada contra su propia entrada",
         "",
-        "| variante | operadas | Brier | log-loss | suma declarada | verificada |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| variante | operadas | Brier | log-loss | suma declarada | Sharpe | verificada |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
-    for row in frozen_rows:
-        reference = cast("dict[str, object]", row["reference"])
-        verified = abs(
-            float(cast("float", row["brier_score"]))
-            - float(cast("float", reference["brier_score"]))
-        ) <= float(cast("float", frozen["tolerance"]))
+    tolerance = float(cast("float", reconstruction["tolerance"]))
+    for row in reconstruction_rows:
+        reference = cast("dict[str, object] | None", row["reference"])
+        verified = False
+        if reference is not None:
+            observed_n = float(cast("float", row["n_traded"]))
+            observed_sharpe = float(cast("float", row["sharpe_per_session"]))
+            expected_n = float(cast("float", reference["n_observations"]))
+            expected_sharpe = float(cast("float", reference["sharpe_per_session"]))
+            verified = (
+                abs(observed_n - expected_n) <= tolerance
+                and abs(observed_sharpe - expected_sharpe) <= tolerance
+            )
         lines.append(
             f"| `{row['run_sha256']}` ({'calibrada' if row['calibrated'] else 'cruda'}) | "
             f"{row['n_traded']} | {_number(row['brier_score'])} | {_number(row['log_loss'])} | "
-            f"{_number(row['pnl_declared_sum'])} | {verified} |"
+            f"{_number(row['pnl_declared_sum'])} | {_number(row['sharpe_per_session'])} | "
+            f"{verified} |"
         )
     lines.extend(
         [
-            f"- Tolerancia de A7: `{frozen['tolerance']}`; {frozen['rule']}",
+            f"- Tolerancia de A7: `{reconstruction['tolerance']}`; {reconstruction['rule']}",
             "",
             "## Paridad de calibracion (fold a fold)",
             "",

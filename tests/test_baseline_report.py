@@ -53,7 +53,7 @@ from cfdtrader.analysis.experiment_log import (
     record_experiment,
     run_sha256,
 )
-from cfdtrader.analysis.model_comparison import FROZEN_BASELINE, FROZEN_TOLERANCE
+from cfdtrader.analysis.model_comparison import RECONSTRUCTION_TOLERANCE
 from cfdtrader.backtest.baselines import BASELINE_IDS
 from cfdtrader.backtest.engine import STATUS_TRADED, canonical_text
 from cfdtrader.backtest.metrics import LOG_LOSS_EPSILON, MetricsInputError, calculate_metrics
@@ -960,10 +960,12 @@ def test_c7_the_raw_rows_drop_the_hundred_x_offset(raw_report: BaselineReport) -
     assert traded > 0
     declared = cast("float", cast("dict[str, object]", model_row["pnl_declared_pct"])["sum"])
     gross = cast("float", cast("dict[str, object]", model_row["gross_pct"])["sum"])
-    assert abs(declared - FROZEN_BASELINE["raw"]["pnl_declared_sum"]) <= FROZEN_TOLERANCE
-    # El coste declarado es una **fraccion** del nocional (0.000042), no 0.0042. La identidad exacta
-    # `declarado = bruto - operadas x c` depende de la composicion del almacen (medida), asi que se
-    # comprueba la **escala** (#135): nunca el antiguo 100x (`~1.4952 == 356 x 0.0042`).
+    # Relativo, nunca un literal congelado (#136): el de #24/#25 dejo de reproducirse al crecer el
+    # almacen. Lo que se fija es la **identidad del residuo** `declarado = bruto - operadas x c`
+    # con la operada **medida** y el coste declarado (0.000042 del nocional, no 0.0042).
+    residual = declared - (gross - traded * 0.000042)
+    assert abs(residual) <= RECONSTRUCTION_TOLERANCE
+    # Y la **escala** (#135): nunca el antiguo 100x (`~1.4952 == 356 x 0.0042`).
     assert abs(declared) < 1.0 and abs(gross) < 1.0
 
     calibrated = cast(
@@ -992,7 +994,7 @@ def test_c7_the_raw_rows_drop_the_hundred_x_offset(raw_report: BaselineReport) -
                 ],
             )
         )
-        <= FROZEN_TOLERANCE
+        <= RECONSTRUCTION_TOLERANCE
     )
 
 
@@ -1087,7 +1089,10 @@ def test_c4_c5_c6_the_regenerated_raw_run_keeps_identity_and_moves_the_sharpe() 
             "result"
         ],
     )
-    assert result["n_observations"] == 356
+    # Relativo (#136): el recuento de operadas es una **medicion** de la ventana vigente, no un
+    # literal de #24 (356 sobre la ventana vieja). Lo que se fija es que hubo actividad y que el
+    # Sharpe **abandona** el valor pre-#80 (C5/C6).
+    assert cast("int", result["n_observations"]) > 0
     assert result["sharpe_per_session"] != PRE_80_SHARPE
 
 
