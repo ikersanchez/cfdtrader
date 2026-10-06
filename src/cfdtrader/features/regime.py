@@ -44,6 +44,18 @@ El modulo es **puro** (entra un ``pl.DataFrame``, sale otro), **no lee el reloj*
 no consulta el calendario del proyecto (los vencimientos se derivan del **propio
 frame**) y no toca el sistema de ficheros: la persistencia la hace
 :func:`cfdtrader.features.store.save_daily` con la spec de :func:`regime_spec`.
+
+Limite estructural del calendario derivado del frame (issue #79)
+----------------------------------------------------------------
+
+Las tres columnas de calendario se derivan del **propio frame**, sin consultar
+``MarketCalendar``. De ahi un limite **declarado y probado**, no un defecto
+tolerado: ``sessions_to_opex`` queda a ``null`` en las sesiones cuyo **proximo**
+vencimiento cae fuera del frame, porque el frame no puede inventar sesiones que no
+tiene. Le pasa exactamente a la **cola**: la sesion mas reciente del almacen —la
+que interesa decidir— todavia no ve su OPEX. El ``null`` **no se imputa** (ni ``0``
+ni un valor arrastrado): quien consuma la columna decide que hace con el, y el
+modelo de #24 la excluye precisamente por esta razon.
 """
 
 from __future__ import annotations
@@ -171,7 +183,9 @@ def _opex_sessions(sessions: Sequence[date]) -> tuple[date, ...]:
 
     Un mes cuyo tercer viernes cae **fuera** del frame no aporta vencimiento: el
     frame no puede inventar una sesion que no tiene. Por eso los ultimos dias sin
-    vencimiento por delante quedan a ``null`` en ``sessions_to_opex``.
+    vencimiento por delante quedan a ``null`` en ``sessions_to_opex``: es el
+    limite **estructural** declarado en el docstring del modulo y probado en
+    ``test_a11_the_tail_without_a_visible_opex_is_null_by_construction`` (#79).
     """
     first, last = sessions[0], sessions[-1]
     found: list[date] = []

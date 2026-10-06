@@ -810,6 +810,33 @@ def test_a11_the_opex_calendar_is_derived_from_the_frame() -> None:
     )
 
 
+def test_a11_the_tail_without_a_visible_opex_is_null_by_construction() -> None:
+    """``sessions_to_opex`` es ``null`` exactamente donde no hay OPEX visible (issue #79).
+
+    Limite **estructural** del calendario derivado del frame: la sesion mas reciente
+    de la muestra no ve su proximo vencimiento y se queda a ``null``. Se declara, se
+    prueba y **no se imputa**: ni ``0`` ni un valor arrastrado. Cada valor no nulo
+    apunta, ademas, a un vencimiento que existe en el frame (autoconsistencia).
+    """
+    frame = _long_frame(300)
+    matrix = regime_matrix(frame, spec=regime_spec())
+    to_opex = _int_column(matrix, "sessions_to_opex")
+
+    opex_positions = {position for position, value in enumerate(to_opex) if value == 0}
+    assert opex_positions, "el frame sintetico tiene que contener algun vencimiento"
+    tail = [position for position, value in enumerate(to_opex) if value is None]
+    last_opex = max(opex_positions)
+
+    assert tail == list(range(last_opex + 1, len(to_opex))), (
+        "la cola es exactamente lo que sigue al ultimo vencimiento del frame"
+    )
+    for position, value in enumerate(to_opex):
+        if value is None:
+            assert position > last_opex
+        else:
+            assert position + value in opex_positions, "el valor tiene que apuntar a una OPEX"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # A12 — golden
 # ─────────────────────────────────────────────────────────────────────────────
