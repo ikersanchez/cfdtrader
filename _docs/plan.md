@@ -1305,7 +1305,13 @@ reproducirse** en cuanto la ingesta añadió la sesión `2026-09-17` (ventana de
   con las cuatro entradas al día, `model_comparison` vuelve a **`selected`** (4 de 4 medidas) y
   `phase2_dominance` reemite su veredicto (`not_evaluable`, `declared_base_inconclusive_within_declared_bound`,
   agregado `fail`, 9 filas). Los tests que fijaban cifras absolutas (`MEASURED_BRIER`,
-  `n_observations == 356`, C7) pasan a **identidades** relativas.
+  `n_observations == 356`, C7, `n_traded == 150`, y los Brier/log-loss crudos de
+  `baseline_calibration` A6) pasan a **identidades** relativas.
+- **Dos correcciones de test que la suite destapaba.** `test_baseline_model` A11 seguía
+  esperando que el decider **lanzara** con probabilidad ausente —comportamiento que **#135**
+  retiró (ahora decide `NOTHING` con motivo)—; se alinea con el decider vigente y solo exige el
+  error para una probabilidad fuera de `[0, 1]`. El resto de guardas de `git status`/`git diff`
+  pasan con el árbol commiteado, como manda su ciclo.
 - **Valla de honestidad (inalterada).** `§11.6`, `§19.6`, `§19.7` y `§19.12` **no** se tocan: esto
   arregla el **guardián**, no el veredicto —la Fase 2 sigue `fail`/`not_evaluable` con
   `phase2_ready = false`, la observación es **carril A** con ejecución manual y el carril B sigue

@@ -508,9 +508,15 @@ def test_a6_the_two_sides_are_the_same_500_sessions_and_the_delta_is_signed(
     assert published["brier_score"] == after["brier_score"]
     assert published["log_loss"] == after["log_loss"]
 
-    # La serie cruda es la que ya publico #24: la calibracion **no** la toca.
-    assert float(cast("float", before["brier_score"])) == pytest.approx(0.2511418117147099)
-    assert float(cast("float", before["log_loss"])) == pytest.approx(0.6953995223105118)
+    # Relativo (#136): las cifras crudas de #24 son una **medicion** de la ventana vigente, no un
+    # literal (0.25114/0.69539 eran los de la ventana vieja). Lo que se fija es que la calibracion
+    # **no** toca la vereda cruda: `before` son las cifras de la serie **cruda** reproducida aqui.
+    assert float(cast("float", before["brier_score"])) == pytest.approx(
+        _brier(raw, outcomes), rel=0, abs=0.0
+    )
+    assert float(cast("float", before["log_loss"])) == pytest.approx(
+        _log_loss(raw, outcomes), rel=0, abs=0.0
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

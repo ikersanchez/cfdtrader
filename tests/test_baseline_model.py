@@ -427,8 +427,12 @@ def test_a11_the_decider_only_reads_the_view_and_uses_the_declared_threshold() -
     exact = decide(_view(date(2025, 1, 2), 0.5))
     assert exact.direction == engine.Direction.LONG
 
-    with pytest.raises(engine.DecisionError):
-        decide(_view(date(2025, 1, 2), None))
+    # #135: sin probabilidad el decider **no** aborta la corrida: decide `NOTHING` con su motivo
+    # declarado (`probability=None`), porque una sesion fuera del documento del baseline no es un
+    # error de contrato. Un numero **fuera de** `[0, 1]` si lo es.
+    without = decide(_view(date(2025, 1, 2), None))
+    assert without.direction == engine.Direction.NOTHING
+    assert without.probability is None
     with pytest.raises(engine.DecisionError):
         decide(_view(date(2025, 1, 2), 1.2))
     with pytest.raises(BaselineError):
