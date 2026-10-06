@@ -15,7 +15,8 @@ Las **particiones *walk-forward* con purga y embargo** viven en
 en el *train* y cuáles en el *test* (bloques de test contiguos, train estrictamente
 anterior, expansivo o rodante) y publica un ``SplitPlan`` verificable y reproducible por
 ``plan_sha256``. Es la pieza que consumen #13, #16, #24 y #25; no entrena, no mide precios
-y no reserva el *holdout* (eso es #68).
+y no reserva el *holdout*: esa reserva es ``cfdtrader.backtest.holdout`` (tarea #68), que le
+entrega la secuencia **sin** el tramo reservado.
 
 El **motor *walk-forward*** vive en ``cfdtrader.backtest.engine`` (tarea #13): puro y
 determinista, recorre las sesiones de *test* del ``SplitPlan`` de #12, pide una ``Decision``

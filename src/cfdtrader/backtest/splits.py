@@ -155,8 +155,9 @@ SPLITS_DOES_NOT_DO: Final[tuple[dict[str, str], ...]] = (
         "id": "no_reserva_holdout",
         "issue": "#68",
         "statement": (
-            "no reserva ni toca el holdout final intocable: la politica del plan.md §11.4 "
-            "es #68, no este modulo"
+            "no reserva ni toca el holdout final intocable: la reserva la hace "
+            "`backtest.holdout` (que entrega este tramo ya apartado) y este modulo recibe la "
+            "secuencia sin el"
         ),
     },
     {
@@ -183,11 +184,6 @@ FOLLOW_UPS: Final[tuple[dict[str, str], ...]] = (
         "issue": "#67",
         "topic": "CPCV (Combinatorial Purged Cross-Validation)",
         "why": "es el esquema alternativo donde la purga y el embargo hacen trabajo real",
-    },
-    {
-        "issue": "#68",
-        "topic": "reserva y politica del holdout final intocable",
-        "why": "`plan.md` §11.4 y §21 pregunta 10; este modulo no aparta ninguna ventana",
     },
     {
         "issue": "#13",
