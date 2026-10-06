@@ -1158,6 +1158,12 @@ def _validate_spec(spec: FeatureSpec) -> None:
                 f"'{name}' no esta en el catalogo de '{spec.feature_set}': las features "
                 f"declaradas son {sorted(by_name)}"
             )
+        if window is not None and not _is_int(window):
+            raise InvalidFeatureSpecError(
+                f"la ventana declarada de '{name}' ({window!r}) tiene que ser un entero o "
+                f"None, no {type(window).__name__}: 'True' y '1.0' comparan igual que 1 y "
+                "darian otro digest para la misma ventana (issue #71)"
+            )
         if window != entry.window:
             raise InvalidFeatureSpecError(
                 f"la ventana declarada de '{name}' ({window!r}) no coincide con la del catalogo "
@@ -1260,10 +1266,14 @@ def normalise_expanding(frame: pl.DataFrame, column: str, *, min_sessions: int) 
     con la **misma** ventana que la mediana: nunca la muestra completa
     (`_docs/plan.md` §9; normalizar sobre todo el conjunto es *look-ahead*).
 
-    Las ``min_sessions - 1`` primeras sesiones quedan a ``null``, y tambien la
-    sesion cuyo ``MAD`` sea exactamente ``0``: dividir por el daria ``inf``, y un
-    ``inf`` no es un dato. Un nulo de la columna no cuenta como sesion de
-    historia y devuelve ``null``; un ``NaN`` o un ``inf`` es un error tipado.
+    Las ``min_sessions - 1`` primeras sesiones quedan a ``null``, y tambien toda
+    sesion cuyo z-score no sea **finito**: ``MAD == 0`` (dividir por el daria
+    ``inf``) y el desbordamiento aritmetico de entradas extremas, donde la
+    mediana, la ``MAD`` o el producto ``1,4826 * MAD`` se van a ``inf`` y el
+    cociente sale ``NaN``. El guard es sobre el **resultado**, no solo sobre
+    ``MAD`` (issue #71): ``null``, nunca ``nan`` ni ``inf``. Un nulo de la columna
+    no cuenta como sesion de historia y devuelve ``null``; un ``NaN`` o un
+    ``inf`` **de entrada** es un error tipado.
 
     Parameters
     ----------
@@ -1301,12 +1311,15 @@ def normalise_expanding(frame: pl.DataFrame, column: str, *, min_sessions: int) 
             normalised.append(None)
             continue
         window = np.asarray(history, dtype=float)
-        centre = float(np.median(window))
-        mad = float(np.median(np.abs(window - centre)))
-        if mad == 0.0:
+        with np.errstate(over="ignore", invalid="ignore"):
+            centre = float(np.median(window))
+            mad = float(np.median(np.abs(window - centre)))
+        denominator = MAD_SCALE * mad
+        if mad == 0.0 or not all(map(math.isfinite, (centre, mad, denominator))):
             normalised.append(None)
             continue
-        normalised.append((value - centre) / (MAD_SCALE * mad))
+        score = (value - centre) / denominator
+        normalised.append(score if math.isfinite(score) else None)
 
     return frame.with_columns(
         pl.Series(f"{column}{NORMALISED_SUFFIX}", normalised, dtype=pl.Float64)

@@ -688,6 +688,30 @@ def test_a10_broken_values_are_typed_errors() -> None:
         store.daily_records(text, spec=spec, series_id="^GSPC", fetched_at=FETCHED_AT)
 
 
+def test_a10_an_overflowing_window_is_null_never_nan() -> None:
+    """Entradas extremas desbordan la mediana: el guard es sobre el resultado (issue #71).
+
+    Antes miraba solo ``MAD == 0``; con ``|x| ~ 1e308`` la mediana y la MAD se van a ``inf``
+    (o el producto ``1,4826 * MAD``), ``inf != 0`` y la columna publicaba ``nan``.
+    """
+    column = f"x{store.NORMALISED_SUFFIX}"
+    frame = pl.DataFrame({"session": _sessions(4), "x": [1e308, -1e308, 1e308, 1e308]})
+    result = store.normalise_expanding(frame, "x", min_sessions=2).get_column(column).to_list()
+
+    assert result == [None, None, None, None], "ni nan ni inf: null"
+    for value in result:
+        assert value is None or math.isfinite(value)
+
+
+def test_a10_a_window_declared_as_bool_or_float_is_a_typed_error() -> None:
+    """``True``/``1.0`` comparan igual que ``1`` pero son otra declaracion (issue #71)."""
+    base = store.FeatureSpec()
+    for bad in (True, 1.0):
+        with pytest.raises(store.InvalidFeatureSpecError, match="entero"):
+            store.FeatureSpec(windows={**base.windows, "atr_norm": bad})
+    assert store.feature_spec_sha256(store.FeatureSpec()) == store.feature_spec_sha256(base)
+
+
 def test_a10_not_computable_is_published_as_null_and_survives_parquet(tmp_path: Path) -> None:
     """Un ``null`` es un dato: no se convierte en 0 al escribir y leer."""
     root = tmp_path / "store"
