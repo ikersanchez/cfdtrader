@@ -62,6 +62,14 @@ artifacts/
 *.ckpt
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Diario de decisiones y traza estructurada (Fase 4, #39/#43/#45)
+# Es el dato **irreversible** del sistema (plan.md §19.1): no es un artefacto de
+# build, pero tampoco se versiona (se respalda aparte, como `data/`). El camino
+# diario lo escribe con `--journal-root journal` (_docs/runbook.md).
+# ─────────────────────────────────────────────────────────────────────────────
+journal/
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Caché de respuestas del LLM
 # Es un artefacto de coste, no de verdad (tech_stack.md §4.9). No se versiona,
 # se respalda aparte.
