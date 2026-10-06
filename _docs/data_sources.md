@@ -112,6 +112,27 @@ y el *challenge* no genera issue de seguimiento.
   decorativo. El coste de pedirla es pequeño (0,1 MB para CPI, 1.367 filas) y el
   valor guardado es el **primer publicado**, que es el que movió el mercado; una
   vintage con `.` no es una publicación y no adelanta la fecha.
+- **Política de *vintages* (decisión de #74, 2026-10-06).** El almacén guarda
+  **una** vintage por observación: la **primera publicación**. Medido hoy:
+  `raw.macro` tiene **25.055** filas (7 series) y **todas** con `version = 1` —
+  ninguna revisión posterior de CPI, PCE o NFP se ha guardado, porque la fuente no
+  ha revisado nada desde la ingesta—. El mecanismo para guardar revisiones **ya
+  existe**: `Store.append_revision`, y `data.macro._write` lo usa cuando la fuente
+  revisa un valor ya almacenado. La política es, por tanto, «**una** vintage, con el
+  contador de revisión disponible»: guardar **todas** las vintages de ALFRED
+  multiplicaría las filas por el número de revisiones por observación (la ventana
+  completa de `CPIAUCSL` ya son **1.367** filas solo para una serie) y ninguna tarea
+  las consume. Re-ingerirlas sería su propia tarea, con el coste declarado antes
+  (#49).
+- **Política de antigüedad (*staleness*) (decisión de #74, 2026-10-06).** La
+  antigüedad de un valor transportado **no** viaja como columna de las familias de
+  features: `macro_v1` está cerrado (#22) y el dato ya está en el almacén. La
+  **calcula el consumidor** a partir de `published_at` —que `raw.macro` publica por
+  observación— y del `as_of` evaluado, cuando la necesite; hoy la guardia de
+  obsolescencia de #40 vigila la **sesión de mercado**, no la macro. Con eso, las
+  rachas de la misma referencia del *shutdown* de 2025 (76 días en `PAYEMS`, 70 en
+  `PCEPI`, 55 en `CPIAUCSL`) son distinguibles de un dato fresco **sin** tocar el
+  catálogo ni la identidad de las features.
 - **Requisito:** clave gratuita (`FRED_API_KEY`). Sin ella **no se ingesta nada**:
   cada serie se declara `unavailable` y el proceso sale con código 3, para que
   «no hay clave» no se confunda con «ya está ingestado».
