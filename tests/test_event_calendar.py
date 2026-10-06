@@ -145,12 +145,16 @@ def test_a6_a_non_quarterly_opex_is_opex_but_not_triple_witching(
 def test_a7_the_opex_rolls_back_when_the_third_friday_is_a_holiday(
     calendar: MarketCalendar,
 ) -> None:
-    """En 2026 el tercer viernes de junio (19, Juneteenth) es festivo: el OPEX cae en la previa."""
+    """En 2026 el tercer viernes de junio (19, Juneteenth) es festivo: el OPEX cae en la previa.
+
+    La sesión rodada trae además el *triple witching* y el roll del ES (#77): el
+    roll vence con la OPEX del trimestre, ya rodada.
+    """
     june = calendar_signal(calendar, date(2026, 6, 18), as_of=AS_OF)
     holiday = calendar_signal(calendar, date(2026, 6, 19), as_of=AS_OF)
 
     assert calendar.is_session(date(2026, 6, 19)) is False
-    assert _kinds(june) == ("opex", "triple_witching")
+    assert _kinds(june) == ("opex", "triple_witching", "es_roll")
     assert _kinds(holiday) == ("market_closed",)
     # El 18 no es el tercer viernes nominal: la rodadura exige contar desde el calendario.
     assert calendar.is_session(date(2026, 6, 18)) is True
@@ -250,20 +254,19 @@ def test_a11_a_non_calendar_is_a_typed_error() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# A12 · Frontera heredada de #77 (roll del ES nominal) — declarada, no corregida
+# A12 · Roll del ES: el tercer viernes festivo lo marca la sesión rodada (#77)
 # ─────────────────────────────────────────────────────────────────────────────
-def test_a12_the_nominal_es_roll_limitation_is_inherited_not_fixed(
-    calendar: MarketCalendar,
-) -> None:
-    """`is_es_roll` marca el tercer viernes nominal (2026-06-19, festivo): el agente lo hereda.
+def test_a12_the_es_roll_lands_on_the_rolled_session(calendar: MarketCalendar) -> None:
+    """`is_es_roll` marca la **sesión** del vencimiento: 2026-06-18, no el nominal cerrado.
 
-    La sesión rodada (2026-06-18) no trae `es_roll`, porque `MarketCalendar` marca el nominal
-    aunque el mercado esté cerrado (issue #77). Aquí se **documenta**, no se corrige.
+    Hasta #77 ``MarketCalendar`` marcaba el tercer viernes **nominal** (2026-06-19,
+    Juneteenth) aunque el mercado estuviera cerrado, y este agente lo heredaba. Ahora
+    el roll cae en la misma sesión que la OPEX.
     """
-    assert calendar.is_es_roll(date(2026, 6, 19)) is True
-    assert calendar.is_es_roll(date(2026, 6, 18)) is False
-    assert "es_roll" not in _kinds(calendar_signal(calendar, date(2026, 6, 18), as_of=AS_OF))
-    assert "es_roll" not in _kinds(calendar_signal(calendar, date(2026, 6, 19), as_of=AS_OF))
+    assert calendar.is_es_roll(date(2026, 6, 18)) is True
+    assert calendar.is_es_roll(date(2026, 6, 19)) is False
+    assert "es_roll" in _kinds(calendar_signal(calendar, date(2026, 6, 18), as_of=AS_OF))
+    assert _kinds(calendar_signal(calendar, date(2026, 6, 19), as_of=AS_OF)) == ("market_closed",)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

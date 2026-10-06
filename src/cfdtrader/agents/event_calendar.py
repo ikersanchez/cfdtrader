@@ -15,9 +15,11 @@ dependencias nuevas y sin inventar ninguna fecha**:
   misma definición que la regla 18 del gate. Bloquea.
 - **OPEX**: el vencimiento mensual de opciones, el tercer viernes del mes
   **rodado a la sesión inmediatamente anterior** cuando el tercer viernes no es
-  sesión (misma regla que ``features/regime.py::_opex_session``).
+  sesión. La regla vive **una sola vez**, en
+  ``MarketCalendar.opex_dates``/``is_opex``.
 - **Triple *witching***: el OPEX de un mes trimestral (mar/jun/sep/dic).
-- **Roll trimestral del futuro ES**: ``MarketCalendar.is_es_roll``.
+- **Roll trimestral del futuro ES**: ``MarketCalendar.is_es_roll``, que es el
+  subconjunto trimestral de la OPEX **ya rodada** a sesión.
 
 Frontera declarada (por qué esto **no** es la tarea #34 completa)
 ----------------------------------------------------------------
@@ -29,15 +31,16 @@ ninguna fecha**: el conjunto de FOMC sigue entrando al gate como parámetro
 (``plan.md`` §12, regla 17; ``decision/gate.py``). Hasta entonces este agente
 publica **solo** los eventos derivables.
 
-Duplicación declarada
----------------------
-``features/regime.py`` deriva el OPEX **del propio frame** de sesiones (para las
-features ``regime_v1``), mientras que este agente lo deriva del
-``MarketCalendar``. Es la **misma regla** (tercer viernes rodado) sobre dos
-entradas distintas; unificar el tercer viernes en un único ayudante público del
-calendario queda como seguimiento. ``MarketCalendar.is_es_roll`` marca el tercer
-viernes **nominal** aunque el mercado esté cerrado (limitación conocida, issue
-#77): el agente la **hereda**, no la corrige aquí.
+Regla única de vencimientos
+---------------------------
+El OPEX y el roll del ES los marca **``MarketCalendar``** (``opex_dates`` /
+``is_opex`` / ``es_roll_dates`` / ``is_es_roll``): este agente **no** vuelve a
+derivar el tercer viernes. Antes había dos copias de la regla —una aquí y otra
+en ``features/regime.py::_opex_session``—; la local desapareció con la #77, que
+además corrigió el caso en el que el tercer viernes es festivo (``2026-06-19``,
+Juneteenth). ``features/regime.py`` **sigue** derivando el vencimiento del propio
+frame de sesiones porque esa familia no consulta el calendario (*declarado* en
+#23 y #79): es la misma regla sobre dos entradas distintas, no dos definiciones.
 
 El módulo es **puro respecto al reloj**: recibe ``as_of`` explícito y un
 ``MarketCalendar`` ya construido; no lee la red ni el sistema de ficheros.
@@ -46,7 +49,7 @@ El módulo es **puro respecto al reloj**: recibe ``as_of`` explícito y un
 from __future__ import annotations
 
 import hashlib
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Final
 
@@ -163,29 +166,14 @@ def _require_aware(value: object, *, field_name: str) -> datetime:
     return value
 
 
-def _third_friday(year: int, month: int) -> date:
-    """Tercer viernes del mes: el vencimiento de opciones **nominal**.
-
-    Es la **misma** regla que ``features/regime.py::_third_friday`` y la que usa
-    ``MarketCalendar.es_roll_dates`` por dentro. Ver «Duplicación declarada» en el
-    docstring del módulo.
-    """
-    first = date(year, month, 1)
-    first_friday = first + timedelta(days=(4 - first.weekday()) % 7)
-    return first_friday + timedelta(days=14)
-
-
 def _is_opex_session(calendar: MarketCalendar, day: date) -> bool:
     """``True`` si ``day`` es la **sesión** del vencimiento mensual de opciones.
 
-    El tercer viernes del mes **rodado** a la sesión inmediatamente anterior
-    cuando no es sesión (Viernes Santo, Juneteenth): la realidad impone esa regla
-    y es la que difiere del calendario nominal del proyecto (issue #77).
+    Delegado en ``MarketCalendar.is_opex`` (issue #77): el tercer viernes del mes
+    **rodado** a la sesión inmediatamente anterior cuando no es sesión (Viernes
+    Santo, Juneteenth) es una **sola** definición, y vive en el calendario.
     """
-    target = _third_friday(day.year, day.month)
-    if calendar.is_session(target):
-        return day == target
-    return day == calendar.previous_session(target)
+    return calendar.is_opex(day)
 
 
 def _events_for(calendar: MarketCalendar, day: date) -> tuple[CalendarEvent, ...]:

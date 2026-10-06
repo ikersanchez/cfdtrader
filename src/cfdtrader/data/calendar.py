@@ -17,8 +17,11 @@ Decisiones que implementa:
   es **solo presentación**. Todo se guarda en UTC y la conversión es con
   ``zoneinfo``, nunca con un offset fijo: eso es lo que hace que las dos ventanas
   anuales de desfase entre el DST americano y el europeo salgan bien.
-- El **roll del futuro ES** (cuatro veces al año) se marca como evento, para que
-  no se confunda con un movimiento de mercado.
+- El **vencimiento mensual de opciones (OPEX)** y el **roll del futuro ES**
+  (cuatro veces al año, el subconjunto trimestral de la OPEX) se marcan sobre
+  **sesiones**, nunca sobre un día cerrado: el tercer viernes se **rueda** a la
+  sesión anterior cuando no es sesión (Viernes Santo, Juneteenth), que es la
+  regla que impone el mercado (issue #77).
 
 Lo que este módulo **no** decide: qué hacer con una media sesión (el
 ``NOTHING`` por defecto de las medias sesiones y de los días de FOMC es una
@@ -81,6 +84,10 @@ DEFAULT_CALENDAR_PATH = Path(__file__).resolve().parents[3] / "config" / "calend
 #: Duración en horas de una sesión completa y de una media sesión.
 FULL_SESSION_HOURS = 6.5
 HALF_SESSION_HOURS = 3.5
+
+#: Meses cuyo vencimiento es el *roll* trimestral del futuro ES. La OPEX de esos
+#: cuatro meses es el subconjunto trimestral de ``MarketCalendar.opex_dates``.
+_ES_ROLL_MONTHS: Final[tuple[int, ...]] = (3, 6, 9, 12)
 
 
 class CalendarConfig(BaseModel):
@@ -323,14 +330,38 @@ class MarketCalendar:
         """``True`` si ese día cae en una de las dos ventanas de desfase."""
         return day in self.dst_mismatch_days(day.year)
 
-    # ── Roll del futuro ES ───────────────────────────────────────────────────
-    def es_roll_dates(self, year: int) -> tuple[date, ...]:
-        """Los cuatro *rolls* trimestrales del futuro ES (tercer viernes de mar/jun/sep/dic).
+    # ── Vencimientos: OPEX mensual y roll del futuro ES ──────────────────────
+    def opex_dates(self, year: int) -> tuple[date, ...]:
+        """Las doce sesiones OPEX del año, en orden de calendario.
 
-        Se marcan como evento para que un cambio de contrato no se confunda con
-        un movimiento de mercado (``plan.md`` §8.3).
+        El vencimiento mensual de opciones es el **tercer viernes** del mes, pero
+        si ese viernes no es sesión (Viernes Santo, Juneteenth) el vencimiento cae
+        en la **sesión inmediatamente anterior**. De los 260 terceros viernes de
+        mar/jun/sep/dic entre 2005 y 2026, seis no son sesión —el peor es
+        ``2026-06-19``, Juneteenth y a la vez vencimiento de junio, cuyo roll real
+        es ``2026-06-18``—.
+
+        Se devuelven **sesiones**: un vencimiento no se marca nunca en un día en
+        el que el mercado está cerrado (issue #77).
         """
-        return tuple(_nth_weekday(year, month, 4, 3) for month in (3, 6, 9, 12))
+        return tuple(
+            target if self.is_session(target) else self.previous_session(target)
+            for target in (_nth_weekday(year, month, 4, 3) for month in range(1, 13))
+        )
+
+    def is_opex(self, day: date) -> bool:
+        """``True`` si ese día es la sesión del vencimiento mensual de opciones."""
+        return day in self.opex_dates(day.year)
+
+    def es_roll_dates(self, year: int) -> tuple[date, ...]:
+        """Los cuatro *rolls* trimestrales del futuro ES (mar/jun/sep/dic).
+
+        Son el subconjunto trimestral de :meth:`opex_dates`: el contrato vence con
+        la OPEX del trimestre, **ya rodada** a sesión. Se marcan como evento para
+        que un cambio de contrato no se confunda con un movimiento de mercado
+        (``plan.md`` §8.3).
+        """
+        return tuple(day for day in self.opex_dates(year) if day.month in _ES_ROLL_MONTHS)
 
     def is_es_roll(self, day: date) -> bool:
         """``True`` si ese día vence el futuro ES (roll trimestral)."""

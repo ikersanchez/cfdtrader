@@ -257,7 +257,42 @@ def test_es_roll_happens_four_times_a_year(calendar: MarketCalendar) -> None:
     assert calendar.is_es_roll(date(2024, 6, 20)) is False
 
 
-def test_sessions_between_skips_weekends_and_holidays(calendar: MarketCalendar) -> None:
+def test_opex_rolls_the_third_friday_back_to_a_session() -> None:
+    """El vencimiento mensual es el tercer viernes **rodado** a sesión (issue #77).
+
+    Seis terceros viernes de mar/jun/sep/dic entre 2005 y 2026 no son sesión
+    (Viernes Santo o Juneteenth): el vencimiento real es la sesión anterior. El
+    peor caso es ``2026-06-19``, festivo y vencimiento de junio a la vez.
+    """
+    calendar = MarketCalendar(CalendarConfig(), years=tuple(range(2005, 2027)))
+
+    assert len(calendar.opex_dates(2026)) == 12
+    assert tuple(day.month for day in calendar.opex_dates(2026)) == tuple(range(1, 13))
+    assert all(calendar.is_session(day) for day in calendar.opex_dates(2026))
+
+    for nominal, rolled in (
+        (date(2008, 3, 21), date(2008, 3, 20)),
+        (date(2014, 4, 18), date(2014, 4, 17)),
+        (date(2019, 4, 19), date(2019, 4, 18)),
+        (date(2022, 4, 15), date(2022, 4, 14)),
+        (date(2025, 4, 18), date(2025, 4, 17)),
+        (date(2026, 6, 19), date(2026, 6, 18)),
+    ):
+        assert calendar.is_session(nominal) is False, f"{nominal} debería estar cerrado"
+        assert calendar.is_opex(nominal) is False, "un día cerrado no es la sesión OPEX"
+        assert calendar.is_opex(rolled) is True
+
+    # el roll trimestral es el subconjunto trimestral de la OPEX, ya rodada
+    assert calendar.es_roll_dates(2026) == (
+        date(2026, 3, 20),
+        date(2026, 6, 18),
+        date(2026, 9, 18),
+        date(2026, 12, 18),
+    )
+    assert calendar.is_es_roll(date(2026, 6, 18)) is True
+    assert calendar.is_es_roll(date(2026, 6, 19)) is False
+    assert all(day in calendar.opex_dates(day.year) for day in calendar.es_roll_dates(2026))
+
     """De lunes a viernes de una semana con festivo salen cuatro sesiones, no cinco."""
     found = calendar.sessions(date(2024, 6, 17), date(2024, 6, 21))
     days = [info.day for info in found]
