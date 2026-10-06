@@ -124,6 +124,7 @@ __all__ = [
     "LONG_REASON",
     "MODEL_FILE",
     "MODEL_HASH_FORMAT",
+    "NO_PROBABILITY_REASON",
     "NO_TRADE_REASON",
     "REPORT_HASH_FORMAT",
     "REPORT_PREFIX",
@@ -169,6 +170,13 @@ LONG_REASON: Final[str] = (
 NO_TRADE_REASON: Final[str] = (
     "probabilidad calibrada del modelo < umbral declarado 0,5 (A11): no se opera; el umbral "
     "economico y el *sizing* son #27 y #60, no este"
+)
+
+#: Motivo cuando la vista **no** trae probabilidad (fuera del documento congelado del baseline).
+#: No se inventa un numero ni se aborta la corrida entera por una sesion: no se decide (#135).
+NO_PROBABILITY_REASON: Final[str] = (
+    "la vista no trae una probabilidad en `context` (fuera del documento congelado del baseline): "
+    "no se decide y no se opera; el estado no medible se declara, nunca se rellena con 0"
 )
 
 #: Formato estable del ``report_sha256`` (A13, #90). El prefijo `sha256:` viaja dentro del valor
@@ -444,18 +452,19 @@ def _date_text(value: date | None) -> str | None:
 # ─────────────────────────────────────────────────────────────────────────────
 # El decider declarado (A11)
 # ─────────────────────────────────────────────────────────────────────────────
-def _view_probability(view: SessionView, *, fold_index: int) -> float:
-    """La probabilidad que el adaptador dejo en la vista, con su error tipado si no esta.
+def _view_probability(view: SessionView, *, fold_index: int) -> float | None:
+    """La probabilidad que el adaptador dejo en la vista, o ``None`` si no la trajo.
 
     El decider **solo** lee la ``SessionView`` (A11): la probabilidad viaja en su carga opaca
     ``context``, que es el unico canal que el motor ofrece sin ensenar el futuro de la sesion.
+
+    ``None`` es un **estado declarado**, no un error: la sesion no cae en el documento congelado
+    del baseline (p. ej. porque el universo crecio con una ingesta, #135) y no se puede decidir. Un
+    numero **fuera de** ``[0, 1]`` si es un contrato roto (``DecisionError``).
     """
     value = view.context
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise DecisionError(
-            f"{view.session.isoformat()}: la vista del fold {fold_index} no trae una probabilidad "
-            f"numerica en `context` ({type(value).__name__}): el adaptador la dejo fuera"
-        )
+    if value is None or isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
     probability = float(value)
     if not 0.0 <= probability <= 1.0:
         raise DecisionError(
@@ -474,6 +483,14 @@ def _decider(fold_index: int) -> DecisionFn:
 
     def decide(view: SessionView) -> Decision:
         probability = _view_probability(view, fold_index=fold_index)
+        if probability is None:
+            # Sin probabilidad no se decide: `NOTHING` con su motivo, nunca un `0` inventado ni
+            # una corrida abortada por una sola sesion del universo (#135).
+            return Decision(
+                direction=Direction.NOTHING,
+                reason=NO_PROBABILITY_REASON,
+                probability=None,
+            )
         if not probability >= DECISION_THRESHOLD:
             return Decision(
                 direction=Direction.NOTHING,

@@ -1110,3 +1110,23 @@ def test_c15_the_diff_is_a_written_subset_and_never_touches_the_frozen_files() -
     assert not missing, f"la entrega no esta en el diff: {missing}"
     assert changed.isdisjoint(FROZEN), f"toca ficheros congelados: {sorted(changed & set(FROZEN))}"
     assert "src/cfdtrader/analysis/__init__.py" not in changed
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #135 · Una vista sin probabilidad no aborta la corrida
+# ─────────────────────────────────────────────────────────────────────────────
+def test_a_view_without_a_probability_decides_nothing_with_its_reason() -> None:
+    """#135: una sesion sin probabilidad (fuera del documento congelado) no decide; no aborta.
+
+    Antes lanzaba `DecisionError` y tumbaba la corrida entera (y con ella
+    `model_comparison`/`phase2_*`) cuando el almacen crecia con una ingesta. Ahora se declara
+    `NOTHING` con su motivo y la corrida sigue.
+    """
+    from cfdtrader.backtest.engine import Direction, SessionView
+
+    view = SessionView(session=date(2026, 9, 17), open_px=100.0, gap_px=0.0, context=None)
+    decision = baseline_report._decider(0)(view)  # pyright: ignore[reportPrivateUsage]
+    assert decision.direction is Direction.NOTHING
+    assert decision.reason == baseline_report.NO_PROBABILITY_REASON
+    assert decision.probability is None
+    assert decision.notional_usd is None
