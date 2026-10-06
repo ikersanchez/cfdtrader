@@ -374,7 +374,7 @@ def test_a_series_without_history_is_declared_not_invented(tmp_path: Path) -> No
     assert matrix.n_columns == 52
 
 
-def test_a72_the_shared_column_is_checked_and_a_divergence_is_a_typed_error() -> None:
+def test_72_the_shared_column_is_checked_and_a_divergence_is_a_typed_error() -> None:
     """`atr_norm` en dos familias (#72): la copia se comprueba y se descarta, no se elige.
 
     La politica fijada es **no** renombrar lo persistido (opcion 4 de la issue): al unir, la

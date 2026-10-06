@@ -71,6 +71,39 @@ uv run python -m cfdtrader.analysis.phase2_dominance   --data-root data --report
 `rc=0` en todos, incluido cuando el veredicto es `fail`/`not_evaluable` (son resultados legítimos).
 Regenerar los artefactos de `data/` **no** cambia el árbol de git.
 
+### Poda del registro de modelos (`runs/`)
+
+La identidad de la muestra (`matrix_sha256`, en `runs/<sha>/config.json`) **cambia cuando
+crece el almacén**. Una entrada construida sobre una ventana anterior **no es reconstruible**
+y `model_comparison` la declara `not_evaluable` con `StaleRunWindowError` —por diseño,
+#136: se declara el motivo, no una discrepancia de cifras—. Eso deja la matriz **incompleta**,
+la selección sin resolver y `phase2_dominance` sin `pbo`, así que el paso 10 falla.
+
+El informe dice **él mismo** qué entradas sobran. Se podan (como en #136) y se repiten los
+dos últimos pasos:
+
+```bash
+uv run python - <<'PY'
+import json, pathlib, shutil
+
+report = json.loads(
+    pathlib.Path("data/derived/reports/model_comparison_2026-09-22.json").read_text(encoding="utf-8")
+)
+stale = [e["run_sha256"] for e in report["not_evaluable"] if e.get("error") == "StaleRunWindowError"]
+for sha in stale:
+    shutil.rmtree(pathlib.Path("runs") / sha)
+print(f"podadas {len(stale)} entradas sobre otra ventana")
+PY
+
+# y se repiten el 7 y el 10 con el registro ya limpio
+uv run python -m cfdtrader.analysis.model_comparison --data-root data --reports-dir data/derived/reports --runs-root runs --as-of 2026-09-22T22:00:00+00:00
+uv run python -m cfdtrader.analysis.phase2_dominance --data-root data --reports-dir data/derived/reports --as-of 2026-09-24T00:00:00+00:00 --previous-artifact data/derived/reports/phase2_dominance_2026-09-24.json
+```
+
+Con el registro ya solo de la ventana vigente, el paso 7 vuelve a `selected` (**4/4**, medido el
+2026-10-06) y el 10 emite. La poda es **la contrapartida** de la regla 1 de `process.md`: si la
+ventana se mide en vez de fijarse, el registro que la declaraba hay que mantenerlo vivo.
+
 ## 3. Camino diario — la pista, o el estado «sin recomendación»
 
 ```bash
