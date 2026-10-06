@@ -92,12 +92,22 @@ o el pipeline falló, con el motivo por `stderr`. **Cada ejecución escribe su f
 ```bash
 uv run python -m cfdtrader.analysis.paper_trading \
     --data-root data --journal-root journal \
+    --reference-artifact data/derived/reports/pipeline_backtest_2026-09-23.json \
     --reports-dir data/derived/reports \
     --as-of "$(date -u +%Y-%m-%d)T22:00:00+00:00"
 ```
 
+`--reference-artifact` es el informe del pipeline (#28): de él salen la media y la **σ** del backtest
+(la **serie declarada** de `arms.coste_declarado`), que **no** se recalculan con la muestra del *paper*.
+
 Con `N < 30` sale **`not_evaluable`** (normal durante la observación; nunca un aprobado por silencio).
 Divergencia `> 2σ` obliga a **auditar antes de operar**.
+
+> **Cuánto tarda en haber muestra.** `N` cuenta **solo las recomendaciones direccionales**
+> (`long`/`short`); las de `nothing` y las «no se» se cuentan aparte y **no** entran en la media
+> (§16). Como el gate solo autoriza el **tier A** (`p > 0,58`, §19.12), los días operados son
+> minoría: llegar a `N ≥ 30` es cosa de **meses**, no de semanas. Es una consecuencia
+> **pre-registrada** del diseño, no un defecto; forzar el ritmo sería mover la portería (§11.6).
 
 ## Checklist de la sesión
 
