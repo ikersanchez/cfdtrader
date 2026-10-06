@@ -372,3 +372,28 @@ def test_a_series_without_history_is_declared_not_invented(tmp_path: Path) -> No
     assert matrix.frame.get_column("ust_10y_chg_5").null_count() == 40
     assert matrix.duplicated_columns == ("atr_norm",)
     assert matrix.n_columns == 52
+
+
+def test_a72_the_shared_column_is_checked_and_a_divergence_is_a_typed_error() -> None:
+    """`atr_norm` en dos familias (#72): la copia se comprueba y se descarta, no se elige.
+
+    La politica fijada es **no** renombrar lo persistido (opcion 4 de la issue): al unir, la
+    copia se conserva aparte, se compara con la original y solo entonces se descarta una. Si
+    las dos no coinciden, es un error tipado — quedarse con una en silencio seria un dato
+    inventado, y un `select("atr_norm")` sobre las dos seria ambiguo.
+    """
+    frame = pl.DataFrame(
+        {
+            "session": [date(2026, 1, 5), date(2026, 1, 6)],
+            "atr_norm": [1.0, 2.0],
+            "atr_norm__technical_v1": [1.0, 2.0],
+        }
+    )
+    collapsed = feature_frame._collapse_duplicates(frame, ("atr_norm",))  # pyright: ignore[reportPrivateUsage]
+
+    assert collapsed.columns == ["session", "atr_norm"], "una sola columna, sin ambiguedad"
+    assert collapsed.get_column("atr_norm").to_list() == [1.0, 2.0]
+
+    diverging = frame.with_columns(pl.Series("atr_norm__technical_v1", [1.0, 9.0]))
+    with pytest.raises(feature_frame.DuplicateFeatureColumnError, match="no coinciden"):
+        feature_frame._collapse_duplicates(diverging, ("atr_norm",))  # pyright: ignore[reportPrivateUsage]
