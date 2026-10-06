@@ -11,6 +11,12 @@ dependencies = [
     "tenacity>=8.2,<10",
     # ── Fuentes de datos ────────────────────────────────────────────────────
     "yfinance>=0.2.40,<1",
+    # Backend de parseo HTML que exige `pandas.read_html`, llamada **dentro** de
+    # `yfinance.base.get_earnings_dates` (la ruta de earnings de mega-caps de #126/#134).
+    # `yfinance` ya es dependencia declarada, así que `lxml` es una **necesidad funcional de una
+    # ruta ya autorizada**, no stack nuevo de `tech_stack.md` §5.2 (#134): sin él la ingesta de
+    # earnings muere con `ImportError: Import lxml failed`.
+    "lxml>=5.0,<7",
     "holidays>=0.50,<1",
     # ── Almacenamiento ──────────────────────────────────────────────────────
     "duckdb>=1.0,<2",
