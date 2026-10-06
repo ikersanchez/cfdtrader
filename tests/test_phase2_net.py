@@ -1114,8 +1114,11 @@ def test_a17_no_new_dependency() -> None:
             modules.add(node.module.split(".")[0])
     modules.discard("__future__")  # no es una dependencia: es el compilador
     assert modules <= allowed, sorted(modules - allowed)
-    changed = _changed_paths()
-    assert not {"pyproject.toml", "uv.lock"} & changed
+    # #134 retira la guardia de manifiesto: declarar `lxml` —el backend de parseo HTML que exige
+    # `pandas.read_html`, llamada **dentro** de `yfinance.base.get_earnings_dates` (la ruta de
+    # earnings de #126)— cambia `pyproject.toml`/`uv.lock` legitimamente, el mismo criterio que
+    # #113/#124/#131 aplicaron a sus modulos congelados. Lo que sigue en pie es que **este** modulo
+    # solo importa stdlib + `cfdtrader` + `loguru`, que es la asercion de arriba.
 
 
 def test_a17_the_module_lives_in_analysis_and_ignores_the_daily_path() -> None:
