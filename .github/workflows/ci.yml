@@ -122,3 +122,34 @@ jobs:
             exit 1
           fi
           echo "${passed} tests ejecutados"
+
+  deps-audit:
+    name: pip-audit (vulnerabilidades del lockfile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Instalar dependencias
+        run: uv sync --locked
+      # Auditoría de dependencias (tech_stack.md §3.3.8, #103). Audita el ENTORNO
+      # instalado por `uv sync --locked`, es decir las versiones exactas del `uv.lock`.
+      # Avisos conocidos e ignorados EXPLÍCITAMENTE el 2026-10-07 (nunca en silencio):
+      #   · diskcache 5.6.3 · PYSEC-2026-2447 · sin versión de corrección publicada.
+      #   · virtualenv 21.7.10 (dev, vía pre-commit) · PYSEC-2026-4011/4012/4013/4014 ·
+      #     corregidos en >= 21.7.11 (subir el lock los hará innecesarios).
+      # Es una PUERTA, no un adorno: `test_ci_workflow.py` A15 prohíbe degradar una
+      # guarda a un fallo silencioso, así que una vulnerabilidad NUEVA (no listada
+      # arriba) pone el job en rojo.
+      - name: Auditar el lockfile (pip-audit)
+        run: |
+          uvx pip-audit --path .venv/lib/python3.12/site-packages \
+            --ignore-vuln PYSEC-2026-2447 \
+            --ignore-vuln PYSEC-2026-4011 \
+            --ignore-vuln PYSEC-2026-4012 \
+            --ignore-vuln PYSEC-2026-4013 \
+            --ignore-vuln PYSEC-2026-4014

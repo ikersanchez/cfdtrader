@@ -2,7 +2,7 @@
 
 | Campo | Valor |
 |---|---|
-| **Versión** | **2.22** · instrumento S&P 500 |
+| **Versión** | **2.23** · instrumento S&P 500 |
 | **Fecha** | 2026-10-07 |
 | **Estado** | ✅ **Especificación cerrada.** Cambios posteriores solo mediante entrada en el registro y motivo medido |
 | **Documento padre** | `plan.md` v2.17 (fuente de verdad funcional) |
@@ -184,7 +184,7 @@ Al usar un LLM por API, el software de inferencia deja de ser tu problema y apar
 5. **Sin dependencias de interfaz en el núcleo.** `features/` y `backtest/` no importan LangGraph, ni el cliente LLM, ni la capa de informe.
 6. **El cliente LLM va detrás de una interfaz propia.** Un protocolo interno (p. ej. `LLMClient`) con una implementación por proveedor. Cambiar de OpenAI a DeepSeek o a un modelo local no debe tocar `agents/` ni `orchestration/`.
 7. **Revisar el árbol transitivo** antes de añadir algo pesado. `langgraph` arrastra bastante: queda confinado a `orchestration/`.
-8. **`pip-audit` o `uv pip audit`** en el CI para vulnerabilidades conocidas.
+8. **`pip-audit`** (vía `uvx`) en el CI para vulnerabilidades conocidas; job `deps-audit` de `ci.yml` (#103).
 
 ---
 
@@ -200,7 +200,7 @@ Al usar un LLM por API, el software de inferencia deja de ser tu problema y apar
 | Lint + format | **ruff** | MIT | flake8 + black + isort | Una herramienta reemplaza tres |
 | Tipado estático | **pyright** | MIT | mypy | Modo estricto. Con contratos Pydantic, es la mejor red de seguridad |
 | Pre-commit | **pre-commit** | MIT | — | Ruff + detección de secretos + validación YAML |
-| Auditoría de dependencias | **pip-audit** | Apache-2.0 | `uv pip audit` | En CI |
+| Auditoría de dependencias | **pip-audit** | Apache-2.0 | — | En CI (`deps-audit`, #103): `uvx pip-audit` sobre el entorno del lock, **bloqueante** |
 | Editor | **VS Code + Pylance** | MIT (VS Code: MIT con binarios propietarios) | — | Ya en uso |
 
 ### 4.2 Configuración y secretos
@@ -1004,3 +1004,4 @@ Como el sistema decide **una vez al día**, los artefactos de decisión son **un
 | 2026-10-07 | **2.20** | ✅ **§11 bis: la cuenta del bróker queda confirmada como CFD.** El propietario confirma el **2026-10-07** que su cuenta de **Revolut** es de **CFD** (no acciones fraccionarias), coherente con la financiación por noche que declara `plan.md` §3.3. La fila 4 pasa a **«Bróker definitivo: Revolut (cuenta CFD)»** y lo que falta para cerrarla se reduce a la **tabla de costes vigente con su fecha** y la **región/entidad**. **La decisión 4 sigue `OPEN`.** Cabecera a 2.20. | Anotar la confirmación del propietario sobre el tipo de cuenta, sin cerrar una decisión que aún exige la tabla de costes vigente (`§11 bis`: se decide, se anota y entonces se implementa) |
 | 2026-10-07 | **2.21** | 🇪🇸 **§11 bis: la decisión 4 recoge las respuestas del propietario (Revolut · CFD · España/EEE).** El propietario confirma: región **España (EEE)**, divisa **USD**, y spread y comisión **«las registradas»** (el declarado de §3.3: **0,0042 %** y sin comisión). **No** re-confirma la **financiación (*swap*)** —no la recuerda— ni la **hora de corte** (**#87**). La fila 4 se acota a esos dos pendientes y **sigue `OPEN`**: cerrarla exigiría la tabla vigente completa. Cabecera a 2.21. | Anotar las respuestas del propietario **sin** rellenar la financiación con un valor no confirmado (`§11 bis`: se decide, se anota y entonces se implementa) |
 | 2026-10-07 | **2.22** | ✅ **§11 bis: la decisión 4 (bróker) pasa a CERRADA con el KID.** El propietario aporta el **Documento de Datos Fundamentales (KID)** de su CFD: entidad **Revolut Securities Europe UAB** (Lituania, **Banco de Lituania**, EEE), cuenta **CFD**, divisa **USD**; tabla —diferencial **0,0042 %**, cambio de divisa **0 %**, tenencia **−0,0018 % (corto) / +0,0182 % (largo)** por noche, margen **5,0 %**— que **coincide con `plan.md` §3.3** (**sin cambio**). El «0,25 %/noche» apuntado antes **no aparece** en el KID y se descarta. Queda **fuera y abierto**: **#87** (hora de corte), **#62** (medir el *slippage*) y **#107** (intradía/`bid`-`ask`). Cabecera a 2.22. Material: `_docs/broker_material_2026-10-07.md` | Cerrar la decisión que §11 bis declaraba abierta, con el **documento oficial** del bróker que verifica la tabla declarada (decidir, anotarlo y entonces implementar), sin tocar la especificación cerrada |
+| 2026-10-07 | **2.23** | 🔐 **Se implementa la auditoría de dependencias en el CI (§3.3.8, #103).** Job nuevo **`deps-audit`** en `.github/workflows/ci.yml`: `uv sync --locked` y **`uvx pip-audit --path .venv/lib/python3.12/site-packages`** sobre el **entorno instalado desde el `uv.lock`**. Es **bloqueante** (`test_ci_workflow.py` A15 prohíbe degradar una guarda a un fallo silencioso). Los avisos conocidos el 2026-10-07 se ignoran **explícitamente** con `--ignore-vuln` y su motivo: `diskcache 5.6.3` (**PYSEC-2026-2447**, sin versión de corrección publicada) y `virtualenv 21.7.10` (dev, vía pre-commit: PYSEC-2026-4011/4012/4013/4014, corregidos en ≥ 21.7.11). Se corrige la fila: **`uv pip audit` no existe** (uv 0.9.28 no tiene subcomando `audit`), la vía real es `uvx pip-audit`. Cabecera a 2.23 | Implementar el punto **8** de §3.3 con el mecanismo que el `uv` fijado sí ofrece, sin `continue-on-error` ni valores de relleno |

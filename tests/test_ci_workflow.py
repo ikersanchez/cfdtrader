@@ -24,12 +24,13 @@ PRE_COMMIT = REPO_ROOT / ".pre-commit-config.yaml"
 INTEGRITY = REPO_ROOT / "tests" / "test_integrity.py"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 
-#: Los cuatro jobs declarados por #85.
+#: Los jobs declarados por #85 (lint, typecheck, feature-golden, tests) y #103 (deps-audit).
 JOB_LINT = "lint"
 JOB_TYPECHECK = "typecheck"
 JOB_GOLDEN = "feature-golden"
 JOB_TESTS = "tests"
-JOBS = (JOB_LINT, JOB_TYPECHECK, JOB_GOLDEN, JOB_TESTS)
+JOB_AUDIT = "deps-audit"
+JOBS = (JOB_LINT, JOB_TYPECHECK, JOB_GOLDEN, JOB_TESTS, JOB_AUDIT)
 
 #: Versión de Python que fija el proyecto (`pyproject.toml` requires-python y `.python-version`).
 PYTHON_VERSION = "3.12"
@@ -94,7 +95,7 @@ def test_a1_the_workflow_file_is_where_github_looks_for_it() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # A2 — es YAML valido y declara los cuatro jobs
 # ─────────────────────────────────────────────────────────────────────────────
-def test_a2_the_workflow_parses_and_declares_the_four_jobs() -> None:
+def test_a2_the_workflow_parses_and_declares_the_five_jobs() -> None:
     workflow = _workflow()
     assert isinstance(workflow.get("name"), str) and workflow["name"]
     assert isinstance(workflow.get("jobs"), dict)
@@ -317,3 +318,20 @@ def test_a17_the_basetemp_parent_exists_in_a_clean_clone() -> None:
         f"el padre de --basetemp ({basetemp.parent}) no existe: en un clon limpio "
         "pytest falla con FileNotFoundError"
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A18 — la auditoría de dependencias corre contra el lockfile y no es un adorno
+# ─────────────────────────────────────────────────────────────────────────────
+def test_a18_the_dependency_audit_runs_against_the_lockfile() -> None:
+    """#103: `pip-audit` audita el entorno instalado desde el `uv.lock`."""
+    job = _job(JOB_AUDIT)
+    text = _run_text(job)
+    assert "uv sync --locked" in text, "el job no instala desde el lockfile"
+    assert "pip-audit" in text, "el job no ejecuta pip-audit"
+    assert "--path .venv/lib/python3.12/site-packages" in text, (
+        "pip-audit debe auditar el entorno instalado (el lockfile resuelto)"
+    )
+    # Las vulnerabilidades conocidas se ignoran **explícitamente** (`--ignore-vuln`),
+    # nunca en silencio; y el job es una puerta (A15 prohíbe `continue-on-error`).
+    assert "--ignore-vuln" in text
