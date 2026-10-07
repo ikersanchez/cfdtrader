@@ -68,11 +68,11 @@ def test_the_document_does_not_decide() -> None:
     assert "quien decide es el propietario" in text
 
 
-def test_the_document_points_back_to_the_open_decision() -> None:
-    """La decision 4 sigue abierta: la hoja lo enlaza con §11 bis, no la cierra."""
+def test_the_document_records_the_closed_decision_and_the_kid() -> None:
+    """La decision 4 se cierra con el KID: la hoja lo enlaza con §11 bis y lo declara."""
     text = _material_text()
     assert "§11 bis" in text
-    assert "decisión abierta" in text
+    assert "CERRADA" in text
     assert "§11.6" in text
 
 
@@ -97,8 +97,8 @@ def test_the_financing_cut_is_still_unverified() -> None:
     assert "sin verificar" in _material_text().lower() or "#87" in _material_text()
 
 
-def test_the_declared_broker_is_named_and_does_not_close_the_decision() -> None:
-    """El broker declarado (Revolut) se nombra, pero la decision 4 sigue abierta."""
+def test_the_declared_broker_and_the_kid_are_recorded() -> None:
+    """El broker declarado (Revolut Securities Europe UAB) y su KID se nombran."""
     text = _material_text()
-    assert "Revolut" in text
-    assert "no cierra" in text
+    assert "Revolut Securities Europe UAB" in text
+    assert "KID" in text

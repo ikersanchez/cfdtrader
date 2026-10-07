@@ -5,8 +5,9 @@
 > `§11.6` ni el carril B. Su único trabajo es reunir en **un solo cuestionario al bróker** las
 > preguntas que hoy están repartidas entre `analysis/cost_audit.py`, `plan.md` §8.5/§21 y
 > `config/cost_observations.yaml`, y decir **dónde** se anota cada respuesta.
-> ⚠️ **quien decide es el propietario**: `#59` es la decisión abierta **4** de `tech_stack.md`
-> §11 bis, y `#87` es «la verificación más crítica de la Fase 0».
+> ⚠️ **quien decide es el propietario**: `#59` es la decisión **4** de `tech_stack.md` §11 bis
+> (**cerrada el 2026-10-07** con el KID de Revolut), y `#87` es «la verificación más crítica de la
+> Fase 0».
 
 > **Por qué se escribe ahora.** El Bloque 1 de la Fase 4 (observación, #45) es **acción del
 > propietario**, no ingeniería: exige contactar con un tercero y/o gastar dinero. La **raíz es el
@@ -29,20 +30,19 @@
 > La **regla que manda**: se decide, se anota en el documento que la declara abierta **y entonces**
 > se implementa (`tech_stack.md` §11 bis). Ninguna de estas se resuelve «sobre la marcha».
 
-## 1 bis. El bróker declarado: Revolut
+## 1 bis. El bróker declarado: Revolut (confirmado por el KID)
 
-El propietario declara el **2026-10-07** que su bróker es **Revolut**, con cuenta de **CFD**. Eso
-**no cierra** la decisión 4 por sí solo —falta la **tabla de costes vigente** con su fecha y la
-**región/entidad**—, pero fija **a quién** se pregunta y **dónde** están las respuestas.
+El propietario declara el **2026-10-07** que su bróker es **Revolut** y aporta el **Documento de
+Datos Fundamentales (KID)** de su CFD de índice. Con el KID, la decisión 4 queda **confirmada**:
 
-**Qué hay que confirmar primero:**
-
-- ✅ **Cuenta de CFD, confirmada** por el propietario el **2026-10-07**: el instrumento es el **CFD**
-  de Revolut, no las acciones fraccionarias. Es coherente con la tabla de `plan.md` §3.3, porque
-  solo el CFD tiene **financiación por noche**.
-- **Región/entidad**: Revolut opera CFDs con entidades distintas (EEE y Reino Unido); los números
-  cambian. Fijar **entidad y país**, y la **fecha** de consulta.
-- **Nombre exacto** del instrumento (en el proyecto es `SPX500:CFD`).
+- **Entidad**: **Revolut Securities Europe UAB** (Lituania, nº 305799582), autorizada por el **Banco
+  de Lituania** (agencia de corredores categoría A nº 6) → **EEE**; cuenta de **CFD**.
+- **Divisa de liquidación**: **USD**.
+- **Tabla de costes (KID, actualizado 2026-04-28)**: diferencial **0,0042 %** (0,42 $ sobre
+  10.000 $), cambio de divisa **0 %**, **coste diario de tenencia** **−0,0018 % (corto) / +0,0182 %
+  (largo)** por noche → **coincide exactamente** con la tabla declarada en `plan.md` §3.3.
+- **Margen requerido: 5,0 %** (apalancamiento ≈ 20:1); el CFD puede cerrarse solo si las pérdidas
+  agotan el margen.
 
 **Dónde está cada respuesta en Revolut:**
 
@@ -55,39 +55,26 @@ El propietario declara el **2026-10-07** que su bróker es **Revolut**, con cuen
 | **10 ⭐ · corte de financiación** | Términos de CFDs / pantalla del instrumento: **a qué hora se aplica el *swap*** |
 | 12–13 · export intradía `bid`/`ask` | Ver el aviso de abajo: **Revolut no es un proveedor de datos** |
 
-**Respuestas del propietario (2026-10-07):**
+**Tabla confirmada por el KID** (consultado el **2026-10-07**; KID actualizado el **2026-04-28**):
 
-| Punto | Respuesta | Estado |
+| Punto | Respuesta (KID) | Estado |
 |---|---|---|
-| Región / entidad | **España (EEE)** | ✅ |
-| Divisa de liquidación | **USD** | ✅ (coincide con lo registrado) |
-| Spread | «las registradas» → el declarado de `plan.md` §3.3 (**0,0042 %**) | ✅ confirmado como el de la cuenta |
-| Comisión / mínimo | «las registradas» → sin comisión declarada (§3.3) | ✅ confirmado |
-| Financiación (*swap*) | **0,25 % por noche** sobre el valor total (mín. **0,01 USD**) | ⚠️ **magnitud a verificar** |
-| Hora de corte de la financiación (#87) | **no la sabe** | ⏳ pendiente |
+| Bróker / entidad | **Revolut Securities Europe UAB** (EEE/Lituania) | ✅ |
+| Tipo de cuenta | **CFD** | ✅ |
+| Divisa de liquidación | **USD** | ✅ |
+| Spread | **0,0042 %** (0,42 $ / 10.000 $) | ✅ = §3.3 |
+| Cambio de divisa | **0 %** | ✅ = §3.3 |
+| Financiación (*swap*) | **−0,0018 % (corto) / +0,0182 % (largo)** por noche | ✅ = §3.3 |
+| Margen requerido | **5,0 %** | ✅ (KID) |
+| Hora de corte de la financiación (#87) | **el KID no la da** | ⏳ **#87** |
 
-⚠️ **La financiación que declara el propietario (`0,25 %`/noche) no cuadra con la tabla de §3.3 y
-su magnitud es sospechosa.** Se confirma **por noche**, mínimo `0,01 USD`, pero `0,25 %`/noche ≈
-**91 %/año**, que es **~13,7×** el carry declarado en §3.3 (`+0,0182 %`/noche largo ≈ `6,66 %`/año)
-y **no** es plausible para un CFD de índice (donde la tenencia suele ser el *benchmark* + un margen,
-del orden de `0,01–0,03 %`/noche). Antes de tocar nada hay que descartar tres confusiones
-habituales:
+⚠️ **El «0,25 % por noche» anotado antes NO aparece en el KID y se descarta.** El KID fija el coste
+de tenencia en **−0,0018 %/+0,0182 % por noche**, que coincide con §3.3; el `0,25 %` (mín. `0,01
+USD`) no cuadra con nada de este documento (¿otra tarifa o error de lectura?) y **no** se usa.
 
-- **base**: `0,25 %` ¿sobre el **nocional** (valor total) o sobre el **margen**? (sobre un margen
-  apalancado ×20 daría `0,0125 %` del nocional),
-- **periodo**: ¿seguro **por noche**, y no **anual**?,
-- **simetría**: ¿el mismo `0,25 %` en **largo y corto**? (§3.3 los declara **asimétricos**).
-
-Una comprobación barata y decisiva: el **KID** del instrumento publica el coste de tenencia
-**anualizado** («costs over time»). Con ese número se resuelve cuál es el periodo real. **No se
-vuelca** a `config/cost_observations.yaml` ni se cambia §3.3/`p*` hasta confirmarlo: si fuera real,
-sería un **hallazgo de coste mayor** (afecta al listón **B** y a **#87**), no un detalle. La
-decisión 4 sigue `OPEN`.
-
-Con esto la decisión 4 queda **al borde de cerrarse**: falta **re-confirmar la financiación** —el
-número ya está declarado en §3.3, pero el propietario no lo ha validado ahora— y el **corte de
-financiación** es **#87**, que sigue abierto. Ninguna de las dos se rellena con un valor inventado
-(`null` = «no medido»).
+**Con esto la decisión 4 queda CERRADA** (broker, tipo de cuenta, tabla y fecha): ver el cierre en
+`tech_stack.md` §11 bis. Quedan **fuera** y siguen abiertas: **#87** (la hora de corte, que el KID
+no da), **#62** (medir el *slippage* y el spread en vivo) y **#107** (intradía y `bid`/`ask`).
 
 **Dos avisos honestos:**
 
