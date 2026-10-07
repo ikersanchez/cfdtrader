@@ -18,6 +18,11 @@ anterior, expansivo o rodante) y publica un ``SplitPlan`` verificable y reproduc
 y no reserva el *holdout*: esa reserva es ``cfdtrader.backtest.holdout`` (tarea #68), que le
 entrega la secuencia **sin** el tramo reservado.
 
+El **esquema CPCV** (``cpcv_splits``, tarea #67) añade la validación cruzada combinatoria
+(``C(n_blocks, n_test_blocks)`` particiones) sobre las **mismas** definiciones de purga y
+embargo de #12, pero con el train a los **dos lados** del test, que es donde la purga y el
+embargo hacen trabajo real. Alimenta el PBO de #16.
+
 El **motor *walk-forward*** vive en ``cfdtrader.backtest.engine`` (tarea #13): puro y
 determinista, recorre las sesiones de *test* del ``SplitPlan`` de #12, pide una ``Decision``
 por sesión a partir de una vista **sin el futuro de la sesión**, simula la operación

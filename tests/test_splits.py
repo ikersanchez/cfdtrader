@@ -18,6 +18,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import inspect
+import math
 from collections.abc import Sequence
 from datetime import date, timedelta
 from pathlib import Path
@@ -33,6 +34,7 @@ from cfdtrader.backtest.splits import (
     InvalidSplitParameterError,
     SplitPlan,
     SplitsError,
+    cpcv_splits,
     walk_forward_splits,
 )
 
@@ -557,7 +559,16 @@ def test_a23_hash_is_the_documented_format_and_changes_with_every_parameter() ->
 # A22, A27, A28 — pureza, entrada genérica y librerías prohibidas
 # ─────────────────────────────────────────────────────────────────────────────
 def test_a22_module_is_pure_and_uses_only_the_standard_library() -> None:
-    allowed = {"__future__", "hashlib", "collections.abc", "dataclasses", "datetime", "typing"}
+    allowed = {
+        "__future__",
+        "bisect",
+        "collections.abc",
+        "dataclasses",
+        "datetime",
+        "hashlib",
+        "itertools",
+        "typing",
+    }
     assert _imported_modules() <= allowed, _imported_modules() - allowed
     code = _code_only()
     for forbidden in (
@@ -774,3 +785,135 @@ def test_a34_generating_a_plan_writes_nothing(tmp_path: Path) -> None:
     assert plan.n_sessions == 20
     assert sorted(REPO_ROOT.glob("data/**/*")) == before
     assert list(tmp_path.iterdir()) == []  # el módulo no escribe ni en un directorio temporal
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# B-series — CPCV (tarea #67), sobre el mismo `splits.py` de #12
+# ─────────────────────────────────────────────────────────────────────────────
+def test_b1_cpcv_generates_exactly_c_n_k_combinations() -> None:
+    """A1/A2: hay C(N, k) particiones, una por combinacion de bloques de test."""
+    sessions = business_sessions(24)
+    plan = cpcv_splits(
+        sessions, label_horizon=[0] * 24, n_blocks=4, n_test_blocks=2, embargo_sessions=0
+    )
+    assert len(plan.folds) == math.comb(4, 2) == 6
+    assert {fold.test_blocks for fold in plan.folds} == {
+        (0, 1),
+        (0, 2),
+        (0, 3),
+        (1, 2),
+        (1, 3),
+        (2, 3),
+    }
+
+
+def test_b2_cpcv_blocks_cover_the_series_and_are_tested_equally() -> None:
+    """A4: los bloques cubren todo el recorrido y cada uno es test C(N-1, k-1) veces."""
+    sessions = business_sessions(24)
+    plan = cpcv_splits(
+        sessions, label_horizon=[0] * 24, n_blocks=4, n_test_blocks=2, embargo_sessions=0
+    )
+    covered = [position for block in plan.blocks for position in block.positions]
+    assert covered == list(range(24)), "los bloques no cubren la serie sin huecos ni solapes"
+    counts = dict.fromkeys(range(4), 0)
+    for fold in plan.folds:
+        for index in fold.test_blocks:
+            counts[index] += 1
+    assert counts == {index: math.comb(3, 1) for index in range(4)}
+
+
+def test_b3_cpcv_invariants_hold_in_every_combination() -> None:
+    """A2: train ∩ test = ∅, sin embargo en el train y sin purga pendiente."""
+    sessions = business_sessions(30)
+    plan = cpcv_splits(
+        sessions, label_horizon=[2] * 30, n_blocks=5, n_test_blocks=2, embargo_sessions=1
+    )
+    for fold in plan.folds:
+        assert set(fold.train).isdisjoint(fold.test)
+        assert set(fold.train).isdisjoint(fold.embargoed)
+        test = sorted(fold.test)
+        for i in fold.train:
+            later = [t for t in test if t > i]
+            if later:
+                assert i + 2 < later[0], f"el t1 de {i} invade el test en {fold.index}"
+
+
+def test_b4_cpcv_purge_removes_the_invading_samples() -> None:
+    """A4: con h = 1 la purga quita del train justo lo que su t1 toca el test."""
+    sessions = business_sessions(8)  # bloques [0,2) [2,4) [4,6) [6,8)
+    plan = cpcv_splits(
+        sessions, label_horizon=[1] * 8, n_blocks=4, n_test_blocks=1, embargo_sessions=0
+    )
+    fold = {f.test_blocks: f for f in plan.folds}[(1,)]
+    assert fold.test == (2, 3)
+    assert fold.purged == (1,)  # 1 + h[1] = 2 >= test_start (2)
+    assert set(fold.train) == {0, 4, 5, 6, 7}
+
+
+def test_b5_cpcv_embargo_follows_each_test_block() -> None:
+    """A4: el embargo quita las E sesiones tras cada bloque de test (aqui, una)."""
+    sessions = business_sessions(8)
+    plan = cpcv_splits(
+        sessions, label_horizon=[0] * 8, n_blocks=4, n_test_blocks=1, embargo_sessions=1
+    )
+    fold = {f.test_blocks: f for f in plan.folds}[(1,)]
+    assert fold.embargoed == (4,)  # la sesion tras el bloque de test [2, 4)
+    assert set(fold.train) == {0, 1, 5, 6, 7}
+
+
+def test_b6_cpcv_is_deterministic_and_hashes_the_parameters() -> None:
+    """A3: dos llamadas identicas dan el mismo plan; cambiar un parametro lo cambia."""
+    sessions = business_sessions(20)
+    first = cpcv_splits(
+        sessions, label_horizon=[0] * 20, n_blocks=4, n_test_blocks=2, embargo_sessions=1
+    )
+    second = cpcv_splits(
+        sessions, label_horizon=[0] * 20, n_blocks=4, n_test_blocks=2, embargo_sessions=1
+    )
+    assert first.plan_sha256 == second.plan_sha256
+    assert [fold.test for fold in first.folds] == [fold.test for fold in second.folds]
+    other = cpcv_splits(
+        sessions, label_horizon=[0] * 20, n_blocks=4, n_test_blocks=3, embargo_sessions=1
+    )
+    assert other.plan_sha256 != first.plan_sha256
+
+
+def test_b7_cpcv_rejects_impossible_parameters() -> None:
+    """A2: los parametros imposibles son errores tipados, nunca silenciosos."""
+    sessions = business_sessions(12)
+    for n_blocks, n_test_blocks in ((1, 1), (4, 4), (4, 0), (3, 5)):
+        with pytest.raises(InvalidSplitParameterError):
+            cpcv_splits(
+                sessions,
+                label_horizon=[0] * 12,
+                n_blocks=n_blocks,
+                n_test_blocks=n_test_blocks,
+                embargo_sessions=0,
+            )
+    with pytest.raises(InvalidSplitParameterError):
+        cpcv_splits(
+            sessions, label_horizon=[0] * 12, n_blocks=4, n_test_blocks=2, embargo_sessions=-1
+        )
+    with pytest.raises(InsufficientSessionsError):
+        cpcv_splits(
+            business_sessions(3),
+            label_horizon=[0] * 3,
+            n_blocks=4,
+            n_test_blocks=2,
+            embargo_sessions=0,
+        )
+
+
+def test_b8_cpcv_exclusions_are_no_op_only_without_horizon_or_embargo() -> None:
+    """A2: con h = E = 0 la purga y el embargo son no-ops medidos; con h > 0, no."""
+    sessions = business_sessions(16)
+    quiet = cpcv_splits(
+        sessions, label_horizon=[0] * 16, n_blocks=4, n_test_blocks=2, embargo_sessions=0
+    )
+    assert quiet.exclusions_are_no_op is True
+    assert quiet.purge_total == 0 and quiet.embargo_total == 0
+    active = cpcv_splits(
+        sessions, label_horizon=[1] * 16, n_blocks=4, n_test_blocks=2, embargo_sessions=0
+    )
+    assert active.exclusions_are_no_op is False
+    assert active.purge_total > 0
