@@ -55,6 +55,22 @@ El propietario declara el **2026-10-07** que su bróker es **Revolut**, con cuen
 | **10 ⭐ · corte de financiación** | Términos de CFDs / pantalla del instrumento: **a qué hora se aplica el *swap*** |
 | 12–13 · export intradía `bid`/`ask` | Ver el aviso de abajo: **Revolut no es un proveedor de datos** |
 
+**Respuestas del propietario (2026-10-07):**
+
+| Punto | Respuesta | Estado |
+|---|---|---|
+| Región / entidad | **España (EEE)** | ✅ |
+| Divisa de liquidación | **USD** | ✅ (coincide con lo registrado) |
+| Spread | «las registradas» → el declarado de `plan.md` §3.3 (**0,0042 %**) | ✅ confirmado como el de la cuenta |
+| Comisión / mínimo | «las registradas» → sin comisión declarada (§3.3) | ✅ confirmado |
+| Financiación (*swap*) | **no la recuerda** | ⏳ sin re-confirmar |
+| Hora de corte de la financiación (#87) | **no la sabe** | ⏳ pendiente |
+
+Con esto la decisión 4 queda **al borde de cerrarse**: falta **re-confirmar la financiación** —el
+número ya está declarado en §3.3, pero el propietario no lo ha validado ahora— y el **corte de
+financiación** es **#87**, que sigue abierto. Ninguna de las dos se rellena con un valor inventado
+(`null` = «no medido»).
+
 **Dos avisos honestos:**
 
 - **#107 (intradía + `bid`/`ask` reales).** Revolut muestra precios **en vivo** y permite
