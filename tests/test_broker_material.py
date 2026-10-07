@@ -95,3 +95,10 @@ def test_the_financing_cut_is_still_unverified() -> None:
     """El corte sigue sin verificar: la hoja no puede asumir una hora (prohibido)."""
     assert DECLARED_FINANCING_CUT is None
     assert "sin verificar" in _material_text().lower() or "#87" in _material_text()
+
+
+def test_the_declared_broker_is_named_and_does_not_close_the_decision() -> None:
+    """El broker declarado (Revolut) se nombra, pero la decision 4 sigue abierta."""
+    text = _material_text()
+    assert "Revolut" in text
+    assert "no cierra" in text

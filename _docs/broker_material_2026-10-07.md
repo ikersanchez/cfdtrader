@@ -29,6 +29,42 @@
 > La **regla que manda**: se decide, se anota en el documento que la declara abierta **y entonces**
 > se implementa (`tech_stack.md` §11 bis). Ninguna de estas se resuelve «sobre la marcha».
 
+## 1 bis. El bróker declarado: Revolut
+
+El propietario declara el **2026-10-07** que su bróker es **Revolut**. Eso **no cierra** la
+decisión 4 por sí solo —falta la **tabla de costes vigente** con su fecha y el **tipo de cuenta**
+(**CFD**)—, pero fija **a quién** se pregunta y **dónde** están las respuestas.
+
+**Qué hay que confirmar primero:**
+
+- El producto es el **CFD** de Revolut, no las acciones fraccionarias: solo el CFD tiene
+  **financiación por noche**, que es justo lo que declara la tabla de `plan.md` §3.3.
+- **Región/entidad**: Revolut opera CFDs con entidades distintas (EEE y Reino Unido); los números
+  cambian. Fijar **entidad y país**, y la **fecha** de consulta.
+- **Nombre exacto** del instrumento (en el proyecto es `SPX500:CFD`).
+
+**Dónde está cada respuesta en Revolut:**
+
+| Pregunta | Dónde buscarla |
+|---|---|
+| 1–2 · instrumento, cuenta, divisa | Pantalla del instrumento en la app + **KID** (*Key Information Document*, PRIIPs) |
+| 6 · spread por tramo | Spread **en vivo** en la pantalla del instrumento (anotar la hora ET) |
+| 7 · comisión/spread mínimo | Documento de **costes y cargos** de Revolut |
+| 9 · carry largo/corto | **KID** y la app (tipo *swap* por noche) |
+| **10 ⭐ · corte de financiación** | Términos de CFDs / pantalla del instrumento: **a qué hora se aplica el *swap*** |
+| 12–13 · export intradía `bid`/`ask` | Ver el aviso de abajo: **Revolut no es un proveedor de datos** |
+
+**Dos avisos honestos:**
+
+- **#107 (intradía + `bid`/`ask` reales).** Revolut muestra precios **en vivo** y permite
+  **exportar extractos de operaciones**, pero **no** sirve un histórico de 1 min con `bid`/`ask` de
+  **≥ 5 años**. Es probable que #107 se cierre por la **vía (b)** (no adquirir; la ruta 3 —proxy
+  declarado— pasa a definitiva), salvo que un **proveedor de datos** aparte lo cubra. No confundir
+  «tengo precios en la app» con «tengo el histórico exportable».
+- **Los números no se inventan.** El spread y el *swap* válidos son **los de tu cuenta y tu región
+  en la fecha de consulta**; el **KID** y la app los publican, pero hay que **copiarlos con su fecha**.
+
+
 ## 2. El cuestionario único al bróker
 
 Cada pregunta está numerada para poder responderlas de una vez. Las cinco primeras **ya existen**
