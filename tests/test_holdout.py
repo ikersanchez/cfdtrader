@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 import pytest
 
@@ -130,7 +130,9 @@ def test_a4_the_report_declares_the_counts_the_range_and_what_stays_out() -> Non
 
     assert report["n_sessions_total"] == len(SESSIONS)
     assert report["n_reserved"] == SYNTHETIC.n_sessions
-    assert report["n_usable"] == report["n_sessions_total"] - report["n_reserved"]
+    assert report["n_usable"] == cast("int", report["n_sessions_total"]) - cast(
+        "int", report["n_reserved"]
+    )
     assert report["reserved_range"] == ["2025-01-10", "2025-01-12"]
     assert report["usable_range"] == ["2025-01-01", "2025-01-09"]
     assert "fuera de" in str(report["excluded_from_folds"])

@@ -708,7 +708,7 @@ def test_a10_a_window_declared_as_bool_or_float_is_a_typed_error() -> None:
     base = store.FeatureSpec()
     for bad in (True, 1.0):
         with pytest.raises(store.InvalidFeatureSpecError, match="entero"):
-            store.FeatureSpec(windows={**base.windows, "atr_norm": bad})
+            store.FeatureSpec(windows={**base.windows, "atr_norm": cast("int", bad)})
     assert store.feature_spec_sha256(store.FeatureSpec()) == store.feature_spec_sha256(base)
 
 
