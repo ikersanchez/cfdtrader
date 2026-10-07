@@ -31,14 +31,15 @@
 
 ## 1 bis. El bróker declarado: Revolut
 
-El propietario declara el **2026-10-07** que su bróker es **Revolut**. Eso **no cierra** la
-decisión 4 por sí solo —falta la **tabla de costes vigente** con su fecha y el **tipo de cuenta**
-(**CFD**)—, pero fija **a quién** se pregunta y **dónde** están las respuestas.
+El propietario declara el **2026-10-07** que su bróker es **Revolut**, con cuenta de **CFD**. Eso
+**no cierra** la decisión 4 por sí solo —falta la **tabla de costes vigente** con su fecha y la
+**región/entidad**—, pero fija **a quién** se pregunta y **dónde** están las respuestas.
 
 **Qué hay que confirmar primero:**
 
-- El producto es el **CFD** de Revolut, no las acciones fraccionarias: solo el CFD tiene
-  **financiación por noche**, que es justo lo que declara la tabla de `plan.md` §3.3.
+- ✅ **Cuenta de CFD, confirmada** por el propietario el **2026-10-07**: el instrumento es el **CFD**
+  de Revolut, no las acciones fraccionarias. Es coherente con la tabla de `plan.md` §3.3, porque
+  solo el CFD tiene **financiación por noche**.
 - **Región/entidad**: Revolut opera CFDs con entidades distintas (EEE y Reino Unido); los números
   cambian. Fijar **entidad y país**, y la **fecha** de consulta.
 - **Nombre exacto** del instrumento (en el proyecto es `SPX500:CFD`).
