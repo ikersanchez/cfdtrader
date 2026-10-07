@@ -27,10 +27,11 @@ mano, y el *tracking difference* cuando hay pares CFD/índice en el mismo instan
   motivo. Una asunción **no** es una medición y **no** convierte el
   ``not_evaluable`` de la mitad (b) en un aprobado: asumir tu propio peor caso no
   puede ser un aprobado.
-- **Corte de financiación**: **sigue sin verificar**. Vale ``null`` con
-  ``state: "unverified"`` y con la pregunta literal al bróker. Asumir una hora de
-  corte fija está prohibido: si el corte cae antes del cierre, el intradía puro
-  pagaría tenencia igualmente.
+- **Corte de financiación**: se deposita en la plantilla (``config/cost_observations.yaml``).
+  ``null`` = **sin verificar** (``state: "unverified"``, con la pregunta literal al bróker).
+  **Verificado en #87 (2026-10-07): posterior al cierre de la sesión** ⇒ el intradía puro no
+  paga tenencia. Asumir una hora de corte sin dato sigue prohibido: si el corte cayera antes
+  del cierre, el intradía puro pagaría tenencia.
 - **Tracking difference**: solo con pares CFD/índice del mismo instante (tolerancia
   declarada ≤ 1 s); **nunca** se aproxima con una media diaria.
 
