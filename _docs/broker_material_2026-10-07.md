@@ -63,16 +63,26 @@ El propietario declara el **2026-10-07** que su bróker es **Revolut**, con cuen
 | Divisa de liquidación | **USD** | ✅ (coincide con lo registrado) |
 | Spread | «las registradas» → el declarado de `plan.md` §3.3 (**0,0042 %**) | ✅ confirmado como el de la cuenta |
 | Comisión / mínimo | «las registradas» → sin comisión declarada (§3.3) | ✅ confirmado |
-| Financiación (*swap*) | **0,25 % sobre el valor total (mínimo 0,01 USD)** | ⚠️ **periodo sin confirmar** |
+| Financiación (*swap*) | **0,25 % por noche** sobre el valor total (mín. **0,01 USD**) | ⚠️ **magnitud a verificar** |
 | Hora de corte de la financiación (#87) | **no la sabe** | ⏳ pendiente |
 
-⚠️ **La financiación que trae el propietario no cuadra con la tabla declarada y le falta el
-periodo.** Dice «**0,25 % sobre el valor total (mínimo 0,01 USD)**», pero **no dice si es por
-noche, al año o por operación**, y la tabla de §3.3 es **por noche y asimétrica** (largo
-`+0,0182 %`/noche, corto `−0,0018 %`/noche). Con el periodo sin fijar el número **no es
-interpretable**: `0,25 %`/**noche** sería ~**91 %/año** (inviable); `0,25 %`/**año** sería
-~`0,0007 %`/noche (despreciable). Por eso **no se vuelca** y la decisión 4 sigue `OPEN` hasta fijar
-el **periodo** y la **simetría largo/corto**.
+⚠️ **La financiación que declara el propietario (`0,25 %`/noche) no cuadra con la tabla de §3.3 y
+su magnitud es sospechosa.** Se confirma **por noche**, mínimo `0,01 USD`, pero `0,25 %`/noche ≈
+**91 %/año**, que es **~13,7×** el carry declarado en §3.3 (`+0,0182 %`/noche largo ≈ `6,66 %`/año)
+y **no** es plausible para un CFD de índice (donde la tenencia suele ser el *benchmark* + un margen,
+del orden de `0,01–0,03 %`/noche). Antes de tocar nada hay que descartar tres confusiones
+habituales:
+
+- **base**: `0,25 %` ¿sobre el **nocional** (valor total) o sobre el **margen**? (sobre un margen
+  apalancado ×20 daría `0,0125 %` del nocional),
+- **periodo**: ¿seguro **por noche**, y no **anual**?,
+- **simetría**: ¿el mismo `0,25 %` en **largo y corto**? (§3.3 los declara **asimétricos**).
+
+Una comprobación barata y decisiva: el **KID** del instrumento publica el coste de tenencia
+**anualizado** («costs over time»). Con ese número se resuelve cuál es el periodo real. **No se
+vuelca** a `config/cost_observations.yaml` ni se cambia §3.3/`p*` hasta confirmarlo: si fuera real,
+sería un **hallazgo de coste mayor** (afecta al listón **B** y a **#87**), no un detalle. La
+decisión 4 sigue `OPEN`.
 
 Con esto la decisión 4 queda **al borde de cerrarse**: falta **re-confirmar la financiación** —el
 número ya está declarado en §3.3, pero el propietario no lo ha validado ahora— y el **corte de
