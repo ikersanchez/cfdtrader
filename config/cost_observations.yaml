@@ -8,10 +8,10 @@
 # `state: "measured"`, de su fuente y de su motivo. Un cero de relleno es
 # indistinguible de una medición y arruina la auditoría.
 #
-# Esta plantilla se commitea VACÍA a propósito: la rellena un humano a mano, porque
-# nadie mide por ti. Con todo a `null` el script escribe igualmente un informe
-# completo: la tabla declarada de `plan.md` §3.3 más las tres medidas en
-# `unmeasured`.
+# La rellena un humano a mano con lo que haya **verificado** (nadie mide por ti). Hoy
+# solo `financing_cut` (2026-10-07, #87); el resto sigue a `null`. Con todo a `null`
+# el script escribe igualmente un informe completo: la tabla declarada de `plan.md`
+# §3.3 más las tres medidas en `unmeasured`.
 #
 # Uso:
 #   uv run python -m cfdtrader.analysis.cost_audit [--template config/cost_observations.yaml]
@@ -36,16 +36,14 @@ trading_window: null
 # EUR con nocional en USD es otra cosa y queda fuera de alcance aquí → #27.
 settlement_currency: null
 
-# ── 3. Corte de financiación: SIGUE SIN VERIFICAR (a 2026-09-18) ─────────────────
+# ── 3. Corte de financiación: VERIFICADO el 2026-10-07 (#87) ─────────────────────
 # ⚠️ Es la verificación más crítica de la Fase 0 (`plan.md` §8.5 y §21 pregunta 3).
-# `null` = desconocido, y así se publica (`state: "unverified"`, `value: null`).
-# PROHIBIDO asumir las 16:00 ET: si el corte cae antes, el intradía puro pagaría
-# tenencia igualmente. Pregunta literal al bróker (el informe la reproduce):
-#   «¿en qué instante exacto se cobra el coste de tenencia (*swap*) de una posición
-#    en `SPX500:CFD`, en hora del bróker y su equivalente en `America/New_York`?
-#    ¿Se cobra por noche de calendario o por sesión?»
-# Cuando el bróker conteste, se escribe aquí el instante ISO-8601 **con zona horaria**.
-financing_cut: null
+# El propietario confirma que el *swap* se cobra a las **17:00 `America/New_York`**
+# (= 23:00 en España = 21:00 UTC), el cierre diario técnico de los futuros de EE. UU.
+# Es **posterior** al cierre de la sesión (**16:00 ET**) ⇒ el intradía puro **NO** paga
+# tenencia; solo la paga una posición que cruce la noche (`_docs/broker_material_2026-10-07.md`).
+# Se escribe el instante ISO-8601 **con zona horaria** (el informe lo pasa a UTC y a ET).
+financing_cut: "2026-10-07T23:00:00+02:00"   # = 17:00 ET (EDT) = 21:00 UTC
 
 # ── 4. Mínimo absoluto de comisión o de spread en puntos (`plan.md` §21 pregunta 5) ──
 # Si el bróker aplica una comisión mínima fija o un spread mínimo en puntos, se

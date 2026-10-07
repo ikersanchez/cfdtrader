@@ -620,7 +620,7 @@ def test_a17_timestamps_are_utc_and_intervals_are_et() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # A18, A19 · La plantilla de captura
 # ─────────────────────────────────────────────────────────────────────────────
-def test_a18_the_committed_template_is_blank_commented_and_strict() -> None:
+def test_a18_the_committed_template_is_commented_and_strict() -> None:
     text = DEFAULT_TEMPLATE_PATH.read_text(encoding="utf-8")
     raw = yaml.safe_load(text)
 
@@ -637,8 +637,11 @@ def test_a18_the_committed_template_is_blank_commented_and_strict() -> None:
             ]
         )
     )
-    for key in ("trading_window", "settlement_currency", "financing_cut", "minimum_commission_usd"):
+    for key in ("trading_window", "settlement_currency", "minimum_commission_usd"):
         assert raw[key] is None, f"{key} debe ir a null en la plantilla commiteada"
+    # `financing_cut` **sí** está verificado (2026-10-07, #87): no es un valor de relleno.
+    assert raw["financing_cut"] is not None
+    assert load_template(DEFAULT_TEMPLATE_PATH).financing_cut is not None
     for key in ("spread_observations", "tracking_pairs", "executions"):
         assert raw[key] == [], f"{key} debe ser una lista vacía en la plantilla commiteada"
     assert text.count("\n# ") > 30, "la plantilla debe estar comentada"

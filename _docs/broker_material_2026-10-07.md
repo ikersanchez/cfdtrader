@@ -66,15 +66,17 @@ Datos Fundamentales (KID)** de su CFD de índice. Con el KID, la decisión 4 que
 | Cambio de divisa | **0 %** | ✅ = §3.3 |
 | Financiación (*swap*) | **−0,0018 % (corto) / +0,0182 % (largo)** por noche | ✅ = §3.3 |
 | Margen requerido | **5,0 %** | ✅ (KID) |
-| Hora de corte de la financiación (#87) | **el KID no la da** | ⏳ **#87** |
+| Hora de corte de la financiación (#87) | **17:00 ET** (= 23:00 España = 21:00 UTC): ficha de CFDs de Revolut, cierre diario técnico de los futuros | ✅ **#87** |
 
 ⚠️ **El «0,25 % por noche» anotado antes NO aparece en el KID y se descarta.** El KID fija el coste
 de tenencia en **−0,0018 %/+0,0182 % por noche**, que coincide con §3.3; el `0,25 %` (mín. `0,01
 USD`) no cuadra con nada de este documento (¿otra tarifa o error de lectura?) y **no** se usa.
 
 **Con esto la decisión 4 queda CERRADA** (broker, tipo de cuenta, tabla y fecha): ver el cierre en
-`tech_stack.md` §11 bis. Quedan **fuera** y siguen abiertas: **#87** (la hora de corte, que el KID
-no da), **#62** (medir el *slippage* y el spread en vivo) y **#107** (intradía y `bid`/`ask`).
+`tech_stack.md` §11 bis. Y **#87 queda resuelto**: el corte es a las **17:00 ET**, **posterior** al
+cierre de la sesión (**16:00 ET**) ⇒ **el intradía puro no paga tenencia** (depositado en
+`config/cost_observations.yaml` → `financing_cut`; el informe de `cost_audit` lo publica
+`verified`). Siguen abiertas: **#62** (medir el *slippage*) y **#107** (intradía y `bid`/`ask`).
 
 **Dos avisos honestos:**
 
