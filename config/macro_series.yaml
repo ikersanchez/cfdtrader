@@ -69,17 +69,19 @@ series:
     release_time_et: "08:30"
     publication_from_realtime_start: true
     min_start: 2005-01-01
-    notes: "BLS, Employment Situation, primer viernes a las 08:30 ET."
+    notes: "BLS, Employment Situation, primer viernes a las 08:30 ET. Almacenada como dato, **no** es feature de `macro_v1`: candidata de `macro_v2` solo si una feature la pide (#76), por la cautela de `plan.md` §9 sobre el numero de features."
 
-# Contexto europeo: **opcional** y NO implementado en esta tarea (tech_stack.md
-# §4.5). Se declara aquí, en vez de olvidarlo en silencio: el papel protagonista
-# de tipos y macro lo tiene FRED, y ECB SDW / Eurostat solo aportarían contexto
-# de la sesión europea previa. Se implementará cuando una feature lo pida
-# (tarea #22), no antes.
+# Contexto europeo: **decisión de #76 — no se persigue como fuente macro.**
+# `context_v1` (#21) ya cubre el contexto de la sesión europea previa con los
+# **índices** europeos (DAX/FTSE/SX5E vía yfinance), que es lo que el S&P 500
+# "ve" por la mañana; ECB SDW / Eurostat exigirían su propio adaptador (como
+# FRED en #5) y añadirían poco sobre esos índices. El papel protagonista de
+# tipos y macro lo tiene FRED (tech_stack.md §4.5). Se deja declarado, no
+# olvidado: si una feature futura pide el dato, esto se reabre.
 european_context:
   - source: ecb_sdw
     status: not_implemented
-    reason: "Contexto europeo opcional: solo tendría sentido como feature de la sesión previa (#22)."
+    reason: "Retirado como fuente macro (#76): el contexto europeo ya lo cubre `context_v1` (#21) con los índices; no se implementará salvo que una feature lo pida."
   - source: eurostat
     status: not_implemented
-    reason: "Igual que ECB SDW: no es la columna vertebral del proyecto."
+    reason: "Igual que ECB SDW (#76): no es la columna vertebral del proyecto y no aporta sobre los índices europeos de `context_v1`."
