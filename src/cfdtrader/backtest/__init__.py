@@ -41,10 +41,19 @@ aleatoria con la misma frecuencia— como funciones **puras y deterministas** qu
 no llama a ``cost_breakdown``, no construye un ``CostBreakdown`` y su único camino de
 ejecución es ``run_walk_forward``, que exige ``cost_model`` y ``slippage`` sin valor por
 defecto, de modo que ningún baseline puede producir un resultado sin coste. Los listones
-**B** (aguantar la posición, con la financiación del CFD) y **C** (índice puro, no
-invertible) quedan **fuera** y declarados: son #70 y #28. La corrida real sobre el histórico
-y la tabla comparativa de métricas netas son el informe de Fase 1 (**#18**), con las
-métricas de **#15** y el adaptador de almacén **#69**.
+**B** (aguantar la posición, con la financiación del CFD) queda **fuera** de los baselines y
+vive en ``cfdtrader.backtest.close_to_close`` (tarea **#70**) como **serie de referencia**
+declarada; **C** (índice puro) no es invertible y queda fuera (**#28**). La corrida real sobre
+el histórico y la tabla comparativa de métricas netas son el informe de Fase 1 (**#18**), con
+las métricas de **#15** y el adaptador de almacén **#69**.
+
+La **serie de referencia del listón B** vive en ``cfdtrader.backtest.close_to_close`` (tarea
+#70): el «siempre largo» cierre a cierre que aguanta el CFD, con la **financiación** declarada
+por noche (una por sesión, porque el tránsito cruza el corte verificado de #87) y el
+diferencial cobrado **una** vez en el ``CostBreakdown`` de #11. Se construye **fuera** del motor
+de #13 —que es intradía puro por construcción (regla 6, invariante A17)— como artefacto puro,
+tipado y determinista; la variante «por el motor» (posiciones overnight con ``nights >= 1`` en
+#13) queda **declarada** como frontera. Es la fila ``liston_b`` de la tabla de ``plan.md`` §11.2.
 
 Las **métricas netas y de calibración** viven en ``cfdtrader.backtest.metrics`` (tarea #15):
 el límite de agregación que consume las ``SessionOutcome`` de #13 y publica Sharpe y Sortino

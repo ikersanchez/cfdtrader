@@ -38,9 +38,10 @@ Que **no** hace, y se declara en el payload en vez de rellenarse:
 - las unidades del motor las declara **#80** (fraccion del nocional): el retorno de coste
   declarado se calcula **aqui**, en %, y el AST de este modulo **no** lee el atributo del P&L
   declarado del motor, lo re-deriva;
-- el liston B es una **serie de referencia declarada** (cierre a cierre menos la financiacion
-  declarada por noche, importada de la tabla de costes): el liston B de primera clase, con
-  posiciones overnight por el motor, es #70.
+- el liston B es la **serie de referencia declarada** que construye
+  `cfdtrader.backtest.close_to_close` (entregado en #70): cierre a cierre menos la tenencia
+  declarada por noche; la variante «por el motor» (posiciones overnight con `nights >= 1` en
+  #13) queda declarada en ese modulo como la frontera que exigiria reabrir la regla 6.
 
 Sin reloj (``--as-of`` es obligatorio para escribir), sin red, sin escrituras fuera de
 ``--reports-dir`` y determinista byte a byte: ``report_sha256`` es el sha256 del texto canonico de
@@ -351,9 +352,10 @@ DOES_NOT_DO: Final[tuple[dict[str, str], ...]] = (
         "id": "liston_b_first_class",
         "issue": "#70",
         "statement": (
-            "el liston B es una **serie de referencia declarada** (cierre a cierre menos la "
-            "financiacion declarada por noche); el liston B de primera clase, con posiciones "
-            "overnight por el motor, es #70"
+            "el liston B es la **serie de referencia declarada** que construye "
+            "`cfdtrader.backtest.close_to_close` (entregado en #70): cierre a cierre menos la "
+            "tenencia declarada por noche; la variante «por el motor» (posiciones overnight con "
+            "`nights >= 1` en #13) exigiria reabrir la regla 6 y queda declarada en ese modulo"
         ),
     },
     {
@@ -1729,9 +1731,9 @@ def _table_rows(
             is_invertible=True,
             provenance=(
                 "referencia declarada: cierre a cierre de `^GSPC` en % menos la tenencia en largo "
-                "por noche **importada** de la tabla de costes (#8); el diferencial de entrada y "
-                "salida no se cobra aquí (el liston B de primera clase, con posiciones overnight "
-                "por el motor, es #70) y el instante de corte de la financiación es #87"
+                "por noche **importada** de la tabla de costes (#8); el **listón B** de primera "
+                "clase es la serie de `cfdtrader.backtest.close_to_close` (entregado en #70) y el "
+                "instante de corte de la financiación quedó verificado en #87"
             ),
             series_pct=tuple(value - carry_pct for value in close_to_close),
             traded_series_pct=tuple(value - carry_pct for value in close_to_close),

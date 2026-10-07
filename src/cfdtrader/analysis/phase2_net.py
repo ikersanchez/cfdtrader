@@ -29,7 +29,7 @@ Que **hace**:
   brazo base menos neto de la fila, sesion a sesion, semilla declarada): ``no_trade`` y ``liston_a``
   se deciden; ``liston_b`` se **publica** ``not_evaluable`` porque es una serie de **referencia**
   (cierre a cierre con financiacion, sin ejecucion) y compararla contra una base neta inventaria una
-  base — su liston de primera clase es #70;
+  base — su liston de primera clase es la serie de ``cfdtrader.backtest.close_to_close`` (#70);
 - **agrega** las nueve filas con #9 y **deriva** ``phase2_ready`` del agregado (no lo cablea): hoy
   es ``false`` porque el agregado no es ``pass``, y las filas de Fase 4 siguen ``not_evaluable``.
 
@@ -44,8 +44,9 @@ Que **no** hace, y por tanto no puede inventar:
 - **no** re-decide nada de lo registrado por el propietario: `plan.md` §19.6 (``reframe``) y §19.7
   (carril A / carril B) siguen como estan; este informe solo **reemite** la evaluacion de §11.6 y
   publica el veredicto que sale de ella;
-- **no** produce el liston B de primera clase (#70), ni reserva el *holdout* (#68), ni implementa
-  CPCV (#67), ni evalua la divergencia paper-vs-backtest ni el cierre de sesion (#45, #84);
+- **no** produce el liston B (lo entrega `cfdtrader.backtest.close_to_close`, #70), ni reserva el
+  *holdout* (#68), ni implementa CPCV (#67), ni evalua la divergencia paper-vs-backtest ni el
+  cierre de sesion (#45, #84);
 - **no** escribe ningun ``None`` como ``0``.
 
 **Reloj prohibido** (A2): ninguna ruta consulta el reloj del sistema; el instante entra por
@@ -203,7 +204,8 @@ BEATS_RULE: Final[str] = (
     " % de la diferencia media excluye el 0 **por arriba**, `fail` si lo excluye **por abajo**, "
     "`not_evaluable` en otro caso. `liston_b` **no** se decide: es la serie de **referencia** de "
     "cierre a cierre con financiacion (sin ejecucion y sin base neta comparable), #29 ya la marca "
-    "`insufficient_on_its_own` y su liston de primera clase es #70"
+    "`insufficient_on_its_own` y su liston de primera clase es "
+    "`cfdtrader.backtest.close_to_close` (#70)"
 )
 
 #: La regla del veredicto y de la puerta (A12).
@@ -241,8 +243,9 @@ REPORT_LIMITATIONS: Final[tuple[str, ...]] = (
     " entonces el `sha256` del artefacto publicado no es el de los numeros de este informe",
     "la fila del drawdown se mide sobre `declared_cost` del brazo base, **no** sobre la base neta: "
     "se publica con su `basis` y **no** se presenta como medida neta (la herencia de #29)",
-    "el liston B de primera clase (posiciones overnight por el motor) es #70: aqui su fila se "
-    "**publica** `not_evaluable` en vez de compararla contra una base que no le corresponde",
+    "el liston B de primera clase es la serie de `cfdtrader.backtest.close_to_close` (#70) —su "
+    "variante «por el motor» exigiria reabrir la regla 6—: aqui su fila se **publica** "
+    "`not_evaluable` en vez de compararla contra una base que no le corresponde",
     "reemitir la evaluacion de §11.6 **no** re-decide nada de lo ya registrado por el propietario: "
     "`plan.md` §19.6 (`reframe`) y §19.7 (carril A / carril B) siguen como estan y el carril B"
     " sigue bloqueado mientras `phase2_ready` sea `false`",
@@ -271,7 +274,8 @@ REPORT_DOES_NOT_DO: Final[tuple[dict[str, str], ...]] = (
         "issue": "#70",
         "statement": (
             "no decide la fila de `liston_b` (serie de referencia sin base neta comparable; su "
-            "liston de primera clase es #70) ni las de Fase 4 (paper y cierre), que se publican "
+            "liston de primera clase es la serie de `cfdtrader.backtest.close_to_close`, "
+            "entregada en #70) ni las de Fase 4 (paper y cierre), que se publican "
             "`not_evaluable`"
         ),
     },
@@ -844,8 +848,9 @@ def _beats_block(
                 "reason": (
                     "`liston_b` es la serie de **referencia** de cierre a cierre con financiacion: "
                     "no pasa por el motor, no tiene ejecucion y su base neta no es comparable con"
-                    " la del brazo; su liston de primera clase (posiciones overnight por el motor)"
-                    " es #70. Se publica `not_evaluable` en vez de inventarle una base"
+                    " la del brazo; su liston de primera clase es "
+                    "`cfdtrader.backtest.close_to_close` (#70). Se publica `not_evaluable` en vez "
+                    "de inventarle una base"
                 ),
                 "rule": BEATS_RULE,
             }
