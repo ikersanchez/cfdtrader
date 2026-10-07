@@ -63,8 +63,16 @@ El propietario declara el **2026-10-07** que su bróker es **Revolut**, con cuen
 | Divisa de liquidación | **USD** | ✅ (coincide con lo registrado) |
 | Spread | «las registradas» → el declarado de `plan.md` §3.3 (**0,0042 %**) | ✅ confirmado como el de la cuenta |
 | Comisión / mínimo | «las registradas» → sin comisión declarada (§3.3) | ✅ confirmado |
-| Financiación (*swap*) | **no la recuerda** | ⏳ sin re-confirmar |
+| Financiación (*swap*) | **0,25 % sobre el valor total (mínimo 0,01 USD)** | ⚠️ **periodo sin confirmar** |
 | Hora de corte de la financiación (#87) | **no la sabe** | ⏳ pendiente |
+
+⚠️ **La financiación que trae el propietario no cuadra con la tabla declarada y le falta el
+periodo.** Dice «**0,25 % sobre el valor total (mínimo 0,01 USD)**», pero **no dice si es por
+noche, al año o por operación**, y la tabla de §3.3 es **por noche y asimétrica** (largo
+`+0,0182 %`/noche, corto `−0,0018 %`/noche). Con el periodo sin fijar el número **no es
+interpretable**: `0,25 %`/**noche** sería ~**91 %/año** (inviable); `0,25 %`/**año** sería
+~`0,0007 %`/noche (despreciable). Por eso **no se vuelca** y la decisión 4 sigue `OPEN` hasta fijar
+el **periodo** y la **simetría largo/corto**.
 
 Con esto la decisión 4 queda **al borde de cerrarse**: falta **re-confirmar la financiación** —el
 número ya está declarado en §3.3, pero el propietario no lo ha validado ahora— y el **corte de
