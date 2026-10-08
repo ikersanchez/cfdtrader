@@ -434,18 +434,18 @@ def test_replace_is_refused_in_raw(store: Store) -> None:
 def test_replace_in_derived_keeps_a_single_row_per_identity(store: Store) -> None:
     feature = _bar(as_of=date(2024, 3, 15), series_id="2024-03-15", value=1.0)
     revised = {**feature, "value": 2.0}
-    assert store.replace("derived", "features_daily", feature) is WriteOutcome.CREATED
-    assert store.replace("derived", "features_daily", revised) is WriteOutcome.CREATED
-    assert store.replace("derived", "features_daily", revised) is WriteOutcome.UNCHANGED
+    assert store.replace("derived", "probe", feature) is WriteOutcome.CREATED
+    assert store.replace("derived", "probe", revised) is WriteOutcome.CREATED
+    assert store.replace("derived", "probe", revised) is WriteOutcome.UNCHANGED
 
-    frame = store.read_pit("derived", "features_daily", READ_NOW)
+    frame = store.read_pit("derived", "probe", READ_NOW)
     assert frame.height == 1
     assert frame["value"][0] == 2.0
     assert frame["version"][0] == 2
 
     # El estado consultable del dataset también tiene una sola fila por identidad:
     # el valor sustituido no se puede leer por SQL. La historia sigue en disco.
-    assert store.sql("SELECT value, version FROM derived.features_daily").to_dicts() == [
+    assert store.sql("SELECT value, version FROM derived.probe").to_dicts() == [
         {"value": 2.0, "version": 2}
     ]
     assert len(_files(store.root)) == 2
@@ -535,14 +535,13 @@ def test_reading_an_empty_dataset_is_an_explicit_error(store: Store) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 def test_sql_queries_parquet_and_creates_no_database(store: Store, tmp_path: Path) -> None:
     store.append("raw", "market_daily", _bar())
-    store.append("derived", "features_daily", _bar(as_of=date(2024, 3, 15), series_id="2024-03-15"))
+    store.append("derived", "probe", _bar(as_of=date(2024, 3, 15), series_id="2024-03-15"))
 
     frame = store.sql("SELECT source, series_id, version FROM raw.market_daily")
     assert frame.to_dicts() == [{"source": "yfinance", "series_id": "^GSPC", "version": 1}]
 
     joined = store.sql(
-        "SELECT count(*) AS n FROM raw.market_daily AS r "
-        "JOIN derived.features_daily AS d USING (source)"
+        "SELECT count(*) AS n FROM raw.market_daily AS r JOIN derived.probe AS d USING (source)"
     )
     assert joined["n"][0] == 1
 

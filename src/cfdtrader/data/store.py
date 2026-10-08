@@ -119,6 +119,31 @@ visibilidad temporal). Así, tras un ``replace`` en ``derived`` o un
 ``append_revision``, el dataset **no** muestra a la vez el valor viejo y el
 nuevo. La historia completa sigue en los Parquet y se reconstruye con
 ``read_pit(at=...)``.
+
+Contrato de *layout* (`tech_stack.md` §12.10)
+---------------------------------------------
+
+Las seis columnas obligatorias de arriba son el contrato **común**. El *payload* de
+cada dataset lo declara `cfdtrader.data.contracts` —firma por ``(capa, dataset)`` y
+``layout_version``— y este módulo la **hace cumplir al leer**:
+
+- **Cambio de tipo** de una columna: :class:`LayoutMismatchError`, que nombra el
+  **fichero**, la **columna** y los **dos tipos**. No hay coerción silenciosa.
+- **Columna desconocida** (la firma no la declara): también es error. Un cambio de
+  semántica exige columna **nueva con nombre nuevo**; nunca se reinterpreta la vieja.
+- **Columna ausente** (fichero de un *layout* anterior, o escrito por una fuente que
+  no trae ese *payload*): **se lee**, la columna sale ``null`` **declarado** —nunca
+  ``0``— y el lector publica el *layout* con :meth:`Store.layout` y el log. Es el
+  único caso en que un histórico mezclado se puede leer entero, así que se declara en
+  vez de esconderse.
+
+Un dataset **sin declaración** no se valida: la lista de firmas es una lista blanca, y
+un test comprueba que todos los datasets que el proyecto escribe están en ella.
+
+Un fichero de *layout* antiguo de `raw` se **cuarentena** con :meth:`Store.quarantine`
+—se **mueve** a ``_legacy/<layout_version>/``, sin reescribirlo, y la vista deja de
+verlo— y se re-ingesta. En `derived` la política es recomputar y sustituir con
+``replace``; la cuarentena es solo de `raw`.
 """
 
 from __future__ import annotations
@@ -136,11 +161,22 @@ from typing import Literal, cast, final
 
 import duckdb
 import polars as pl
+from loguru import logger
+
+from cfdtrader.data.contracts import (
+    POLARS_DTYPES,
+    REQUIRED_SIGNATURE,
+    DatasetLayout,
+    layout_of,
+)
 
 __all__ = [
     "ImmutableWriteError",
     "InvalidRecordError",
     "Layer",
+    "LayoutFile",
+    "LayoutMismatchError",
+    "LayoutReading",
     "Record",
     "StorageError",
     "Store",
@@ -180,6 +216,32 @@ _SOURCE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 _PARQUET_SUFFIX = ".parquet"
 
+#: Directorio de cuarentena de los ficheros de *layout* antiguo de `raw` (§12.10). Vive
+#: **dentro** del dataset, así que no aparece como dataset, y queda fuera de las vistas.
+_LEGACY_DIR = "_legacy"
+
+#: Tipo de DuckDB con el que se materializa a ``NULL`` una columna declarada que
+#: **ningún** fichero trae: el lector declara el tipo, no lo adivina.
+_DUCKDB_TYPES: dict[str, str] = {
+    "str": "VARCHAR",
+    "int": "BIGINT",
+    "float": "DOUBLE",
+    "bool": "BOOLEAN",
+    "date": "DATE",
+    "datetime": "TIMESTAMP",
+}
+
+#: Tipo de Polars con el que se **escribe** cada tipo declarado. Se usa cuando un lote trae
+#: la columna entera a ``NULL``: el Parquet de un dataset declarado lleva su tipo declarado.
+_POLARS_TYPES: dict[str, pl.DataType] = {
+    "str": pl.String(),
+    "int": pl.Int64(),
+    "float": pl.Float64(),
+    "bool": pl.Boolean(),
+    "date": pl.Date(),
+    "datetime": pl.Datetime("us", "UTC"),
+}
+
 #: Expresión de ventana que define la **revisión vigente** de una identidad: la
 #: de mayor ``version``. La usan la lectura *point-in-time* (que además filtra
 #: por visibilidad) y las vistas SQL (que exponen el estado actual).
@@ -205,6 +267,95 @@ class ImmutableWriteError(StorageError):
 
 class UnknownDatasetError(StorageError):
     """Lectura de un dataset que todavía no tiene ningún fichero Parquet."""
+
+
+class LayoutMismatchError(StorageError):
+    """La firma de un Parquet no es la declarada para su dataset (`tech_stack.md` §12.10).
+
+    Lleva el **fichero**, la **columna** y los **dos tipos** como atributos, para que quien
+    la capture no tenga que leer el mensaje. Se levanta en los dos casos en que leer sería
+    mentir: una columna con **otro tipo** y una columna que la firma **no declara**.
+    """
+
+    def __init__(
+        self,
+        *,
+        path: Path,
+        column: str,
+        expected: str | None,
+        found: str | None,
+        reason: str,
+    ) -> None:
+        self.path = path
+        self.column = column
+        self.expected = expected
+        self.found = found
+        self.reason = reason
+        super().__init__(
+            f"{path}: la columna {column!r} no cumple la firma declarada. {reason} "
+            f"(tipo en el fichero: {found or 'ausente'}; tipo declarado: {expected or 'ninguno'})"
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class LayoutFile:
+    """Firma de **un** Parquet del dataset: su *layout*, sus columnas y las que no trae."""
+
+    path: Path
+    layout_version: int
+    columns: tuple[str, ...]
+    """Columnas del fichero, obligatorias incluidas."""
+
+    missing: tuple[str, ...]
+    """Columnas de la firma vigente que este fichero no trae: el lector las devuelve a ``null``."""
+
+
+@dataclass(frozen=True, slots=True)
+class LayoutReading:
+    """Lo que el lector vio en un dataset: una versión por fichero y qué sale a ``null``.
+
+    ``old_layout`` y ``null_columns`` son la **declaración** que §12.10 exige antes de
+    responder a una consulta que mezcla dos *layouts*: un histórico mezclado se puede leer,
+    pero no en silencio.
+    """
+
+    layer: str
+    dataset: str
+    declared_version: int
+    files: tuple[LayoutFile, ...]
+
+    @property
+    def versions(self) -> tuple[int, ...]:
+        """Versiones de *layout* presentes, de menor a mayor."""
+        return tuple(sorted({file.layout_version for file in self.files}))
+
+    @property
+    def old_layout(self) -> bool:
+        """``True`` si algún fichero es anterior al *layout* vigente (histórico mezclado)."""
+        return any(file.layout_version < self.declared_version for file in self.files)
+
+    @property
+    def null_columns(self) -> tuple[str, ...]:
+        """Columnas que el lector devuelve a ``null`` por venir de un *layout* anterior."""
+        return tuple(sorted({name for file in self.files for name in file.missing}))
+
+    @property
+    def present_columns(self) -> frozenset[str]:
+        """Columnas que trae **algún** fichero del dataset (la unión de todas)."""
+        return frozenset(name for file in self.files for name in file.columns)
+
+    def describe(self) -> str:
+        """Frase con la que el lector **publica** el *layout* leído."""
+        head = (
+            f"'{self.layer}.{self.dataset}': layout vigente {self.declared_version}, "
+            f"ficheros en {list(self.versions)}"
+        )
+        if not self.old_layout:
+            return f"{head}; ninguno anterior al vigente"
+        return (
+            f"{head}; **histórico mezclado**: las columnas "
+            f"{list(self.null_columns)} salen a null en los ficheros anteriores"
+        )
 
 
 class WriteOutcome(StrEnum):
@@ -416,6 +567,81 @@ def _as_of_is_date(record: PreparedRecord) -> bool:
     return not isinstance(record.as_of, datetime)
 
 
+def _file_dtypes(path: Path) -> dict[str, str]:
+    """Tipo **declarado** de cada columna de un Parquet, en el vocabulario de `contracts`."""
+    declared: dict[str, str] = {}
+    for name, dtype in pl.read_parquet_schema(path).items():
+        base = str(dtype).split("(")[0]
+        mapped = POLARS_DTYPES.get(base)
+        if mapped is None:
+            raise StorageError(
+                f"{path}: el lector no sabe comparar el tipo {base!r} de la columna "
+                f"{str(name)!r} con la firma declarada (conoce {sorted(POLARS_DTYPES)})"
+            )
+        declared[str(name)] = mapped
+    return declared
+
+
+def _inspect_file(path: Path, declaration: DatasetLayout, dtypes: Mapping[str, str]) -> LayoutFile:
+    """*Layout* de un fichero y las columnas que no trae, o :class:`LayoutMismatchError`.
+
+    Es el único sitio donde se decide si un fichero **se puede leer**: un tipo distinto o
+    una columna que la firma no declara son errores (se leería un dato que no es el
+    declarado); una columna **ausente** no lo es —se declara como ``null``—.
+    """
+    declared = {spec.name: spec for spec in declaration.payload}
+    for name, dtype in dtypes.items():
+        if name in REQUIRED_SIGNATURE:
+            continue
+        spec = declared.get(name)
+        if spec is None:
+            raise LayoutMismatchError(
+                path=path,
+                column=name,
+                expected=None,
+                found=dtype,
+                reason=(
+                    f"'{declaration.layer}.{declaration.dataset}' no declara esa columna: un "
+                    "cambio de semantica exige columna nueva con nombre nuevo, no reinterpretar "
+                    "la vieja"
+                ),
+            )
+        if spec.dtype != dtype:
+            raise LayoutMismatchError(
+                path=path,
+                column=name,
+                expected=spec.dtype,
+                found=dtype,
+                reason=f"'{declaration.layer}.{declaration.dataset}' la declara de otro tipo",
+            )
+    for name, allowed in REQUIRED_SIGNATURE.items():
+        expected = " o ".join(sorted(allowed))
+        if name not in dtypes:
+            raise LayoutMismatchError(
+                path=path,
+                column=name,
+                expected=expected,
+                found=None,
+                reason="faltan columnas obligatorias del contrato del almacen",
+            )
+        if dtypes[name] not in allowed:
+            raise LayoutMismatchError(
+                path=path,
+                column=name,
+                expected=expected,
+                found=dtypes[name],
+                reason="las seis columnas obligatorias tienen un tipo declarado",
+            )
+    payload = frozenset(name for name in dtypes if name not in REQUIRED_SIGNATURE)
+    version = declaration.version_of(payload)
+    return LayoutFile(
+        path=path,
+        layout_version=version,
+        columns=tuple(dtypes),
+        missing=tuple(spec.name for spec in declaration.payload if spec.name not in dtypes),
+    )
+
+
 def _as_records(record: Record | Sequence[Record]) -> Sequence[object]:
     """Normaliza el argumento de escritura a una secuencia de registros sin tipar.
 
@@ -445,6 +671,13 @@ class Store:
 
     def __init__(self, root: Path | str) -> None:
         self._root = Path(root)
+        #: Caché de firmas leídas por ``(capa, dataset)``, con la huella de los ficheros para
+        #: invalidarla. Inspeccionar el esquema de cada Parquet en **cada** consulta sería un
+        #: coste absurdo en un informe que hace decenas: la huella (ruta, tamaño, ``mtime``) es
+        #: barata y cambia en cuanto alguien escribe.
+        self._layouts: dict[
+            tuple[str, str], tuple[tuple[tuple[str, int, int], ...], LayoutReading | None]
+        ] = {}
 
     @property
     def root(self) -> Path:
@@ -485,6 +718,7 @@ class Store:
         permitir.
         """
         instant = _as_instant(at, field="at")
+        reading = self._declare_layout(layer, dataset)
         paths = self._parquet_files(layer, dataset)
         if not paths:
             raise UnknownDatasetError(
@@ -500,8 +734,9 @@ class Store:
             conditions.append("series_id = ?")
             params.append(series_id)
 
+        select = "*" if reading is None else self._layout_projection(layer, dataset, reading)
         query = (
-            "WITH visible AS (SELECT * FROM "
+            f"WITH visible AS (SELECT {select} FROM "
             f"{_read_parquet_expr(paths)} WHERE {' AND '.join(conditions)}), "
             f"ranked AS (SELECT *, {_CURRENT_ROW_WINDOW} AS pit_rank FROM visible) "
             "SELECT * EXCLUDE (pit_rank) FROM ranked WHERE pit_rank = 1 "
@@ -520,6 +755,117 @@ class Store:
         if not layer_dir.is_dir():
             return []
         return sorted(path.name for path in layer_dir.iterdir() if path.is_dir())
+
+    # ── Contrato de *layout* (§12.10) ────────────────────────────────────────
+    def layout(self, layer: Layer, dataset: str) -> LayoutReading | None:
+        """Firma leída de **cada** Parquet del dataset, con su *layout* y sus ``null``.
+
+        Devuelve ``None`` si el dataset no tiene declaración: §12.10 solo se puede hacer
+        cumplir sobre una firma declarada, y el test que comprueba que *todos* los datasets
+        del proyecto están declarados es lo que cierra ese hueco.
+
+        Levanta :class:`LayoutMismatchError` en cuanto un fichero cambia el tipo de una
+        columna o trae una que la firma no declara. Un fichero al que solo le faltan
+        columnas **no** es un error: se lee con esas columnas a ``null`` y queda declarado
+        en ``old_layout``/``null_columns``.
+        """
+        declaration = layout_of(layer, dataset)
+        paths = self._parquet_files(layer, dataset)
+        fingerprint = tuple(
+            (str(path), path.stat().st_size, path.stat().st_mtime_ns) for path in paths
+        )
+        cached = self._layouts.get((layer, dataset))
+        if cached is not None and cached[0] == fingerprint:
+            return cached[1]
+        reading = (
+            None
+            if declaration is None
+            else LayoutReading(
+                layer=layer,
+                dataset=dataset,
+                declared_version=declaration.layout_version,
+                files=tuple(_inspect_file(path, declaration, _file_dtypes(path)) for path in paths),
+            )
+        )
+        self._layouts[(layer, dataset)] = (fingerprint, reading)
+        return reading
+
+    def quarantine(self, layer: Layer, dataset: str) -> tuple[Path, ...]:
+        """Mueve los ficheros de *layout* antiguo de `raw` a ``_legacy/<version>/`` (§12.10).
+
+        El fichero se **mueve** (``os.replace`` dentro de la misma raíz), nunca se
+        reescribe: los bytes son los mismos antes y después, que es lo que exige la
+        inmutabilidad de `raw` (§12.4). Al quedar bajo ``_legacy/`` sale de las vistas, así
+        que deja de leerse, y **la re-ingesta es de quien llama**: esto no inventa datos ni
+        decide qué *layout* es el vigente —eso lo dice la declaración—. Nada de ``_legacy/``
+        se borra aquí: la poda es #44 y la decide el propietario.
+
+        Devuelve los ficheros movidos (vacío si no había ninguno anterior al vigente).
+        """
+        if layer != "raw":
+            raise StorageError(
+                f"'{layer}.{dataset}': la cuarentena es solo de 'raw', que es lo inmutable. "
+                "En 'derived' §12.10 pide recomputar el dataset y sustituirlo con 'replace' "
+                "(el dato no es irreversible), y borrar los ficheros viejos es una poda (#44)"
+            )
+        reading = self.layout(layer, dataset)
+        if reading is None:
+            raise StorageError(
+                f"'{layer}.{dataset}' no tiene firma declarada: sin declaracion no se puede "
+                "saber que ficheros son de un layout anterior (§12.10)"
+            )
+        moved: list[Path] = []
+        root = self._dataset_dir(layer, dataset)
+        for file in reading.files:
+            if file.layout_version >= reading.declared_version:
+                continue
+            target = root / _LEGACY_DIR / str(file.layout_version) / file.path.relative_to(root)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(file.path, target)
+            moved.append(target)
+        if moved:
+            logger.warning(
+                "contrato del almacen: cuarentenados {} ficheros de '{}.{}' en '{}'",
+                len(moved),
+                layer,
+                dataset,
+                _LEGACY_DIR,
+            )
+        return tuple(moved)
+
+    def _declare_layout(self, layer: Layer, dataset: str) -> LayoutReading | None:
+        """Lee la firma del dataset y **publica** el *layout* si mezcla dos versiones (§12.10).
+
+        Devuelve la lectura para que quien la pida no tenga que volver a inspeccionar los
+        ficheros (`read_pit` la usa para materializar las columnas que falten).
+        """
+        reading = self.layout(layer, dataset)
+        if reading is not None and reading.old_layout:
+            logger.warning("contrato del almacen: {}", reading.describe())
+        return reading
+
+    def _layout_projection(self, layer: Layer, dataset: str, reading: LayoutReading) -> str:
+        """Lista de columnas de la lectura, con las que **ningún** fichero trae creadas a ``null``.
+
+        Sin esto, un dataset cuyos ficheros son **todos** anteriores al *layout* vigente
+        devolvería una tabla **sin** esas columnas (el ``null`` implícito de
+        ``union_by_name`` solo aparece cuando algún fichero sí las trae). Se materializan
+        como ``NULL`` **declarado**: nunca ``0``, nunca un valor inventado.
+        """
+        declaration = layout_of(layer, dataset)
+        if declaration is None:
+            return "*"
+        present = reading.present_columns
+        absent = [spec for spec in declaration.payload if spec.name not in present]
+        if not absent:
+            return "*"
+        columns = [f'"{name}"' for name in REQUIRED_SIGNATURE]
+        for spec in declaration.payload:
+            if spec.name in present:
+                columns.append(f'"{spec.name}"')
+            else:
+                columns.append(f'CAST(NULL AS {_DUCKDB_TYPES[spec.dtype]}) AS "{spec.name}"')
+        return ", ".join(columns)
 
     # ── Escritura: preparación ───────────────────────────────────────────────
     def _write(
@@ -700,7 +1046,10 @@ class Store:
         source: str | None = None,
         year: int | None = None,
     ) -> list[Path]:
-        """Ficheros Parquet del dataset, opcionalmente acotados a una partición."""
+        """Ficheros Parquet del dataset, opcionalmente acotados a una partición.
+
+        Los de ``_legacy/`` **no** cuentan: están cuarentenados, así que no se leen (§12.10).
+        """
         base = self._dataset_dir(layer, dataset)
         if source is not None:
             base = base / f"source={source}"
@@ -708,7 +1057,9 @@ class Store:
             base = base / f"year={year}"
         if not base.is_dir():
             return []
-        return sorted(base.rglob(f"*{_PARQUET_SUFFIX}"))
+        return sorted(
+            path for path in base.rglob(f"*{_PARQUET_SUFFIX}") if _LEGACY_DIR not in path.parts
+        )
 
     def _validate_layer(self, layer: str) -> None:
         if layer not in LAYERS:
@@ -748,10 +1099,14 @@ class Store:
                 paths = self._parquet_files(layer, dataset)
                 if not paths:
                     continue
+                reading = self._declare_layout(layer, dataset)
+                select = (
+                    "*" if reading is None else self._layout_projection(layer, dataset, reading)
+                )
                 connection.execute(
                     f'CREATE OR REPLACE VIEW "{layer}"."{dataset}" AS '
                     "SELECT * EXCLUDE (pit_rank) FROM ("
-                    f"SELECT *, {_CURRENT_ROW_WINDOW} AS pit_rank "
+                    f"SELECT {select}, {_CURRENT_ROW_WINDOW} AS pit_rank "
                     f"FROM {_read_parquet_expr(paths)}) WHERE pit_rank = 1"
                 )
 
@@ -796,11 +1151,14 @@ def _to_frame(records: Sequence[PreparedRecord]) -> pl.DataFrame:
         "published_at": pl.Datetime("us", "UTC"),
         "version": pl.Int64(),
     }
+    declaration = layout_of(records[0].layer, records[0].dataset)
+    declared = {spec.name: spec.dtype for spec in declaration.payload} if declaration else {}
     for name in names:
         if name not in _RESERVED and all(value is None for value in data[name]):
-            # Polars inferiría `Null` y Parquet no tiene ese tipo: se fija String
-            # y el valor es NULL.
-            dtypes[name] = pl.String()
+            # Polars inferiría `Null` y Parquet no tiene ese tipo. En un dataset **declarado**
+            # se escribe el tipo que declara su firma —si no, el almacén escribiría una firma
+            # que su propio lector rechazaría— y en uno sin declarar, String.
+            dtypes[name] = _POLARS_TYPES[declared[name]] if name in declared else pl.String()
     return pl.DataFrame(data).with_columns(
         pl.col(name).cast(dtype) for name, dtype in dtypes.items()
     )
