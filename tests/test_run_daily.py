@@ -157,7 +157,11 @@ FROZEN: Final[frozenset[str]] = frozenset(
         # `does_not_do` y su prosa de follow-ups.
         "src/cfdtrader/backtest/metrics.py",
         "src/cfdtrader/backtest/baselines.py",
-        "src/cfdtrader/data/store.py",
+        # #139 retira `data/store.py` de este conjunto: el contrato de *layout* del almacen
+        # (`tech_stack.md` §12.10) se declara, se valida al leer y se cuarentena **en ese
+        # fichero** —mas su declaracion nueva, `data/contracts.py`—, el mismo criterio que
+        # #113/#124/#131/#136/#73 aplicaron al gate, al calendario, al motor de costes, al
+        # guardian de reconstruccion y al productor de `derived.features_daily`.
         # #124 retira `data/calendar.py` de este conjunto: el esquema y el cargador del calendario
         # de FOMC declarado viven en ese modulo, el mismo criterio que #113 aplico con el gate
         # (`decision/gate.py`) y con el informe (`analysis/pipeline_report.py`).
