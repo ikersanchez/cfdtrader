@@ -2,8 +2,8 @@
 
 | Campo | Valor |
 |---|---|
-| **Versión** | **2.23** · instrumento S&P 500 |
-| **Fecha** | 2026-10-07 |
+| **Versión** | **2.24** · instrumento S&P 500 |
+| **Fecha** | 2026-10-08 |
 | **Estado** | ✅ **Especificación cerrada.** Cambios posteriores solo mediante entrada en el registro y motivo medido |
 | **Documento padre** | `plan.md` v2.17 (fuente de verdad funcional) |
 | **Ámbito** | Stack técnico del sistema descrito en `plan.md` |
@@ -968,7 +968,30 @@ Como el sistema decide **una vez al día**, los artefactos de decisión son **un
 
 > **La prueba anual es la prueba de fuego de todo el modelo.** Si la recomputación **no coincide** con lo registrado, hay una fuente de no determinismo —una dependencia sin fijar, un dato que se revisó, una feature con estado oculto— y el sistema **no es auditable**. Detectar eso una vez al año es infinitamente más barato que descubrirlo cuando una divergencia en producción no sepas explicar.
 >
-> Y si la recomputación coincide, has demostrado algo valioso: que el diario es suficiente para reconstruir cualquier decisión pasada, y que **no necesitas guardar los estados intermedios**. La prueba valida el diseño entero.
+### 12.10 Política de evolución del contrato del almacén
+
+> Normativa, y **no** estaba escrita. §12.4 fija el esquema de cada capa y el módulo del almacén declara las **seis columnas obligatorias** de todo registro, pero **nada dice con qué *layout* se escribió un fichero** ni qué se hace cuando el contrato cambia. La consecuencia es la del *grooming* de #2: **un cambio de contrato dentro de dos años dejaría ficheros antiguos sin marca que los distinga**, y el `version` del registro **no** sirve para eso —es el contador de revisión del **dato** (FRED revisa CPI, PCE y NFP), no la versión del esquema—.
+
+**El contrato se versiona en el código, no en el dato.** El almacén declara, por `(capa, dataset)`, la **firma** de su *payload* —nombre y tipo de cada columna— y su `layout_version`. La firma **es** el esquema del Parquet, así que un fichero antiguo se detecta leyéndolo: no hace falta una columna nueva en cada fila ni una marca de agua que alguien pueda olvidar. Escribir la versión en el dato habría contaminado las seis columnas obligatorias y roto la inmutabilidad de `raw` en cada cambio de contrato.
+
+**Los tres cambios, y qué se hace con cada uno:**
+
+| Cambio | Compatible | Qué se hace |
+|---|---|---|
+| **Columna nueva** (*aditiva*) | sí, hacia atrás | `layout_version` sube. Un fichero antiguo **se lee**: la columna ausente es `null` **declarado**, nunca `0`, y el lector publica `old_layout`. Es el único caso en que un histórico mezclado se puede leer entero |
+| **Cambio de tipo** de una columna | **no** | El lector **rechaza** el fichero y dice cuál, qué columna y los dos tipos. No hay coerción silenciosa: un `float` leído como texto es un dato distinto, no una conversión |
+| **Cambio de semántica** (misma columna, otro significado) | **no**, y es el peligroso | Exige **columna nueva con nombre nuevo**; la vieja deja de escribirse y **nunca** se reinterpreta. Una columna que cambia de significado sin cambiar de nombre es un dato falso con el mismo nombre |
+
+**Detección.** Al leer un dataset, el almacén compara la firma de **cada** Parquet con la declarada y, si no coincide, levanta un error tipado que nombra el **fichero**, la **columna** y el tipo esperado. **Nunca** se responde a una consulta mezclando dos *layouts* sin declararlo.
+
+**Qué se hace con un fichero de *layout* antiguo:**
+
+- En **`raw`** (inmutable, §12.4): **no se toca ni se reescribe**. El fichero se **cuarentena** moviéndolo a `<raíz>/raw/<dataset>/_legacy/<layout_version>/` —fuera de las vistas, así que deja de leerse— y se **re-ingesta** a un fichero nuevo con el *layout* vigente. La procedencia (`source`, `as_of`, `fetched_at`) queda intacta: se ha movido un fichero, no se ha reescrito un dato.
+- En **`derived`** (recalculable, §12.2): se **recomputa** y se escribe con `replace`; los ficheros viejos se borran, porque no son irreversibles.
+
+**Compatibilidad con §12.9 (prueba anual de reconstrucción).** `journal.decisions` no es Parquet del almacén y **no** entra aquí. Pero la prueba compara features recomputadas con las guardadas: si entre las dos pasan de un *layout* a otro, la comparación se hace **por las columnas presentes en las dos versiones** y el resto se **declara**, nunca se rellena.
+
+**Lo que esta política exige implementar** (hoy **no** existe, y por eso se abre **#139**): la declaración de la **firma** y del `layout_version` por dataset, la validación al leer con el error tipado, y el movimiento de cuarentena de `raw`. Hasta que exista, un cambio de contrato se detecta **a ojo** —leyendo el Parquet— y el proyecto no puede afirmar que un histórico mezclado no se esté leyendo.
 
 ---
 
@@ -1005,3 +1028,4 @@ Como el sistema decide **una vez al día**, los artefactos de decisión son **un
 | 2026-10-07 | **2.21** | 🇪🇸 **§11 bis: la decisión 4 recoge las respuestas del propietario (Revolut · CFD · España/EEE).** El propietario confirma: región **España (EEE)**, divisa **USD**, y spread y comisión **«las registradas»** (el declarado de §3.3: **0,0042 %** y sin comisión). **No** re-confirma la **financiación (*swap*)** —no la recuerda— ni la **hora de corte** (**#87**). La fila 4 se acota a esos dos pendientes y **sigue `OPEN`**: cerrarla exigiría la tabla vigente completa. Cabecera a 2.21. | Anotar las respuestas del propietario **sin** rellenar la financiación con un valor no confirmado (`§11 bis`: se decide, se anota y entonces se implementa) |
 | 2026-10-07 | **2.22** | ✅ **§11 bis: la decisión 4 (bróker) pasa a CERRADA con el KID.** El propietario aporta el **Documento de Datos Fundamentales (KID)** de su CFD: entidad **Revolut Securities Europe UAB** (Lituania, **Banco de Lituania**, EEE), cuenta **CFD**, divisa **USD**; tabla —diferencial **0,0042 %**, cambio de divisa **0 %**, tenencia **−0,0018 % (corto) / +0,0182 % (largo)** por noche, margen **5,0 %**— que **coincide con `plan.md` §3.3** (**sin cambio**). El «0,25 %/noche» apuntado antes **no aparece** en el KID y se descarta. Queda **fuera y abierto**: **#87** (hora de corte), **#62** (medir el *slippage*) y **#107** (intradía/`bid`-`ask`). Cabecera a 2.22. Material: `_docs/broker_material_2026-10-07.md` | Cerrar la decisión que §11 bis declaraba abierta, con el **documento oficial** del bróker que verifica la tabla declarada (decidir, anotarlo y entonces implementar), sin tocar la especificación cerrada |
 | 2026-10-07 | **2.23** | 🔐 **Se implementa la auditoría de dependencias en el CI (§3.3.8, #103).** Job nuevo **`deps-audit`** en `.github/workflows/ci.yml`: `uv sync --locked` y **`uvx pip-audit --path .venv/lib/python3.12/site-packages`** sobre el **entorno instalado desde el `uv.lock`**. Es **bloqueante** (`test_ci_workflow.py` A15 prohíbe degradar una guarda a un fallo silencioso). Los avisos conocidos el 2026-10-07 se ignoran **explícitamente** con `--ignore-vuln` y su motivo: `diskcache 5.6.3` (**PYSEC-2026-2447**, sin versión de corrección publicada) y `virtualenv 21.7.10` (dev, vía pre-commit: PYSEC-2026-4011/4012/4013/4014, corregidos en ≥ 21.7.11). Se corrige la fila: **`uv pip audit` no existe** (uv 0.9.28 no tiene subcomando `audit`), la vía real es `uvx pip-audit`. Cabecera a 2.23 | Implementar el punto **8** de §3.3 con el mecanismo que el `uv` fijado sí ofrece, sin `continue-on-error` ni valores de relleno |
+| 2026-10-08 | **2.24** | 📜 **Nuevo §12.10: política de evolución del contrato del almacén (#49).** El contrato se versiona **en el código** —firma (nombre y tipo de cada columna de *payload*) y `layout_version` por `(capa, dataset)`— y **no** en el dato: la firma **es** el esquema del Parquet, así que un fichero antiguo se detecta leyéndolo. Los tres casos y su consecuencia: **columna nueva** (*aditiva*) → compatible, la ausente es `null` **declarado** (nunca `0`); **cambio de tipo** → el lector **rechaza** el fichero y nombra columna y tipos; **cambio de semántica** → exige **columna nueva**, nunca reinterpretar la vieja. Fichero de *layout* antiguo: en `raw` (inmutable) se **cuarentena** a `_legacy/<layout_version>/` y se re-ingesta, sin reescribir el dato; en `derived` se recomputa y se borra. Encaje con §12.9: la comparación se hace por las columnas comunes y el resto se declara. **La implementación se abre en #139.** Cabecera a 2.24 | Cerrar el hueco que dejó el *grooming* de #2: `version` es la revisión del **dato**, no del esquema, así que nada marcaba con qué *layout* se escribió un fichero. Se escribe **antes** de necesitarlo, que es cuando se puede decidir sin prisa y sin mirar resultados |
