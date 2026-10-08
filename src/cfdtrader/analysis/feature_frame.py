@@ -48,19 +48,32 @@ from cfdtrader.features.volatility import add_features
 from cfdtrader.models.baseline import BASELINE_FEATURES, DesignFrame, design_frame
 
 __all__ = [
+    "ANCHOR_SERIES",
     "FAMILY_ORDER",
     "FEATURES_LIMITATIONS",
     "MACRO_QUERY",
     "MARKET_QUERY",
     "SECTORS_QUERY",
+    "FamilyFrames",
     "FeatureFrame",
     "FeatureFrameError",
     "FeatureMatrix",
     "MissingFeatureDatasetError",
+    "build_family_frames",
     "build_feature_frame",
     "build_feature_matrix",
+    "family_spec",
+    "load_context_inputs",
     "load_labels",
+    "missing_context_series",
 ]
+
+#: La serie **ancla** del estudio y el `series_id` que se **persiste** en
+#: `derived.features_daily` (#73). Es una declaracion: el dataset de features no mezcla series.
+ANCHOR_SERIES: Final[str] = "^GSPC"
+
+#: El proxy de volatilidad que exige `volatility_v1` como columna (`vix_close`). No se sustituye.
+VIX_SERIES: Final[str] = "^VIX"
 
 #: Consultas del almacen. Todas leen el estado **vigente** del dataset: nada de ``read_pit``.
 MARKET_QUERY: Final[str] = (
@@ -232,6 +245,44 @@ def load_labels(store: Store, *, series_id: str = "^GSPC") -> pl.DataFrame:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# El cargador de `context_v1` (#73)
+# ─────────────────────────────────────────────────────────────────────────────
+def load_context_inputs(store: Store) -> Mapping[str, pl.DataFrame]:
+    """Los frames de entrada de ``context_v1`` que el almacen **tiene** (#73).
+
+    Lee de ``raw.market_daily`` (las series de contexto de mercado) y de ``raw.sectors`` (los ETF
+    sectoriales) con ``store.sql()``, **nunca** con ``read_pit``: la pregunta es «que datos hay»,
+    no «que sabiamos en T». Cada frame trae ``session`` y ``close``; el del ancla
+    (:data:`ANCHOR_SERIES`) trae ademas su ``as_of``, que es lo que ``context_v1`` usa para el
+    tramo nocturno.
+
+    Una serie sin historia **no** se inventa: no aparece en el mapeo y
+    :func:`missing_context_series` la declara. El diario del ancla **no** es opcional.
+    """
+    market, sectors, _ = _load_raw(store)
+    _anchor_and_vix(market, series_id=ANCHOR_SERIES)
+    present: dict[str, pl.DataFrame] = {}
+    for name in feature_store.CONTEXT_SERIES:
+        source = sectors if name in feature_store.CONTEXT_SECTOR_SERIES else market
+        raw = source.get(name)
+        if raw is None or raw.height == 0:
+            continue
+        frame = _with_session(raw)
+        present[name] = (
+            frame.select("session", "as_of", "close")
+            if name == ANCHOR_SERIES
+            else frame.select("session", "close")
+        )
+    return present
+
+
+def missing_context_series(store: Store) -> tuple[str, ...]:
+    """Las series de ``context_v1`` que el almacen **no** tiene, en el orden declarado (#73)."""
+    present = load_context_inputs(store)
+    return tuple(name for name in feature_store.CONTEXT_SERIES if name not in present)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Las cinco familias
 # ─────────────────────────────────────────────────────────────────────────────
 def _volatility_frame(anchor: pl.DataFrame, vix: pl.DataFrame) -> pl.DataFrame:
@@ -350,14 +401,33 @@ def _join(
     return joined, tuple(present)
 
 
-def build_feature_matrix(store: Store, *, series_id: str = "^GSPC") -> FeatureMatrix:
-    """Arma la matriz de las cinco familias sobre el **diario** del ancla (A1, A4).
+@dataclass(frozen=True, slots=True)
+class FamilyFrames:
+    """Las cinco matrices **por familia**, antes de unirlas (#73).
 
-    Una sola pasada por familia, con su ``spec`` explicito. La fila de la sesion `t` es el
-    estado de las features **al cierre de `t`**; el corrimiento de disponibilidad lo aplica
-    despues :func:`cfdtrader.models.baseline.design_frame`, que es donde vive esa regla.
+    Es lo que necesita la persistencia: ``features.store.daily_records`` pide una matriz con
+    ``session``, ``as_of`` y **solo** las columnas de su familia, asi que las cinco tienen que
+    existir por separado. ``instants`` son el ``session`` y el ``as_of`` del ancla: la base de la
+    union y el instante de cada fila persistida, para que ninguna familia pueda reordenarla.
+
+    ``missing_series`` son las series que el almacen no tenia: sus features salen ``null``,
+    declaradas, nunca inventadas.
     """
-    _require_datasets(store, names=("market_daily", "labels"))
+
+    frames: Mapping[str, pl.DataFrame]
+    instants: pl.DataFrame
+    missing_series: tuple[str, ...]
+
+
+def _load_raw(
+    store: Store,
+) -> tuple[dict[str, pl.DataFrame], dict[str, pl.DataFrame], dict[str, pl.DataFrame]]:
+    """Los tres datasets de entrada troceados por ``series_id`` y con ``session``.
+
+    ``raw.sectors`` y ``raw.macro`` son **opcionales**: sin ellos esa familia sale nula y se
+    declara. El diario del ancla **no** lo es. Se lee con ``store.sql()``, nunca con
+    ``read_pit``: la pregunta es «que datos hay», no «que sabiamos en T».
+    """
     market = _by_series(_with_session(_query(store, MARKET_QUERY, dataset="raw.market_daily")))
     sectors = _by_series(
         _with_session(
@@ -367,37 +437,65 @@ def build_feature_matrix(store: Store, *, series_id: str = "^GSPC") -> FeatureMa
     macro_series = _by_series(
         _optional_query(store, MACRO_QUERY, dataset="raw.macro", schema=MACRO_SCHEMA)
     )
+    return market, sectors, macro_series
 
+
+def _anchor_and_vix(
+    market: Mapping[str, pl.DataFrame], *, series_id: str
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """El ancla y el cierre de ``^VIX``, con su error tipado si falta cualquiera de los dos."""
     anchor = market.get(series_id)
     if anchor is None or anchor.height == 0:
         raise MissingFeatureDatasetError(
             f"`raw.market_daily` no tiene ninguna sesion de {series_id!r}: sin el ancla no hay "
             "matriz de features"
         )
-    vix = market.get("^VIX")
+    vix = market.get(VIX_SERIES)
     if vix is None or vix.height == 0:
         raise MissingFeatureDatasetError(
             "`raw.market_daily` no tiene el cierre de '^VIX': `volatility_v1` exige `vix_close` y "
             "no se sustituye por otro proxy de volatilidad"
         )
+    return anchor, vix
 
-    family_frames: dict[str, pl.DataFrame] = {
-        feature_store.VOLATILITY_FEATURE_SET: _volatility_frame(anchor, vix),
-        feature_store.TECHNICAL_FEATURE_SET: technical_matrix(
-            anchor.select("session", "open", "high", "low", "close"), spec=technical_spec()
-        ),
-        feature_store.REGIME_FEATURE_SET: regime_matrix(
-            anchor.select("session", "open", "high", "low", "close"), spec=regime_spec()
-        ),
-    }
+
+def build_family_frames(store: Store, *, series_id: str = ANCHOR_SERIES) -> FamilyFrames:
+    """Arma las **cinco** matrices por familia sobre el diario del ancla (A1, A4).
+
+    Es la mitad de :func:`build_feature_matrix` que no une las familias. Existe aparte porque la
+    persistencia de #73 necesita una matriz **por familia** —con su catalogo y su spec— y la
+    version unida no sirve: ``daily_records`` rechaza cualquier columna ajena a la familia.
+    """
+    market, sectors, macro_series = _load_raw(store)
+    _require_datasets(store, names=("market_daily", "labels"))
+    anchor, vix = _anchor_and_vix(market, series_id=series_id)
     context_frames, missing_context = _context_frames(market, sectors)
-    family_frames[feature_store.CONTEXT_FEATURE_SET] = context_matrix(
-        context_frames, spec=context_spec()
-    )
     macro_frames, missing_macro = _macro_frames(market, macro_series)
-    family_frames[feature_store.MACRO_FEATURE_SET] = macro_matrix(macro_frames, spec=macro_spec())
+    bars = anchor.select("session", "open", "high", "low", "close")
+    frames: dict[str, pl.DataFrame] = {
+        feature_store.VOLATILITY_FEATURE_SET: _volatility_frame(anchor, vix),
+        feature_store.TECHNICAL_FEATURE_SET: technical_matrix(bars, spec=technical_spec()),
+        feature_store.CONTEXT_FEATURE_SET: context_matrix(context_frames, spec=context_spec()),
+        feature_store.MACRO_FEATURE_SET: macro_matrix(macro_frames, spec=macro_spec()),
+        feature_store.REGIME_FEATURE_SET: regime_matrix(bars, spec=regime_spec()),
+    }
+    return FamilyFrames(
+        frames=frames,
+        instants=anchor.select("session", "as_of"),
+        missing_series=(*missing_context, *missing_macro),
+    )
 
-    matrix = anchor.select("session")
+
+def build_feature_matrix(store: Store, *, series_id: str = ANCHOR_SERIES) -> FeatureMatrix:
+    """Arma la matriz de las cinco familias sobre el **diario** del ancla (A1, A4).
+
+    Una sola pasada por familia, con su ``spec`` explicito. La fila de la sesion `t` es el
+    estado de las features **al cierre de `t`**; el corrimiento de disponibilidad lo aplica
+    despues :func:`cfdtrader.models.baseline.design_frame`, que es donde vive esa regla.
+    """
+    built = build_family_frames(store, series_id=series_id)
+    matrix = built.instants.select("session")
+    family_frames = built.frames
     duplicated: list[str] = []
     for family in FAMILY_ORDER:
         frame = family_frames[family]
@@ -428,9 +526,10 @@ def build_feature_matrix(store: Store, *, series_id: str = "^GSPC") -> FeatureMa
         n_sessions=matrix.height,
         n_columns=len(feature_store.ALL_FEATURE_COLUMNS),
         duplicated_columns=duplicated_columns,
-        missing_series=(*missing_context, *missing_macro),
+        missing_series=built.missing_series,
         feature_spec_sha256={
-            family: feature_store.feature_spec_sha256(_spec_for(family)) for family in FAMILY_ORDER
+            family: feature_store.feature_spec_sha256(family_spec(family))
+            for family in FAMILY_ORDER
         },
         feature_code_version=feature_store.FEATURE_CODE_VERSION,
         matrix_sha256=feature_store.matrix_sha256(matrix),
@@ -488,7 +587,7 @@ def _normalise_dtypes(matrix: pl.DataFrame) -> pl.DataFrame:
     return matrix.with_columns(expressions)
 
 
-def _spec_for(family: str) -> feature_store.FeatureSpec:
+def family_spec(family: str) -> feature_store.FeatureSpec:
     """La spec de esa familia, sin pasar por el almacen (es una constante del modulo)."""
     if family == feature_store.VOLATILITY_FEATURE_SET:
         return feature_store.FeatureSpec()

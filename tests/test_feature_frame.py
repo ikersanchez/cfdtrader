@@ -292,7 +292,7 @@ def test_the_two_family_guards_are_reachable_typed_errors() -> None:
     assert "no_existe" in str(columns.value)
 
     with pytest.raises(FeatureFrameError) as spec:
-        feature_frame._spec_for("no_existe")  # pyright: ignore[reportPrivateUsage]
+        feature_frame.family_spec("no_existe")
     assert "no_existe" in str(spec.value)
 
 
