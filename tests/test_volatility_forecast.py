@@ -10,6 +10,7 @@ mismo JSON (A22).
 
 from __future__ import annotations
 
+import ast
 import itertools
 import json
 import math
@@ -25,28 +26,35 @@ import pytest
 from cfdtrader.analysis.drift import decompose, load_sessions, session_stale_open
 from cfdtrader.analysis.volatility_forecast import (
     CANDIDATES,
+    DECLARED_CANDIDATE,
     GARCH_SANITY_SESSIONS,
     GARCH_VARIANCE_BAND,
     MIN_TRAIN,
     REFIT_EVERY,
     RELATIVE_TOLERANCE,
+    CandidateDeclaration,
     CandidateResult,
     Metrics,
+    Selection,
     Target,
     Verdict,
     analyse,
     build_sample,
+    declaration_payload,
     garch_one_step_forecast,
     load_market,
     main,
     relative_qlike_gap,
     report_payload,
+    rule_selected,
     scale_sigma_for_duration,
     select_candidate,
     verdict_text,
     walk_forward,
+    with_declared_candidate,
 )
 from cfdtrader.data.calendar import FULL_SESSION_HOURS, HALF_SESSION_HOURS, MarketCalendar
+from cfdtrader.data.settings import ConfigurationError
 from cfdtrader.data.store import Store
 
 #: Instante de referencia del estudio (fijo ⇒ determinismo comprobable).
@@ -54,6 +62,17 @@ NOW = datetime(2024, 1, 1, 12, 0, tzinfo=UTC)
 
 SERIES_ID = "^GSPC"
 VIX_SERIES_ID = "^VIX"
+
+#: Fuente del módulo bajo prueba: las comprobaciones de #140 («la regla ya no decide»)
+#: son sobre el **código**, porque con el candidato declarado igual al seleccionado el
+#: defecto no se ve en ningún número.
+SOURCE = (
+    Path(__file__).resolve().parents[1]
+    / "src"
+    / "cfdtrader"
+    / "analysis"
+    / ("volatility_forecast.py")
+)
 
 #: Primer día laborable de la serie sintética.
 START = date(2005, 1, 3)
@@ -299,7 +318,16 @@ def test_the_json_carries_the_machine_readable_blocks(tmp_path: Path) -> None:
     payload = report_payload(study)
 
     selection = _dict_of(payload["selection"])
-    assert set(selection) >= {"selected", "verdict", "metric", "rule", "constants", "leaders"}
+    assert set(selection) >= {
+        "selected",
+        "selected_by_rule",
+        "declared",
+        "verdict",
+        "metric",
+        "rule",
+        "constants",
+        "leaders",
+    }
     assert selection["metric"] == "qlike"
 
     candidates = _dict_of(payload["candidates"])
@@ -756,6 +784,140 @@ def test_the_cli_fails_with_a_configuration_error_when_the_store_is_empty(
 ) -> None:
     """Sin dataset de mercado, el estudio no se inventa datos: código 2."""
     assert main(["--data-root", str(tmp_path), "--now", NOW.isoformat()]) == 2
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A2 (#140) — El candidato es declarado, no seleccionado con la muestra
+# ─────────────────────────────────────────────────────────────────────────────
+def test_the_declared_candidate_is_pre_registered_dated_and_justified() -> None:
+    """A2 (#140): el candidato declarado es uno de `CANDIDATES`, con fecha y procedencia."""
+    declaration = DECLARED_CANDIDATE
+    assert declaration.candidate in CANDIDATES
+    assert declaration.decided_on == date(2026, 10, 8)
+    assert declaration.decided_by == "PM"
+    assert declaration.source and declaration.reason
+    assert "19.16" in declaration.source and "63" in declaration.source
+
+    published = declaration_payload(declaration)
+    assert published is not None
+    assert published["candidate"] == declaration.candidate
+    assert published["decided_on"] == "2026-10-08"
+    assert published["decided_by"] == declaration.decided_by
+    assert published["source"] == declaration.source
+    assert published["reason"] == declaration.reason
+    assert declaration_payload(None) is None
+
+
+def test_a_candidate_outside_the_pre_registered_ones_is_a_declared_error() -> None:
+    """A2 (#140): la declaración no puede inventarse un candidato que #7 no pre-registró."""
+    with pytest.raises(ConfigurationError) as error:
+        _ = CandidateDeclaration(
+            candidate="lstm",
+            decided_on=date(2026, 10, 8),
+            decided_by="PM",
+            source="x",
+            reason="y",
+        )
+    assert "lstm" in str(error.value)
+
+
+def test_the_declaration_publishes_the_declared_candidate_and_keeps_the_rule_arithmetic() -> None:
+    """A2 (#140): `selected` es el declarado; la aritmética de #7 se publica al lado, intacta.
+
+    Aquí la regla selecciona **otro** candidato (`har`), que es el caso que la decisión de
+    §19.16 tiene que resolver sin moverse: la decisión es la declarada y la divergencia se
+    **dice**, en el texto y en el JSON, en vez de sustituir una cosa por la otra.
+    """
+    rule = Selection(
+        selected="har",
+        verdict=Verdict.SELECTED.value,
+        metric="qlike",
+        rule=("regla",),
+        constants={"fallback": "rw", "refit_every": REFIT_EVERY},
+        arithmetic=({"candidate": "har"},),
+        leaders={Target.PARKINSON.value: "har"},
+    )
+    published = with_declared_candidate(rule)
+
+    assert published.selected == DECLARED_CANDIDATE.candidate
+    assert published.selected_by_rule == "har"
+    assert published.declaration is DECLARED_CANDIDATE
+    assert published.verdict == rule.verdict
+    assert published.rule == rule.rule
+    assert published.constants == rule.constants
+    assert published.arithmetic == rule.arithmetic
+    assert published.leaders == rule.leaders
+    assert rule_selected(published) == "har"
+    assert rule_selected(rule) == "har"
+
+    text = verdict_text(published)
+    assert DECLARED_CANDIDATE.candidate in text
+    assert "**no** coincide" in text and "har" in text
+    # La aritmética de la regla sigue teniendo su propia frase, sin declaración de por medio.
+    assert verdict_text(rule) == "Candidato elegido: **`har`**."
+
+
+def test_the_json_publishes_the_declared_candidate_and_the_rule_as_verification(
+    tmp_path: Path,
+) -> None:
+    """A2/A17 (#140): `selection.selected` es el declarado y el *forecast* anclado, el suyo."""
+    _store(tmp_path)
+    study = analyse(data_root=tmp_path, now=NOW, reports_dir=tmp_path / "derived" / "reports")
+    block = _dict_of(report_payload(study)["selection"])
+
+    assert block["selected"] == DECLARED_CANDIDATE.candidate
+    assert block["selected_by_rule"] == study.selection.selected_by_rule
+    declared = _dict_of(block["declared"])
+    assert declared["candidate"] == DECLARED_CANDIDATE.candidate
+    assert declared["decided_on"] == DECLARED_CANDIDATE.decided_on.isoformat()
+    # La aritmética de #7 se sigue publicando entera, para que #23 no lea prosa.
+    assert block["metric"] == "qlike"
+    assert block["rule"] and block["arithmetic"]
+    assert block["verdict"] in {verdict.value for verdict in Verdict}
+    # El anclaje para #10 es el del candidato **declarado**, no el de la regla.
+    assert study.anchors.used_candidate == DECLARED_CANDIDATE.candidate
+
+    written = json.loads(
+        (tmp_path / "derived" / "reports" / f"volatility_forecast_{NOW.date()}.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert written["selection"]["selected"] == DECLARED_CANDIDATE.candidate
+    assert written["selection"]["declared"]["decided_on"] == "2026-10-08"
+
+
+def test_the_decision_does_not_come_from_the_rule() -> None:
+    """A2 (#140): comprobación **sobre el código** de que la regla ya no decide.
+
+    1. la asignación que alimenta el *forecast* publicado es la constante declarada;
+    2. toda llamada a `select_candidate` va **envuelta** en `with_declared_candidate`, que
+       es lo único que puede leer su resultado.
+    """
+    tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
+    assigned = {
+        node.targets[0].id: ast.unparse(node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+    }
+    assert assigned["chosen"] == "DECLARED_CANDIDATE.candidate"
+
+    parents: dict[ast.AST, ast.AST] = {
+        child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)
+    }
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "select_candidate"
+    ]
+    assert calls, "el módulo tiene que seguir ejecutando la regla: es la verificación publicada"
+    for call in calls:
+        wrapper = parents.get(call)
+        assert isinstance(wrapper, ast.Call), "el resultado de la regla nunca se usa suelto"
+        assert ast.unparse(wrapper.func) == "with_declared_candidate"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

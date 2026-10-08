@@ -66,12 +66,13 @@ GARCH incluido. No hay ninguna llamada HTTP en este módulo: todo sale del almac
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import math
 import sys
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Final, cast
@@ -106,25 +107,30 @@ from cfdtrader.features.volatility import (
 
 __all__ = [
     "CANDIDATES",
+    "DECLARED_CANDIDATE",
     "GARCH_SANITY_SESSIONS",
     "GARCH_VARIANCE_BAND",
     "MIN_TRAIN",
     "REFIT_EVERY",
     "RELATIVE_TOLERANCE",
     "Candidate",
+    "CandidateDeclaration",
     "Fold",
     "Metrics",
     "Target",
     "Verdict",
     "VolatilityStudy",
     "analyse",
+    "declaration_payload",
     "garch_one_step_forecast",
     "main",
     "relative_qlike_gap",
     "render_markdown",
+    "rule_selected",
     "scale_sigma_for_duration",
     "select_candidate",
     "verdict_text",
+    "with_declared_candidate",
     "write_report",
 ]
 
@@ -205,6 +211,60 @@ class Status(StrEnum):
     UNAVAILABLE = "unavailable"
 
 
+@dataclass(frozen=True, slots=True)
+class CandidateDeclaration:
+    """Candidato de volatilidad **declarado**, no seleccionado con los datos.
+
+    Es la forma que `_docs/plan.md` §19.16 (tarea #63) eligió para quitar del
+    camino crítico una elección hecha con **información futura**: ``select_candidate``
+    elige **sobre la muestra completa** —lo exige ``A2`` de #7—, así que con el
+    candidato declarado el *forecast* deja de depender de la muestra. La regla de #7
+    **se conserva**, pero como **verificación** publicada, no como fuente de la
+    decisión.
+
+    ``candidate`` tiene que ser uno de :data:`CANDIDATES`: quien declara no puede
+    inventar un candidato que la tarea que los pre-registró (#7) no contempla.
+    """
+
+    candidate: str
+    """Nombre del candidato declarado. Uno de :data:`CANDIDATES`."""
+
+    decided_on: date
+    """Fecha de la decisión."""
+
+    decided_by: str
+    """Quién la tomó (``PM``)."""
+
+    source: str
+    """Dónde está **escrita** la decisión, y qué la respalda."""
+
+    reason: str
+    """Por qué ese candidato, en una frase."""
+
+    def __post_init__(self) -> None:
+        if self.candidate not in CANDIDATES:
+            raise ConfigurationError(
+                f"el candidato declarado {self.candidate!r} no es uno de los pre-registrados "
+                f"{list(CANDIDATES)}: la declaracion no puede inventarse un candidato"
+            )
+
+
+#: Candidato **declarado** (§19.16, tarea #63), congelado el 2026-10-08 en `garch`,
+#: que es exactamente lo que la regla de #7 selecciona hoy
+#: (``volatility_forecast_2026-09-18.json``, ``verdict: selected``). **No** se
+#: re-selecciona dentro de cada fold: eso cambiaría la sigma, y con ella las barreras
+#: de #10 y las features de régimen de #23, o sea todos los artefactos publicados.
+DECLARED_CANDIDATE: Final[CandidateDeclaration] = CandidateDeclaration(
+    candidate=Candidate.GARCH.value,
+    decided_on=date(2026, 10, 8),
+    decided_by="PM",
+    source="_docs/plan.md §19.16 (tarea #63); lo confirma el veredicto de #7 "
+    "(`volatility_forecast_2026-09-18.json`, `verdict: selected`)",
+    reason="quita del camino critico una eleccion hecha con informacion futura sin mover "
+    "ninguna sigma: es el candidato que la regla de #7 ya selecciona",
+)
+
+
 TARGETS: Final[tuple[Target, ...]] = (Target.PARKINSON, Target.RET_SQ)
 
 #: Fórmulas y unidades que se declaran en el informe (A1).
@@ -278,6 +338,13 @@ class Selection:
     ``leaders`` declara, por objetivo, **qué candidato va primero**: es lo que
     permite ver de un vistazo, cuando el veredicto es ``inconclusive``, qué dos
     candidatos están empatados (uno por objetivo).
+
+    ``selected_by_rule`` y ``declaration`` existen desde #63/§19.16: desde
+    entonces la decisión **no** la toma la regla, así que hay que poder publicar
+    las dos cosas a la vez sin confundirlas. ``selected`` es el candidato que se
+    usa; ``selected_by_rule`` es lo que la regla de #7 selecciona **como
+    verificación**; ``declaration`` es la procedencia de la decisión (``None``
+    solo en la aritmética de la regla, sin declaración de por medio).
     """
 
     selected: str | None
@@ -287,6 +354,26 @@ class Selection:
     constants: dict[str, object]
     arithmetic: tuple[dict[str, object], ...]
     leaders: dict[str, str]
+    selected_by_rule: str | None = None
+    declaration: CandidateDeclaration | None = None
+
+
+def with_declared_candidate(
+    selection: Selection, declaration: CandidateDeclaration = DECLARED_CANDIDATE
+) -> Selection:
+    """Publica la aritmética de #7 con el candidato **declarado** en ``selected``.
+
+    La regla deja de elegir, pero **no** se tira su aritmética: se publica al lado
+    (``selected_by_rule``, ``verdict``, ``leaders``, ``arithmetic``), que es lo que
+    permite comprobar que la decisión declarada y la regla coinciden —y decirlo
+    cuando no coincidan— en vez de sustituir una por otra en silencio.
+    """
+    return dataclasses.replace(
+        selection,
+        selected=declaration.candidate,
+        selected_by_rule=selection.selected,
+        declaration=declaration,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -874,15 +961,22 @@ def select_candidate(results: Sequence[CandidateResult]) -> Selection:
     )
 
 
-def verdict_text(selection: Selection) -> str:
-    """Frase del veredicto, con los candidatos empatados si son inconclusos (A16).
+def rule_selected(selection: Selection) -> str | None:
+    """Candidato que selecciona la **regla** de #7, con o sin declaración de por medio.
 
-    Cuando los dos objetivos señalan a candidatos distintos, el texto **los nombra**
-    (uno por objetivo) en vez de decir solo que se contradicen: es la declaración
-    que pide A16 y la razón de que ``Selection.leaders`` exista.
+    Es ``selected_by_rule`` cuando ``selected`` ya lo ocupa el declarado (#63); sin
+    declaración, ``selected`` **es** el de la regla. Existe para que la verificación
+    se pueda leer sin saber qué corrida la produjo.
     """
+    if selection.declaration is None:
+        return selection.selected
+    return selection.selected_by_rule
+
+
+def _rule_verdict_text(selection: Selection) -> str:
+    """Frase del veredicto de la regla pre-registrada (A16), sin declaración de por medio."""
     if selection.verdict == Verdict.SELECTED.value:
-        return f"Candidato elegido: **`{selection.selected}`**."
+        return f"Candidato elegido: **`{rule_selected(selection)}`**."
     if selection.verdict == Verdict.INCONCLUSIVE.value:
         tied = ", ".join(
             f"{target} → `{name}`" for target, name in selection.leaders.items() if name
@@ -890,6 +984,35 @@ def verdict_text(selection: Selection) -> str:
         detail = f" ({tied})" if tied else ""
         return f"Los dos objetivos apuntan a candidatos distintos{detail}: **no se elige** ninguno."
     return "Ningún candidato bate a la persistencia: el **fallback es `rw`**."
+
+
+def verdict_text(selection: Selection) -> str:
+    """Frase del veredicto (A16), con la **declaración** de §19.16 por delante.
+
+    Cuando los dos objetivos señalan a candidatos distintos, el texto **los nombra**
+    (uno por objetivo) en vez de decir solo que se contradicen: es la declaración
+    que pide A16 y la razón de que ``Selection.leaders`` exista.
+
+    Si la selección trae ``declaration`` (tarea #63), el candidato es el **declarado**
+    y la regla de #7 aparece como **verificación**: el informe dice si coincide o no,
+    y cuando no coincide lo dice **sin** cambiar la decisión. Sin declaración, esta
+    función es la frase de la regla y nada más, para que la aritmética de #7 se siga
+    pudiendo leer sola (es lo que leen sus tests y sus artefactos).
+    """
+    declaration = selection.declaration
+    if declaration is None:
+        return _rule_verdict_text(selection)
+    by_rule = rule_selected(selection)
+    declared = (
+        f"Candidato **declarado** `{declaration.candidate}` "
+        f"(§19.16, {declaration.decided_on.isoformat()})."
+    )
+    if by_rule == declaration.candidate:
+        return f"{declared} La regla de #7 **confirma** que es el que selecciona."
+    return (
+        f"{declared} La regla de #7 selecciona `{by_rule or 'rw'}` y **no** coincide: "
+        f"{_rule_verdict_text(selection)}"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -926,6 +1049,11 @@ def analyse(
 ) -> VolatilityStudy:
     """Lee el almacén, ejecuta el *walk-forward*, decide y escribe el informe.
 
+    **La decisión no la toma la regla** (§19.16, tarea #63): el candidato es
+    :data:`DECLARED_CANDIDATE` —una constante fechada, que no mira ningún dato— y
+    ``select_candidate`` se ejecuta para **verificar**, publicando su aritmética al
+    lado del candidato declarado.
+
     Lanza :class:`ConfigurationError` si el almacén no da para estimar **ningún**
     candidato: en ese caso **no se escribe ningún informe** (A23).
     """
@@ -937,10 +1065,10 @@ def analyse(
         reasons = "; ".join(f"{r.name}: {r.reason}" for r in walk.candidates)
         raise ConfigurationError(f"no se puede estimar ningún candidato. {reasons}")
 
-    selection = select_candidate(walk.candidates)
+    selection = with_declared_candidate(select_candidate(walk.candidates))
     bounds = walk.bounds
     first_index, last_index = bounds[0][0], bounds[-1][1] - 1
-    chosen = selection.selected or Candidate.RW.value
+    chosen = DECLARED_CANDIDATE.candidate
     chosen_result = next(result for result in walk.candidates if result.name == chosen)
 
     session_column = frame.get_column("session")
@@ -1032,6 +1160,24 @@ def analyse(
 # ─────────────────────────────────────────────────────────────────────────────
 # Informe
 # ─────────────────────────────────────────────────────────────────────────────
+def declaration_payload(declaration: CandidateDeclaration | None) -> dict[str, object] | None:
+    """Bloque publicado de la declaración del candidato; ``None`` si no hay declaración.
+
+    Las fechas van como texto ISO: el JSON del informe lo lee gente y lo parsea #23, y
+    una fecha serializada por el ``default=str`` de ``json.dumps`` dependería del
+    formateador en vez de estar declarada aquí.
+    """
+    if declaration is None:
+        return None
+    return {
+        "candidate": declaration.candidate,
+        "decided_on": declaration.decided_on.isoformat(),
+        "decided_by": declaration.decided_by,
+        "source": declaration.source,
+        "reason": declaration.reason,
+    }
+
+
 def report_payload(study: VolatilityStudy) -> dict[str, object]:
     """Payload JSON, con el bloque legible por máquina que consume #23 (A17)."""
     return {
@@ -1071,7 +1217,11 @@ def report_payload(study: VolatilityStudy) -> dict[str, object]:
             "folds": len(study.folds),
         },
         "selection": {
+            # `selected` es el candidato **declarado** (§19.16, tarea #63): la regla de #7 ya
+            # no elige. `selected_by_rule` publica lo que ella selecciona, como verificacion.
             "selected": study.selection.selected,
+            "selected_by_rule": study.selection.selected_by_rule,
+            "declared": declaration_payload(study.selection.declaration),
             "verdict": study.selection.verdict,
             "metric": study.selection.metric,
             "rule": list(study.selection.rule),
@@ -1169,6 +1319,8 @@ def render_markdown(study: VolatilityStudy) -> str:
         f"- **Calculado:** {study.as_of.isoformat()}",
         "- **Métrica pre-registrada:** QLIKE en varianza (ranking por QLIKE medio); "
         "MSE del logaritmo como secundaria",
+        f"- **Candidato:** `{selection.selected}` — **declarado**, no seleccionado con los "
+        f"datos (§19.16)",
         f"- **Veredicto:** `{selection.verdict}` — {resolved}",
         "",
         "## Anclaje para #10 (barreras sobre números medidos)",
@@ -1295,7 +1447,11 @@ def render_markdown(study: VolatilityStudy) -> str:
         [
             "",
             f"**Veredicto:** `{selection.verdict}`"
-            + (f" ⇒ `{selection.selected}`" if selection.selected else " ⇒ fallback `rw`")
+            + (
+                f" ⇒ `{rule_selected(selection)}`"
+                if rule_selected(selection)
+                else " ⇒ fallback `rw`"
+            )
             + ".",
         ]
     )
@@ -1353,9 +1509,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     logger.info(
-        "volatilidad: veredicto {} (candidato {}), sigma mediana {:.1f} bp/sesión",
+        "volatilidad: candidato declarado {} (regla de #7: {} -> {}), sigma mediana {:.1f} bp",
+        DECLARED_CANDIDATE.candidate,
         study.selection.verdict,
-        study.selection.selected or Candidate.RW.value,
+        rule_selected(study.selection) or Candidate.RW.value,
         study.anchors.median_forecast_sigma_bp,
     )
     return 0

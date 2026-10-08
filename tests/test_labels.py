@@ -15,9 +15,11 @@ comprueba que la sesion de tests no lo toca (A34).
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import shutil
+from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime, timedelta
 from datetime import time as dtime
 from pathlib import Path
@@ -27,6 +29,8 @@ import numpy as np
 import pytest
 
 from cfdtrader.analysis.volatility_forecast import (
+    CANDIDATES,
+    DECLARED_CANDIDATE,
     MIN_TRAIN,
     Selection,
     build_sample,
@@ -65,7 +69,6 @@ from cfdtrader.models.labels import (
     DailyBar,
     EntryPriceUnavailableError,
     IntradayBar,
-    LabelsError,
     LabelsRun,
     SampleSession,
     SessionLabel,
@@ -79,7 +82,6 @@ from cfdtrader.models.labels import (
     phase0_context,
     render_markdown,
     report_payload,
-    resolve_candidate,
     write_outcome_reason,
     write_outputs,
 )
@@ -88,6 +90,11 @@ from cfdtrader.models.labels import (
 NOW = datetime(2024, 1, 1, 12, 0, tzinfo=UTC)
 
 SERIES_ID = "^GSPC"
+
+#: Fuente del modulo bajo prueba. Las comprobaciones de #140 («el pipeline ya no elige
+#: candidato») son **sobre el codigo**: con el candidato declarado igual al que la regla
+#: selecciona, el fallo no se ve en ningun numero.
+SOURCE = Path(__file__).resolve().parents[1] / "src" / "cfdtrader" / "models" / "labels.py"
 
 #: Primer dia laborable de la serie sintetica.
 START = date(2005, 1, 3)
@@ -524,37 +531,76 @@ def test_the_phase0_decision_is_declared_and_never_sold_as_a_validation(run: Lab
     assert "`gate`: **`fail`**" in markdown
 
 
-def test_resolve_candidate_covers_the_three_branches_of_task_7() -> None:
-    """A2: elegido / ``no_better_than_naive`` => ``rw`` / ``inconclusive`` => error."""
+def test_the_candidate_of_the_sigma_is_the_declared_constant() -> None:
+    """A2 (#140): la fuente del candidato es la constante declarada, no la regla de #7.
 
-    def selection(selected: str | None, verdict: str) -> Selection:
-        return Selection(
-            selected=selected,
-            verdict=verdict,
-            metric="qlike",
-            rule=(),
-            constants={},
-            arithmetic=(),
-            leaders={},
-        )
+    Es una comprobacion **sobre el codigo** —lo pide el criterio de #140— porque el
+    defecto que cierra no se ve en un numero: con el candidato declarado igual al
+    seleccionado, la sigma es la misma y el fallo seria invisible. Lo que se comprueba
+    es que no queda ningun camino por el que la regla elija:
 
-    cases = {
-        "elegido": resolve_candidate(selection("garch", "selected")),
-        "naive": resolve_candidate(selection(None, "no_better_than_naive")),
+    1. no existe el traductor de ``Selection`` a candidato que tenia este modulo
+       (``resolve_candidate``, el que levantaba ``SelectionInconclusiveError``);
+    2. la asignacion que alimenta ``walk.forecasts[candidate]`` es la constante;
+    3. el resultado de ``select_candidate`` solo se liga al nombre ``verification``
+       (publicar la verificacion), nunca a un nombre que decida.
+    """
+    source = SOURCE.read_text(encoding="utf-8")
+    assert "resolve_candidate" not in source
+    assert "SelectionInconclusiveError" not in source
+
+    tree = ast.parse(source)
+    assigned = {
+        node.targets[0].id: ast.unparse(node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
     }
-    assert cases["elegido"] == "garch"
-    assert cases["naive"] == "rw"
-    with pytest.raises(LabelsError):
-        _ = resolve_candidate(selection(None, "inconclusive"))
+    assert assigned["candidate"] == "DECLARED_CANDIDATE.candidate"
+
+    bound_to_rule = {
+        node.targets[0].id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "select_candidate"
+    }
+    assert bound_to_rule == {"verification"}
+
+
+def test_the_declared_candidate_is_the_one_the_labels_use(run: LabelsRun) -> None:
+    """A2 (#140): el candidato publicado y usado es el declarado, y es pre-registrado."""
+    assert DECLARED_CANDIDATE.candidate in CANDIDATES
+    assert run.forecast_candidate == DECLARED_CANDIDATE.candidate
+    sigma = _dict(_dict(run.inputs)["sigma"])
+    assert sigma["candidate"] == DECLARED_CANDIDATE.candidate
+    declared = _dict(sigma["candidate_declared"])
+    assert declared["candidate"] == DECLARED_CANDIDATE.candidate
+    assert declared["decided_on"] == DECLARED_CANDIDATE.decided_on.isoformat()
+    assert declared["decided_by"] == DECLARED_CANDIDATE.decided_by
+    assert declared["source"] and declared["reason"]
 
 
 def test_the_sigma_series_is_the_one_task_7_produces(run: LabelsRun, synthetic_root: Path) -> None:
-    """A2/A18: la sigma es ``sqrt`` del *forecast* del candidato de #7, sesion a sesion."""
+    """A2/A18: la sigma es ``sqrt`` del *forecast* del candidato declarado, sesion a sesion.
+
+    El candidato ya no lo elige la regla de #7 (#63/§19.16), asi que la serie que #7
+    produce es la del candidato **declarado** y la verificacion se comprueba aparte.
+    En el almacen **sintetico** la regla de #7 selecciona otro candidato (`har`), y aun
+    asi la sigma sale del declarado: es la demostracion de que la regla ya no decide.
+    Que en el almacen **real** las dos cosas coincidan (`garch`) no se puede comprobar
+    aqui, porque este fichero no lee `data/`: se comprueba regenerando los artefactos
+    publicados (QA de #140).
+    """
     store = Store(synthetic_root)
     frame, _ = build_sample(store, series_id=SERIES_ID)
     walk = walk_forward(frame)
-    selection = select_candidate(walk.candidates)
-    candidate = resolve_candidate(selection)
+    verification = select_candidate(walk.candidates)
+    candidate = DECLARED_CANDIDATE.candidate
     sessions = [cast("date", value) for value in frame.get_column("session").to_list()]
     first_index = walk.bounds[0][0]
     expected = {
@@ -565,7 +611,7 @@ def test_the_sigma_series_is_the_one_task_7_produces(run: LabelsRun, synthetic_r
         row.session: row.sigma for row in run.rows if row.sigma_carrier == CARRIER_WALK_FORWARD
     }
     assert run.forecast_candidate == candidate
-    assert run.selection_verdict == selection.verdict
+    assert run.selection_verdict == verification.verdict
     assert labelled
     for day, sigma in labelled.items():
         assert sigma == pytest.approx(expected[day], rel=0, abs=0)
@@ -1246,32 +1292,68 @@ def test_a_session_that_has_not_closed_is_not_written(writable_root: Path) -> No
         assert row.close_utc <= early
 
 
-def test_an_inconclusive_selection_is_a_declared_error_and_writes_nothing(
+def test_a_rule_that_would_change_its_verdict_does_not_change_the_sigma(
     writable_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A2/A32: seleccion `inconclusive` => error declarado y **nada** escrito."""
+    """A2 (#140): la sigma es **la misma** cuando la regla cambia de veredicto.
 
-    def inconclusive(candidates: object) -> Selection:
+    Es la comprobacion que pide §19.16: con el candidato declarado, la eleccion deja
+    de mirar la muestra, asi que si #7 cambia de opinion (aqui se fuerzan sus tres
+    veredictos, incluido el `inconclusive` que antes **abortaba** el pipeline) la
+    sigma no se mueve **ni en una fila** y el pipeline sigue escribiendo. Antes de
+    #140 el caso `inconclusive` levantaba ``SelectionInconclusiveError`` y no se
+    escribia nada: la decision colgaba de la regla.
+    """
+
+    def forced(verdict: str, selected: str | None, leaders: dict[str, str]) -> Selection:
         return Selection(
-            selected=None,
-            verdict="inconclusive",
+            selected=selected,
+            verdict=verdict,
             metric="qlike",
             rule=(),
             constants={},
             arithmetic=(),
-            leaders={"parkinson": "har", "ret_sq": "garch"},
+            leaders=leaders,
         )
 
-    monkeypatch.setattr("cfdtrader.models.labels.select_candidate", inconclusive)
-    store = Store(writable_root)
-    with pytest.raises(LabelsError):
-        _ = label_and_write(
-            data_root=writable_root,
-            reports_dir=writable_root / "derived" / "reports",
-            now=NOW,
-        )
-    assert store.datasets("derived") == []
-    assert not (writable_root / "derived" / "reports").exists()
+    def force(selection: Selection) -> Callable[[Sequence[object]], Selection]:
+        """`select_candidate` que devuelve esa seleccion, pase lo que pase con la muestra."""
+
+        def forced_rule(_candidates: Sequence[object]) -> Selection:
+            return selection
+
+        return forced_rule
+
+    baselines: dict[str, list[tuple[date, float | None]]] = {}
+    for name, selection in (
+        ("declarado", forced("selected", DECLARED_CANDIDATE.candidate, {})),
+        ("otro", forced("selected", "har", {})),
+        ("inconclusive", forced("inconclusive", None, {"parkinson": "har", "ret_sq": "rw"})),
+        ("rw", forced("no_better_than_naive", None, {})),
+    ):
+        monkeypatch.setattr("cfdtrader.models.labels.select_candidate", force(selection))
+        result = label_history(store=Store(writable_root), now=NOW)
+        assert result.forecast_candidate == DECLARED_CANDIDATE.candidate
+        baselines[name] = [(row.session, row.sigma) for row in result.rows]
+
+    reference = baselines["declarado"]
+    assert reference, "el almacen sintetico tiene que producir filas etiquetadas"
+    for name, rows in baselines.items():
+        assert rows == reference, f"la sigma cambio con el veredicto `{name}` de la regla de #7"
+
+
+def test_the_rule_of_task_7_is_published_as_verification(writable_root: Path) -> None:
+    """A2 (#140): la aritmetica de #7 se sigue publicando, y **no** aborta si no elige."""
+    result = label_and_write(
+        data_root=writable_root,
+        reports_dir=writable_root / "derived" / "reports",
+        now=NOW,
+    )
+    sigma = _dict(_dict(result[0].inputs)["sigma"])
+    assert set(sigma) >= {"candidate", "candidate_declared", "selection_verdict", "selection_rule"}
+    assert sigma["selection_verdict"] in {"selected", "no_better_than_naive", "inconclusive"}
+    markdown = render_markdown(result[0])
+    assert f"candidato **declarado**: `{DECLARED_CANDIDATE.candidate}`" in markdown
 
 
 def test_a_second_identical_run_is_a_no_op_and_another_k_supersedes(writable_root: Path) -> None:

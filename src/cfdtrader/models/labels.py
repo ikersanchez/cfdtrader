@@ -28,12 +28,15 @@ Barreras: proporcionales a la volatilidad prevista, nunca constantes
 
 ``target_pct = stop_pct = k * sigma_t``, con ``sigma_t`` la raiz de la varianza
 pronosticada por el **walk-forward de la tarea #7** (``analysis.volatility_forecast``)
-para el candidato que su regla de seleccion elija. En este modulo no hay ninguna
-sigma constante ni ninguna reimplementacion de HAR/GARCH: ``build_sample``,
-``walk_forward``, ``select_candidate`` y ``scale_sigma_for_duration`` se consumen
-tal cual. ``k`` sale de ``R_SIGMA_SCENARIOS``, que es un **escenario ilustrativo y no
-una decision del propietario** (decision abierta 5 → #60); lo unico que se persiste
-es ``k = 1.0``. Las barreras son simetricas: la asimetria queda fuera de alcance.
+para el candidato **declarado** (``DECLARED_CANDIDATE``, ``plan.md`` §19.16 y tarea
+#63): desde #140 el candidato **no** lo elige la regla de #7 sobre la muestra, y la
+aritmetica de ``select_candidate`` se sigue publicando como **verificacion**. En este
+modulo no hay ninguna sigma constante ni ninguna reimplementacion de HAR/GARCH:
+``build_sample``, ``walk_forward``, ``select_candidate`` y ``scale_sigma_for_duration``
+se consumen tal cual. ``k`` sale de ``R_SIGMA_SCENARIOS``, que es un **escenario
+ilustrativo y no una decision del propietario** (decision abierta 5 → #60); lo unico
+que se persiste es ``k = 1.0``. Las barreras son simetricas: la asimetria queda fuera
+de alcance.
 
 Media sesion (cierre a las 13:00 ET): el frame de #7 las excluye, asi que su sigma se
 **arrastra** desde la ultima sesion completa etiquetada y se escala con
@@ -144,10 +147,11 @@ from loguru import logger
 
 from cfdtrader.analysis.drift import clean_sample_cutoff, session_stale_open
 from cfdtrader.analysis.volatility_forecast import (
+    DECLARED_CANDIDATE,
     MIN_TRAIN,
-    Selection,
-    Verdict,
+    REFIT_EVERY,
     build_sample,
+    declaration_payload,
     load_market,
     scale_sigma_for_duration,
     select_candidate,
@@ -184,7 +188,6 @@ __all__ = [
     "LabelsError",
     "LabelsRun",
     "SampleSession",
-    "SelectionInconclusiveError",
     "SessionLabel",
     "auction_verification",
     "barrier_levels",
@@ -197,7 +200,6 @@ __all__ = [
     "phase0_context",
     "render_markdown",
     "report_payload",
-    "resolve_candidate",
     "summarise_rows",
     "write_outcome_reason",
     "write_outputs",
@@ -315,10 +317,6 @@ AUCTION_VERIFICATION_TOLERANCE_BP: Final[float] = 1.0
 
 class LabelsError(Exception):
     """Base de los errores del etiquetado tri-barrera."""
-
-
-class SelectionInconclusiveError(LabelsError):
-    """La regla de #7 no elige candidato: el modulo **no elige por su cuenta**."""
 
 
 class EntryPriceUnavailableError(LabelsError):
@@ -1101,6 +1099,8 @@ class LabelsRun:
     cost: dict[str, object]
     forecast_sha256: str
     forecast_candidate: str
+    #: Veredicto de la regla de seleccion de #7 sobre esta muestra. Es la **verificacion**
+    #: publicada, no la decision: el candidato lo fija `DECLARED_CANDIDATE` (§19.16, #63).
     selection_verdict: str
     limitations: tuple[str, ...]
     notes: tuple[str, ...]
@@ -1155,24 +1155,6 @@ def _forecast_sha256(series: Sequence[tuple[date, float]]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def resolve_candidate(selection: Selection) -> str:
-    """Candidato declarado a partir de la seleccion de #7 (A2).
-
-    - si #7 elige candidato, se usa ese (es lo que manda su regla pre-registrada);
-    - si el veredicto es ``no_better_than_naive``, el candidato declarado es ``rw``;
-    - si el veredicto es ``inconclusive``, este modulo **no elige** por su cuenta:
-      levanta :class:`SelectionInconclusiveError` y no se escribe nada.
-    """
-    if selection.selected is not None:
-        return selection.selected
-    if selection.verdict == Verdict.NO_BETTER_THAN_NAIVE.value:
-        return "rw"
-    raise SelectionInconclusiveError(
-        "la regla de seleccion de #7 es `inconclusive` (los dos objetivos apuntan a "
-        "candidatos distintos): este modulo no elige candidato por su cuenta y no escribe nada"
-    )
-
-
 def _median_bp(values: Sequence[float]) -> float | None:
     return None if not values else float(np.median(np.asarray(values, dtype=float))) * BP_PER_UNIT
 
@@ -1190,6 +1172,11 @@ def label_history(
     Consume la API publica de #7 (``build_sample``, ``walk_forward``,
     ``select_candidate``, ``scale_sigma_for_duration``) y la regla unica de la
     muestra limpia de #6/#7 (``session_stale_open`` y ``clean_sample_cutoff``).
+
+    El candidato **no** lo elige la regla de #7: es la constante **declarada**
+    ``DECLARED_CANDIDATE`` (``plan.md`` §19.16, tarea #63). ``select_candidate`` se
+    ejecuta igualmente, pero su resultado solo se **publica** como verificacion: si
+    cambia de veredicto, la sigma de este modulo no cambia.
     """
     if entry_price_source not in ENTRY_PRICE_SOURCES:
         raise ConfigurationError(
@@ -1208,8 +1195,12 @@ def label_history(
 
     frame, sample_summary = build_sample(store, series_id=series_id)
     walk = walk_forward(frame)
-    selection = select_candidate(walk.candidates)
-    candidate = resolve_candidate(selection)
+    # §19.16 (tarea #63): el candidato es la constante **declarada**, no lo que la regla
+    # de #7 elija. La regla se sigue ejecutando —su aritmetica es la verificacion que el
+    # informe publica— pero no decide: con el candidato fijado, la sigma deja de depender
+    # de la muestra completa.
+    verification = select_candidate(walk.candidates)
+    candidate = DECLARED_CANDIDATE.candidate
 
     frame_sessions = [cast("date", value) for value in frame.get_column("session").to_list()]
     forecasts = walk.forecasts[candidate]
@@ -1282,11 +1273,16 @@ def label_history(
         "auction_verification": auction,
         "sigma": {
             "candidate": candidate,
-            "selection_verdict": selection.verdict,
-            "selection_selected": selection.selected,
-            "selection_rule": list(selection.rule),
+            # La procedencia de la decision (#63): el candidato es declarado, no elegido aqui.
+            "candidate_declared": declaration_payload(DECLARED_CANDIDATE),
+            "selection_verdict": verification.verdict,
+            "selection_selected": verification.selected,
+            "selection_rule": list(verification.rule),
             "min_train": MIN_TRAIN,
-            "refit_every": int(str(selection.constants["refit_every"])),
+            # La cadencia de reajuste es una constante **declarada** del walk-forward, no un
+            # dato de la seleccion: leerla de `verification.constants` ataba el pipeline al
+            # objeto que devuelve la regla, que es justo lo que #140 quita de en medio.
+            "refit_every": REFIT_EVERY,
             "first_evaluated": None
             if not frame_sessions
             else frame_sessions[first_index].isoformat()
@@ -1383,7 +1379,7 @@ def label_history(
         cost=_cost_block(),
         forecast_sha256=forecast_sha256,
         forecast_candidate=candidate,
-        selection_verdict=selection.verdict,
+        selection_verdict=verification.verdict,
         limitations=limitations,
         notes=notes,
     )
@@ -1887,8 +1883,9 @@ def render_markdown(run: LabelsRun) -> str:
         "",
         f"- **Serie:** `{run.series_id}` (intradia `{run.interval}`) — **etiqueta de indice**",
         "- **no del CFD**: las barreras se miden con el indice, no con el CFD (#107)",
-        f"- **Calculado:** {run.as_of.isoformat()} · candidato de #7: `{run.forecast_candidate}` "
-        f"(`{run.selection_verdict}`) · `k` persistido = {run.k_sigma}",
+        f"- **Calculado:** {run.as_of.isoformat()} · candidato **declarado**: "
+        f"`{run.forecast_candidate}` (regla de #7, como verificacion: "
+        f"`{run.selection_verdict}`) · `k` persistido = {run.k_sigma}",
         f"- **Sesiones etiquetadas:** {labelled} ({full_sessions} completas, "
         f"{half_sessions} medias)",
         f"- **Orden:** intradia {ordered[INTRADAY_ORDER_SOURCE]} · respaldo diario "
@@ -1930,8 +1927,9 @@ def render_markdown(run: LabelsRun) -> str:
         "## Barreras: proporcionales al *forecast* de #7",
         "",
         "- `target_pct = stop_pct = k * sigma_t`, con `sigma_t` la raiz de la varianza",
-        f"pronosticada por el walk-forward de #7 (`{sigma['candidate']}`, veredicto "
-        f"`{sigma['selection_verdict']}`, `min_train = {sigma['min_train']}`).",
+        f"pronosticada por el walk-forward de #7 (`{sigma['candidate']}`, **declarado**; "
+        f"veredicto de la regla `{sigma['selection_verdict']}`, "
+        f"`min_train = {sigma['min_train']}`).",
         f"- `sigma` mediana del frame de #7: **{_bp_value(sigma['median_sigma_bp'])}** por sesion "
         f"({sigma['sessions_with_forecast']} sesiones con *forecast*); "
         f"**{_bp_value(sigma['median_sigma_labelled_bp'])}** contando las medias sesiones "
