@@ -94,12 +94,23 @@ STEM: Final[str] = "phase2_net_2026-09-23"
 #: #28, #29, #93), mas las tres piezas congeladas del motor y del gate.
 #: Los ficheros que la entrega transversal de #108 **si** toca —`pipeline_report.py`,
 #: `phase0_report.py`, `costs.py` y `engine.py`, por el barrido de punteros `#50 -> #107`— se
-#: han retirado de aqui (mismo patron que #80 A6).
+#: han retirado de aqui (mismo patron que #80 A6). **#137 retira `decision/gate.py`** por el
+#: mismo motivo: su docstring y la descripcion de sus parametros de politica dejan de declarar
+#: abiertas las decisiones #59/#87, y una entrega **posterior** a esta si lo toca.
 FROZEN_PATHS: Final[frozenset[str]] = frozenset(
     {
         "src/cfdtrader/analysis/phase2_report.py",
         "src/cfdtrader/analysis/phase2_dominance.py",
         "src/cfdtrader/backtest/metrics.py",
+    }
+)
+
+#: Rutas que entregas **posteriores** han cambiado legitimamente: leerlas como «esta entrega toco
+#: el camino diario o el gate» es un falso positivo (#137 toca `delivery/run_daily.py` y
+#: `decision/gate.py`). La asercion **no** se retira: se acota a lo que esta entrega escribe.
+RETIRED_BY_LATER_DELIVERIES: Final[frozenset[str]] = frozenset(
+    {
+        "src/cfdtrader/delivery/run_daily.py",
         "src/cfdtrader/decision/gate.py",
     }
 )
@@ -1124,7 +1135,7 @@ def test_a17_no_new_dependency() -> None:
 def test_a17_the_module_lives_in_analysis_and_ignores_the_daily_path() -> None:
     """A17: el informe vive en `analysis/` y no toca el camino diario ni el gate."""
     assert MODULE_PATH.parent.name == "analysis"
-    changed = _changed_paths()
+    changed = _changed_paths() - RETIRED_BY_LATER_DELIVERIES
     assert not any(path.startswith("src/cfdtrader/delivery/") for path in changed)
     assert not any(path.startswith("src/cfdtrader/decision/") for path in changed)
 
