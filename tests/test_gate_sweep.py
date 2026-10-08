@@ -90,7 +90,9 @@ WRITTEN: Final[frozenset[str]] = frozenset(
 FROZEN: Final[tuple[str, ...]] = (
     "src/cfdtrader/backtest/baselines.py",
     "src/cfdtrader/models/baseline.py",
-    "src/cfdtrader/analysis/feature_frame.py",
+    # #73 retira `analysis/feature_frame.py`: el productor real de `derived.features_daily`
+    # expone los frames **por familia** sobre el mismo adaptador, el mismo criterio que
+    # #113/#124/#131/#136/#108 aplicaron a los suyos.
 )
 
 #: Los helpers de #28 que la entrega **no redefine**: los que reutiliza, los importa.
