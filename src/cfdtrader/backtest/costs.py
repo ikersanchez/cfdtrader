@@ -29,8 +29,8 @@ regla 6: sin *overnight*) y con ``0`` noches no se cobra tenencia. Con ``nights 
 llamante **tiene** que declarar el motivo (regla 16: cierre manual obligatorio). El motor
 **no** deduce las noches de ningún *timestamp*, del corte de financiación ni de una
 duración: ``nights`` es siempre una entrada explícita. El corte de financiación es un
-parámetro declarado y hoy está **sin verificar** (``cut_et: null``): asumir una hora de
-corte fija está prohibido.
+parámetro declarado: **sin corte del llamante** llega como ``cut_et: null``, y asumir una hora
+de corte fija está prohibido. El corte **verificado** (#87) lo entrega el llamante.
 
 Fronteras declaradas (lo que este módulo **no** hace, con su issue):
 
@@ -511,7 +511,7 @@ class SlippageParameter(BaseModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FinancingCut: el corte es un parámetro declarado y hoy está sin verificar (A14, A15)
+# FinancingCut: el corte es un parámetro declarado; el verificado lo da el llamante (A14, A15)
 # ─────────────────────────────────────────────────────────────────────────────
 def _financing_cut_question() -> str:
     """La pregunta literal al bróker, **importada** de #8 (no se reescribe aquí)."""
@@ -527,8 +527,9 @@ def _financing_cut_question() -> str:
 class FinancingCut(BaseModel):
     """El corte de financiación como **entrada declarada**, jamás derivada.
 
-    Hoy vale ``None`` con ``state: "unmeasured"``: la pregunta al bróker está sin
-    contestar (#59) y asumir una hora de corte fija está prohibido. El módulo **no** tiene
+    Sin corte del llamante vale ``None`` con ``state: "unmeasured"``; el corte **verificado**
+    (#87) lo entrega el llamante —``close_to_close`` lo hace para el listón B— y asumir una
+    hora de corte fija está prohibido. El módulo **no** tiene
     ninguna función que deduzca las noches a partir de *timestamps*, del corte o de una
     duración: ``nights`` es siempre una entrada explícita del llamante.
     """

@@ -63,19 +63,19 @@ Los cinco estados de salida
 ``GateStatus`` tiene los **cuatro estados de ``plan.md`` §19.2** (``recommendation``,
 ``no_recommendation_stale_data``, ``no_recommendation_data_quality``, ``error``) **mas**
 ``no_recommendation_undecided``, el estado bloqueado que obliga ``tech_stack.md`` §11 bis
-mientras #59 (broker) y #60 (umbrales, riesgo y tamano de ``R``) sigan abiertos. Ninguno se
-fusiona con ``NOTHING``: ``NOTHING`` significa "hoy no veo oportunidad" y es un
+mientras falte alguno de los parametros de politica que declara ``PARAMETER_ISSUES``. Ninguno
+se fusiona con ``NOTHING``: ``NOTHING`` significa "hoy no veo oportunidad" y es un
 ``recommendation`` con ``direction = nothing``; los estados "no se" llevan ``direction =
 None`` y **no emiten nocional**. En ellos no hay juicio que hacer y el gate no lo fabrica.
 ``error`` es el fallo tecnico del pipeline (lo emite el ``run_log`` de #40/#43); este modulo,
 ante una entrada inadmisible, lanza ``GateInputError``.
 
-Decisiones abiertas que **no** se inventan
-------------------------------------------
+Decisiones que **no** se inventan
+---------------------------------
 
-``GateParameters`` (Pydantic v2, ``frozen``) declara las decisiones que solo el propietario
-cierra, todas con ``None`` = **sin decidir** (``tech_stack.md`` §11 bis): el broker (#59) y,
-por #60, el umbral de EV, el riesgo por operacion, las perdidas maxima diaria/semanal/mensual,
+``GateParameters`` (Pydantic v2, ``frozen``) declara los parametros de politica que solo el
+propietario cierra, todos con ``None`` = **sin decidir** (``tech_stack.md`` §11 bis): el broker
+y, por #60, el umbral de EV, el riesgo por operacion, las perdidas maxima diaria/semanal/mensual,
 el tamano de ``R`` y los tres umbrales del tier. Con ``GateParameters()`` —todo ``None``— el
 gate devuelve ``no_recommendation_undecided`` y ``undecided[]`` nombra cada parametro que
 falta **con su issue**. Las cifras del enunciado (1 %, 2 %, 3c, 0,58, el tamano de ``R``) no
@@ -138,7 +138,8 @@ Que **no** hace este modulo (fronteras declaradas, con su issue)
 - **No** es #62: no mide el *slippage*; consume el estado que #11 le entrega.
 - **No** es #83: no acumula el P&L diario, semanal ni mensual; lo recibe ya acumulado.
 - **No** es #84: no coloca la orden *bracket* en el broker.
-- **No** decide los umbrales ni el tamano de ``R``: son #59 y #60, con ``None`` = sin decidir.
+- **No** decide los parametros de politica: son del propietario (``PARAMETER_ISSUES``), con
+  ``None`` = sin decidir.
 - **No** deriva el stop de la volatilidad: recibe ``stop_pct`` ya calculado.
 
 El nucleo solo usa **biblioteca estandar** (``hashlib``, ``json``, ``decimal``, ``dataclasses``)

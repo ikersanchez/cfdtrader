@@ -89,6 +89,8 @@ __all__ = [
     "CARRY_SHORT_PCT_PER_NIGHT",
     "CARRY_SHORT_USD_PER_NIGHT",
     "DEFAULT_TEMPLATE_PATH",
+    "FINANCING_CUT_LIMITATION_UNVERIFIED",
+    "FINANCING_CUT_LIMITATION_VERIFIED",
     "HOLDING_NIGHTS",
     "LIMITATIONS",
     "PAIR_TOLERANCE_SECONDS",
@@ -118,6 +120,7 @@ __all__ = [
     "TrancheSpec",
     "analyse",
     "consolidate",
+    "financing_cut_limitation",
     "load_template",
     "main",
     "render_markdown",
@@ -183,9 +186,11 @@ SOURCE_ANNUALISED: Final[str] = "plan.md §3.3 y declaración del usuario (2026-
 WINDOW_CONFIRMED_ON: Final[date] = date(2026, 9, 18)
 DECLARED_SETTLEMENT_CURRENCY: Final[str] = "USD"
 
-#: El corte de financiación sigue sin verificar: **no hay valor por defecto** y asumir
-#: una hora de corte fija está prohibido. La constante existe para poder afirmarlo en
-#: un test.
+#: El corte de financiación **verificado** (17:00 `America/New_York`, #87) vive en la plantilla
+#: (`config/cost_observations.yaml`); este módulo **no declara un corte por defecto** —`None` no
+#: significa «sin verificar», significa «el corte lo entrega el llamante»— y asumir una hora de
+#: corte fija sigue prohibido. La constante existe para poder afirmarlo en un test, y
+#: `FinancingCut.unverified()` de `#11` es la *tripwire* que lo comprueba.
 DECLARED_FINANCING_CUT: Final[None] = None
 
 # ── El supuesto pesimista del *slippage* (decisión del propietario 2026-09-18) ──
@@ -452,7 +457,9 @@ class CostObservations(BaseModel):
     de conversión no está medido y no se emite un cero en su lugar."""
 
     financing_cut: datetime | None
-    """``null`` = **sin verificar**. Es el estado real a 2026-09-18."""
+    """``null`` = **sin verificar**. El estado real desde 2026-10-07 es **verificado**
+    (17:00 `America/New_York`, #87): ``null`` solo describe la plantilla mientras nadie ha
+    anotado aún la respuesta del bróker."""
 
     minimum_commission_usd: Decimal | None
     """Mínimo absoluto de comisión o de spread en puntos. ``null`` = no declarado
@@ -654,7 +661,7 @@ def _confirmed_inputs(info: SessionInfo) -> dict[str, Any]:
 
 
 def _financing_cut(value: datetime | None) -> dict[str, Any]:
-    """El corte de financiación: sin verificar mientras no haya respuesta del bróker."""
+    """El corte de financiación: `verified` con el instante depositado, `unverified` sin él."""
     if value is None:
         return {
             "state": "unverified",
@@ -1511,6 +1518,51 @@ BROKER_QUESTIONS: Final[tuple[dict[str, str], ...]] = (
     },
 )
 
+#: El corte de financiación tiene **dos** textos de limitación, y el informe publica el que
+#: corresponde a su `state`. Declararlo verificado en el bloque y «sin verificar» en las
+#: limitaciones era una **contradicción dentro del mismo informe** (#137).
+FINANCING_CUT_LIMITATION_UNVERIFIED: Final[str] = (
+    "**El corte de financiación está sin verificar.** El campo vale `null` con "
+    '`state: "unverified"` y con la pregunta literal al bróker. Asumir una hora de corte '
+    "fija está prohibido: si el corte cae antes del cierre, el intradía puro pagaría "
+    "tenencia."
+)
+FINANCING_CUT_LIMITATION_VERIFIED: Final[str] = (
+    "**El corte de financiación está verificado y es posterior al cierre de la sesión** "
+    "(17:00 `America/New_York`, #87): el intradía puro **no** paga tenencia. Sigue siendo una "
+    "**declaración del propietario**, no una medición del sistema, y una posición que cruce la "
+    "noche sí la paga."
+)
+
+#: Índice del corte dentro de ``LIMITATIONS``. Se conserva **por posición** porque
+#: ``baseline_report`` cita el tuple por índice; ``_limitations`` lo comprueba antes de
+#: sustituirlo, para que un reordenamiento no cambie el informe en silencio.
+FINANCING_CUT_LIMITATION_INDEX: Final[int] = 2
+
+
+def financing_cut_limitation(value: datetime | None) -> str:
+    """La limitación del corte, coherente con el `state` del bloque `financing_cut` (#137)."""
+    if value is None:
+        return FINANCING_CUT_LIMITATION_UNVERIFIED
+    return FINANCING_CUT_LIMITATION_VERIFIED
+
+
+def _limitations(observations: CostObservations) -> list[str]:
+    """Las limitaciones del informe, con la del corte **según su estado** (#137).
+
+    ``LIMITATIONS`` se conserva **literal y en el mismo orden** (es lo que cita
+    ``baseline_report``): lo único que cambia es ese elemento, que depende del estado medido.
+    """
+    declared = list(LIMITATIONS)
+    if declared[FINANCING_CUT_LIMITATION_INDEX] != FINANCING_CUT_LIMITATION_UNVERIFIED:
+        raise CostAuditError(
+            "LIMITATIONS[FINANCING_CUT_LIMITATION_INDEX] ya no es la limitación del corte: "
+            "el índice se ha desplazado y el informe cambiaría en silencio (#137)"
+        )
+    declared[FINANCING_CUT_LIMITATION_INDEX] = financing_cut_limitation(observations.financing_cut)
+    return declared
+
+
 #: Limitaciones que el informe declara en vez de esconder (A30).
 LIMITATIONS: Final[tuple[str, ...]] = (
     "**No hay ejecución real ⇒ el *slippage* no está medido.** No existe ninguna operación "
@@ -1525,10 +1577,7 @@ LIMITATIONS: Final[tuple[str, ...]] = (
     "46,8 bp y 36/59 sesiones por encima de 10 bp, frente al diferencial declarado de 0,42 bp "
     "(≈30×). Limitación declarada: 59 sesiones, un solo régimen y granularidad de 5 min ⇒ no "
     "resuelve el sub-minuto.",
-    "**El corte de financiación está sin verificar.** El campo vale `null` con "
-    '`state: "unverified"` y con la pregunta literal al bróker. Asumir una hora de corte '
-    "fija está prohibido: si el corte cae antes del cierre, el intradía puro pagaría "
-    "tenencia.",
+    FINANCING_CUT_LIMITATION_UNVERIFIED,
     "**La tabla declarada proviene del documento del bróker, no de una medición**, y el "
     "instrumento es el `SPX500:CFD`, no `^GSPC` ni `ES=F`: el CFD replica el índice con "
     "diferencial y financiación, así que la magnitud medida sobre el índice no es "
@@ -1661,7 +1710,7 @@ def consolidate(
         "by_size": _by_size(observations.minimum_commission_usd),
         "phase0_gate_b": _phase0_gate_b(slippage, assumption),
         "broker_questions": [dict(question) for question in BROKER_QUESTIONS],
-        "limitations": list(LIMITATIONS),
+        "limitations": _limitations(observations),
         "notes": list(NOTES),
     }
     return CostAudit(

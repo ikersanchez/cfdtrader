@@ -1152,7 +1152,7 @@ def _illustrative_block(pct_of_r: Decimal) -> dict[str, object]:
 
 
 def _financing_cut_block(cut: FinancingCut | None) -> dict[str, object]:
-    """El corte **declarado** de financiacion: hoy sin verificar (lo dice #11, ver A32)."""
+    """El corte **declarado** de financiacion: el que entrega el llamante, o el vacio de #11."""
     effective = cut if cut is not None else FinancingCut.unverified()
     return {
         "state": effective.state.value,
@@ -1320,7 +1320,7 @@ def run_walk_forward(
     llega ya preparado por el llamante (adaptador #69); ``decide_by_fold`` trae
     **exactamente** una funcion por fold y el motor la llama una vez por sesion de *test*.
     ``financing_cut`` es el corte declarado que se pasa a #11; si no se declara, #11 usa el
-    suyo (**sin verificar**, nunca deducido por este motor).
+    suyo (sin corte, **nunca deducido por este motor**).
     """
     items = tuple(inputs)
     _validate(

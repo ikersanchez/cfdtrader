@@ -203,10 +203,13 @@ HONESTY_FENCE: Final[tuple[str, ...]] = (
     "ejecucion: manual (el sistema no coloca ordenes; las decide el operador)",
     "naturaleza: apoyo a la decision, no una estrategia validada",
     f"escenario declarado: {SCENARIO_LABEL} (scenario_parameters); el `R` = {SCENARIO_R_PCT} % "
-    "lo decidio #60 y el broker (#59) sigue OPEN",
+    "lo decidio #60 y el broker quedo declarado en #59 (Revolut, cuenta CFD, tabla confirmada "
+    "por su KID): las dos son **decisiones**, no mediciones",
     "coste: la regla 9 se decide sobre el coste **declarado** (§19.12); el EV neto bajo el "
     "supuesto de *slippage* (20 % de `R` = 20 bp, #64) se publica como **sensibilidad**, no como "
     "una medicion (#62)",
+    "pendiente de medir: el *slippage* de ejecucion (#62) y el intradia y `bid`/`ask` reales del "
+    "CFD (#107) — sin ellos no hay coste medido ni veredicto de edge",
 )
 
 #: Claves del bloque de la pista que el modelo lineal tiene que publicar en su ultimo fold.

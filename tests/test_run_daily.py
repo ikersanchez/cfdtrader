@@ -678,7 +678,11 @@ def test_the_report_declares_the_honesty_fence_in_every_state() -> None:
         assert "S1" in text
         assert "#59" in text
         assert "#60" in text
-        assert "OPEN" in text
+        assert "#62" in text
+        assert "#107" in text
+        # #137: la valla deja de declarar abierta una decision ya cerrada. Se comprueba sobre
+        # la valla, no sobre el informe entero (donde «OPEN» podria aparecer por otro motivo).
+        assert "OPEN" not in "\n".join(run_daily.HONESTY_FENCE)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

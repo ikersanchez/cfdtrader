@@ -33,6 +33,9 @@ from cfdtrader.analysis.cost_audit import (
     CARRY_SHORT_PCT_PER_NIGHT,
     CARRY_SHORT_USD_PER_NIGHT,
     DEFAULT_TEMPLATE_PATH,
+    FINANCING_CUT_LIMITATION_INDEX,
+    FINANCING_CUT_LIMITATION_UNVERIFIED,
+    FINANCING_CUT_LIMITATION_VERIFIED,
     HOLDING_NIGHTS,
     LIMITATIONS,
     PAIR_TOLERANCE_SECONDS,
@@ -47,6 +50,7 @@ from cfdtrader.analysis.cost_audit import (
     FxCost,
     MeasureState,
     consolidate,
+    financing_cut_limitation,
     load_template,
     main,
     render_markdown,
@@ -282,6 +286,32 @@ def test_a4_there_is_no_default_for_the_cut() -> None:
         CostObservations.model_validate(incomplete)
     # el informe se escribe igualmente con el corte a null (A20 lo prueba de punta a punta)
     assert _consolidate().payload["financing_cut"]["state"] == "unverified"
+    # #137: y la limitacion que publica es la de «sin verificar», no la del corte verificado.
+    declared = cast("list[str]", _consolidate().payload["limitations"])
+    assert FINANCING_CUT_LIMITATION_UNVERIFIED in declared
+    assert FINANCING_CUT_LIMITATION_VERIFIED not in declared
+
+
+def test_a31_the_financing_limitation_follows_the_measured_state() -> None:
+    """#137: la limitacion del corte no puede contradecir el `state` de su propio bloque.
+
+    El informe publicaba `state: "verified"` y, en el mismo payload, la limitacion «El corte
+    de financiacion esta sin verificar»: dos afirmaciones incompatibles en el mismo informe.
+    """
+    verified = _consolidate(financing_cut=datetime(2026, 10, 7, 21, 0, tzinfo=UTC))
+    assert verified.payload["financing_cut"]["state"] == "verified"
+    declared = cast("list[str]", verified.payload["limitations"])
+    assert FINANCING_CUT_LIMITATION_VERIFIED in declared
+    assert FINANCING_CUT_LIMITATION_UNVERIFIED not in declared
+
+    # El tuple literal no se toca ni se reordena: el corte sigue en su indice (lo cita
+    # `baseline_report`) y el numero de limitaciones no cambia.
+    assert LIMITATIONS[FINANCING_CUT_LIMITATION_INDEX] == FINANCING_CUT_LIMITATION_UNVERIFIED
+    assert len(declared) == len(LIMITATIONS)
+    assert financing_cut_limitation(None) == FINANCING_CUT_LIMITATION_UNVERIFIED
+    assert financing_cut_limitation(datetime(2026, 10, 7, tzinfo=UTC)) == (
+        FINANCING_CUT_LIMITATION_VERIFIED
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -746,6 +776,16 @@ def test_a20_the_empty_template_produces_a_full_report(tmp_path: Path) -> None:
     for name in ("spread_cotizado", "tracking_difference", "slippage_ejecucion"):
         assert payload[name]["state"] == "unmeasured"
 
+    # #137: la plantilla del repo trae el corte **verificado** que deposito #87, asi que el
+    # informe publica la limitacion verificada y **no** la de «sin verificar». Publicar las
+    # dos era una contradiccion dentro del mismo fichero (el `state` decia `verified`).
+    assert payload["financing_cut"]["state"] == "verified"
+    assert FINANCING_CUT_LIMITATION_VERIFIED in payload["limitations"]
+    assert FINANCING_CUT_LIMITATION_UNVERIFIED not in payload["limitations"]
+    markdown = markdown_path.read_text(encoding="utf-8")
+    assert FINANCING_CUT_LIMITATION_VERIFIED in markdown
+    assert FINANCING_CUT_LIMITATION_UNVERIFIED not in markdown
+
 
 def test_a21_the_consolidation_is_pure_and_touches_no_disk(tmp_path: Path) -> None:
     ghost = tmp_path / "no-existe.yaml"
@@ -1119,12 +1159,19 @@ def test_a30_the_markdown_report_has_the_required_sections() -> None:
 
     assert "**0.24**" in text and "**2.24**" in text
     assert "No hay ejecución real" in text
-    assert "corte de financiación está sin verificar" in text
+    # #137: el informe no puede publicar a la vez `state: "unverified"` y la limitacion del
+    # corte **verificado**. En este caso (corte sin declarar) sale la de «sin verificar».
+    assert FINANCING_CUT_LIMITATION_UNVERIFIED in text
+    assert FINANCING_CUT_LIMITATION_VERIFIED not in text
     assert "documento del bróker, no de una medición" in text
     assert "no se puede evaluar" in text
     for question in BROKER_QUESTIONS:
         assert question["question"] in text
-    for limitation in LIMITATIONS:
+    # `LIMITATIONS` conserva su literal y su orden: el unico elemento que cambia es el del
+    # corte, que depende del estado medido y se comprueba aparte (arriba y en A31).
+    for index, limitation in enumerate(LIMITATIONS):
+        if index == FINANCING_CUT_LIMITATION_INDEX:
+            continue
         assert limitation in text
 
 
