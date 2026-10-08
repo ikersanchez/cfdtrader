@@ -16,6 +16,7 @@ Cobertura medida del modulo nuevo (A12): `uv run pytest tests/test_hyperparamete
 from __future__ import annotations
 
 import ast
+import copy
 import dataclasses
 import hashlib
 import inspect
@@ -282,9 +283,58 @@ def _declared_columns(feature_set: str) -> tuple[str, ...]:
 # ─────────────────────────────────────────────────────────────────────────────
 # A1 - el espacio y el presupuesto, como literales pre-registrados
 # ─────────────────────────────────────────────────────────────────────────────
+def test_a1_the_audit_rejects_a_space_that_does_not_match_the_preregistration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Las cuatro puertas del auditor: indices, features ajenas, eje movido y subconjunto (A1)."""
+    monkeypatch.setattr(
+        search,
+        "SEARCH_SPACE",
+        tuple(dataclasses.replace(variant, index=0) for variant in SEARCH_SPACE),
+    )
+    with pytest.raises(SearchSpaceError) as indices:
+        space_audit()
+    assert "indices" in str(indices.value)
+
+    monkeypatch.setattr(search, "SEARCH_SPACE", SEARCH_SPACE)
+    with_foreign_features = dataclasses.replace(
+        SEARCH_SPACE[0], index=BUDGET - 1, name="h9", features=feature_store.FEATURE_COLUMNS
+    )
+    monkeypatch.setattr(search, "SEARCH_SPACE", (*SEARCH_SPACE[:-1], with_foreign_features))
+    with pytest.raises(SearchSpaceError) as foreign:
+        space_audit()
+    assert "features de control" in str(foreign.value)
+
+    monkeypatch.setattr(search, "SEARCH_SPACE", SEARCH_SPACE)
+    moved_subset = dataclasses.replace(
+        SEARCH_SPACE[-1],
+        hyperparameters={**SEARCH_SPACE[-1].hyperparameters, "max_depth": 3},
+    )
+    monkeypatch.setattr(search, "SEARCH_SPACE", (*SEARCH_SPACE[:-1], moved_subset))
+    with pytest.raises(SearchSpaceError) as moved:
+        space_audit()
+    assert "subconjunto" in str(moved.value)
+
+    monkeypatch.setattr(search, "SEARCH_SPACE", SEARCH_SPACE)
+    relabelled = dataclasses.replace(
+        SEARCH_SPACE[-1], feature_set="control", features=feature_store.FEATURE_COLUMNS
+    )
+    monkeypatch.setattr(search, "SEARCH_SPACE", (*SEARCH_SPACE[:-1], relabelled))
+    with pytest.raises(SearchSpaceError) as mismatch:
+        space_audit()
+    assert "no coincide" in str(mismatch.value)
+
+
 def test_a1_the_space_is_the_preregistered_one() -> None:
     """`SEARCH_SPACE` son los `BUDGET` variantes de §19.17 y el auditor lo comprueba (A1)."""
     assert NEW_MODULE.is_file()
+    for error in (
+        SearchSpaceError,
+        VariantNotEvaluableError,
+        search.MissingAsOfError,
+        search.InvalidAsOfError,
+    ):
+        assert issubclass(error, HyperparameterSearchError)
     assert BUDGET == len(SEARCH_SPACE) == len(AXES) + len(FEATURE_SETS) == 6 + 4
     assert REGISTERED_TRIALS == 4
     assert TOTAL_TRIALS == REGISTERED_TRIALS + BUDGET == 14
@@ -640,9 +690,12 @@ def test_a4_the_four_frozen_entries_are_untouched(tmp_path: Path) -> None:
     for digest in FROZEN_RUNS:
         for name in ("config.json", "result.json", "model.json", "summary.md"):
             assert after[f"{digest}/{name}"] == before[f"{digest}/{name}"], (digest, name)
-    assert set(FROZEN_RUNS) == {
-        entry.run_sha256 for entry in report.registry.entries if entry.run_sha256 in before
-    }
+    frozen = {key.split("/")[0] for key in before}
+    assert (
+        set(FROZEN_RUNS)
+        == frozen
+        == {entry.run_sha256 for entry in report.registry.entries if entry.run_sha256 in frozen}
+    )
     assert len(report.registry.entries) == TOTAL_TRIALS
     # Y ningun informe publicado de #24/#25/#26 cambia: la corrida escribe **su** informe.
     frozen = sorted(FROZEN_REPORTS.glob("model_comparison_*"))
@@ -669,7 +722,7 @@ def test_a4_a_reloaded_booster_that_does_not_reproduce_is_a_typed_error(
     folds = cast("list[dict[str, object]]", model["folds"])
     folds[0]["booster_model"] = str(folds[1]["booster_model"])
     (runs / entry.run_sha256 / "model.json").write_text(json.dumps(document), encoding="utf-8")
-    with pytest.raises(HyperparameterSearchError) as error:
+    with pytest.raises(search.ReconstructionMismatchError) as error:
         reconstruct_lightgbm(
             entry,
             runs_root=runs,
@@ -679,7 +732,100 @@ def test_a4_a_reloaded_booster_that_does_not_reproduce_is_a_typed_error(
             cost_model=search.declared_cost_model(),
             slippage=search.declared_slippage_assumption(),
         )
-    assert "no reproduce" in str(error.value) or "Recargad" in type(error.value).__name__
+    assert "no reproduce" in str(error.value)
+
+
+@needs_store
+def test_a4_a_tampered_observation_count_is_declared_without_a_column(
+    real_report: search.SearchReport, tmp_path: Path
+) -> None:
+    """Un `n_observations` que no cuadra es `not_evaluable` con motivo y sin columna (A4, A7)."""
+    runs = tmp_path / "runs"
+    _copy_frozen_runs(runs)
+    entry = next(
+        item
+        for item in real_report.registry.entries
+        if item.run_sha256 in FROZEN_RUNS and item.variant_id == LIGHTGBM_VARIANT_ID
+    )
+    tampered = dataclasses.replace(entry, n_observations=entry.n_observations + 1)
+    with pytest.raises(search.InconsistentObservationsError):
+        reconstruct_lightgbm(
+            tampered,
+            runs_root=runs,
+            universe=real_report.universe,
+            frame=real_report.features,
+            plan=real_report.split_plan,
+            cost_model=search.declared_cost_model(),
+            slippage=search.declared_slippage_assumption(),
+        )
+    candidates = search._candidates_from_registry(  # pyright: ignore[reportPrivateUsage]
+        registry=Registry(entries=(tampered,), registry_sha256="synthetic"),
+        known={},
+        runs_root=runs,
+        universe=real_report.universe,
+        frame=real_report.features,
+        plan=real_report.split_plan,
+        cost_model=search.declared_cost_model(),
+        slippage=search.declared_slippage_assumption(),
+    )
+    assert isinstance(candidates[0], search.NotEvaluable)
+    assert candidates[0].error == "InconsistentObservationsError"
+    assert candidates[0].to_payload()["column"] is None
+    # Y una variante **medida** cuyo recuento no cuadre con su entrada tampoco se rellena.
+    measured = next(
+        item
+        for item in real_report.evaluated
+        if item.run_sha256 in FROZEN_RUNS and item.variant_id == LIGHTGBM_VARIANT_ID
+    )
+    with pytest.raises(search.InconsistentObservationsError):
+        search._candidates_from_registry(  # pyright: ignore[reportPrivateUsage]
+            registry=Registry(entries=(tampered,), registry_sha256="synthetic"),
+            known={entry.run_sha256: measured},
+            runs_root=runs,
+            universe=real_report.universe,
+            frame=real_report.features,
+            plan=real_report.split_plan,
+            cost_model=search.declared_cost_model(),
+            slippage=search.declared_slippage_assumption(),
+        )
+
+
+@needs_store
+def test_a4_a_model_of_another_design_is_not_comparable(tmp_path: Path) -> None:
+    """Un `model.json` con otras features no es comparable: error tipado, no una columna (A4)."""
+    frame = search.build_feature_frame(Store(REAL_DATA), series_id="^GSPC")
+    entry = next(
+        item for item in load_registry(REPO_RUNS).entries if item.variant_id == LIGHTGBM_VARIANT_ID
+    )
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    mutated = runs / "mutated-entry"
+    shutil.copytree(REPO_RUNS / entry.run_sha256, mutated)
+    document = cast(
+        "dict[str, object]", json.loads((mutated / "model.json").read_text(encoding="utf-8"))
+    )
+    model = cast("dict[str, object]", document["model"])
+    model["features"] = ["har_forecast"]
+    (mutated / "model.json").write_text(json.dumps(document), encoding="utf-8")
+    config = cast(
+        "dict[str, object]",
+        cast(
+            "dict[str, object]",
+            json.loads((mutated / "config.json").read_text(encoding="utf-8")),
+        )["config"],
+    )
+    window = cast("dict[str, object]", config["window"])
+    with pytest.raises(search.UnknownVariantError) as error:
+        reconstruct_lightgbm(
+            dataclasses.replace(entry, run_sha256=mutated.name),
+            runs_root=runs,
+            universe=cast("Any", None),
+            frame=frame,
+            plan=cast("Any", SimpleNamespace(plan_sha256=window["plan_sha256"])),
+            cost_model=search.declared_cost_model(),
+            slippage=search.declared_slippage_assumption(),
+        )
+    assert "otras features" in str(error.value)
 
 
 @needs_store
@@ -724,7 +870,11 @@ def test_a4_a_third_family_in_the_registry_is_declared_not_filled(
         sharpe_per_session=0.3,
         n_observations=10,
     )
-    entries = (*real_report.registry.entries, extra)
+    frozen = tuple(
+        entry for entry in real_report.registry.entries if entry.run_sha256 in FROZEN_RUNS
+    )
+    assert len(frozen) == 4
+    entries = (*frozen, extra)
     candidates = search._candidates_from_registry(  # pyright: ignore[reportPrivateUsage]
         registry=Registry(entries=entries, registry_sha256="synthetic"),
         known={},
@@ -795,6 +945,19 @@ def test_a5_the_cli_does_not_accept_n_trials_or_a_budget() -> None:
         completed = _cli("--as-of", NOW.isoformat(), flag, value)
         assert completed.returncode == 2, completed.stderr
         assert flag in completed.stderr
+
+
+def test_a5_a_report_without_a_measured_best_declares_its_holes() -> None:
+    """Sin mejor medido el DSR se declara, y las referencias ausentes son `None`, no cifras (A5)."""
+    block = search._dsr_for_best(None, registry=_registry_of(3))  # pyright: ignore[reportPrivateUsage]
+    assert block["state"] == "not_evaluable"
+    assert block["verdict"] == "not_evaluable"
+    assert "deflactar" in str(block["reason"])
+    assert search._pick((), "nada") is None  # pyright: ignore[reportPrivateUsage]
+    assert search._pick((), None) is None  # pyright: ignore[reportPrivateUsage]
+    assert search._selected_of({"state": "not_evaluable"}) is None  # pyright: ignore[reportPrivateUsage]
+    selected = {"selected": {"run_sha256": "x"}}
+    assert search._selected_of(selected) == "x"  # pyright: ignore[reportPrivateUsage]
 
 
 def test_a5_more_trials_deflate_the_same_series_more() -> None:
@@ -943,6 +1106,79 @@ def test_a7_the_sweep_calls_record_experiment_exactly_budget_times(
     assert not (tmp_path / "runs").exists()
 
 
+def _synthetic_rows() -> list[search.SweepRow]:
+    """Las diez filas del espacio **intentadas y sin medida**, para los bordes del informe (A7)."""
+    design = DesignFrame(
+        frame=pl.DataFrame({"session": [], "y": []}),
+        n_sessions=2688,
+        n_labels=2688,
+        n_shifted_rows=0,
+        n_nulls_in_features=1,
+        design_lag_sessions=1,
+    )
+    return [
+        search.SweepRow(
+            variant=variant,
+            run_sha256=f"{variant.index:064d}",
+            state="not_evaluable",
+            reason="sintetico: sin medida",
+            error="VariantNotEvaluableError",
+            n_sessions=design.n_sessions,
+            n_labels=design.n_labels,
+            n_shifted_rows=design.n_shifted_rows,
+            n_nulls_in_features=design.n_nulls_in_features,
+            model_sha256=None,
+            measured=None,
+        )
+        for variant in SEARCH_SPACE
+    ]
+
+
+def test_a7_a_subset_with_nulls_is_an_attempt_without_a_measure() -> None:
+    """`_attempt` deja la variante intentada con su motivo y sin modelo (A7)."""
+    frame = _synthetic_frame(nulls_in="har_forecast")
+    labels = _synthetic_labels(frame)
+    stub = SimpleNamespace(matrix=SimpleNamespace(frame=frame))
+    control = next(variant for variant in SEARCH_SPACE if variant.feature_set == "control")
+    design, model, measured, reason, error = search._attempt(  # pyright: ignore[reportPrivateUsage]
+        control,
+        frame=cast("Any", stub),
+        labels=labels,
+        plan=cast("Any", None),
+        horizon=(),
+        universe=cast("Any", None),
+        cost_model=cast("Any", None),
+        slippage=cast("Any", None),
+    )
+    assert design.n_nulls_in_features == 1
+    assert model is None and measured is None
+    assert error == "VariantNotEvaluableError"
+    assert "nulos de diseno" in str(reason)
+
+
+def test_a7_an_incomplete_matrix_is_declared_and_does_not_break_the_sweep() -> None:
+    """Con 13 columnas de 14 intentos el DSR/PBO se declaran y el barrido no tumba (A5, A7)."""
+    rows = _synthetic_rows()
+    payloads = search._sweep_row_payloads(  # pyright: ignore[reportPrivateUsage]
+        rows, registry=_registry_of(14)
+    )
+    assert all(row["deflated_sharpe_ratio"] is None for row in payloads)
+    block = search._sweep_block(  # pyright: ignore[reportPrivateUsage]
+        evaluated=cast("Any", (object(),) * 13),
+        registry=_registry_of(14),
+        rows=rows,
+        best=None,
+        reference_winner=None,
+        dsr={"state": "not_evaluable", "verdict": "not_evaluable"},
+        pbo={"state": "not_evaluable", "verdict": "not_evaluable"},
+    )
+    assert block["state"] == "not_evaluable"
+    assert block["verdict"] == "not_evaluable"
+    assert block["best"] is None
+    assert block["blockers"] == [row.run_sha256 for row in rows]
+    assert "matriz" in str(block["reason"])
+
+
 @needs_store
 def test_a7_the_real_run_registers_every_attempt(real_report: search.SearchReport) -> None:
     """La corrida real registra los `BUDGET` intentos y publica el estado de cada uno (A7)."""
@@ -1046,6 +1282,101 @@ def test_a8_the_table_is_not_copied_from_the_frozen_reports(
 
 
 @needs_store
+@needs_store
+def test_a8_mutating_the_frozen_report_does_not_change_the_table(
+    real_report: search.SearchReport, tmp_path: Path
+) -> None:
+    """Mutar el informe congelado de #26 no cambia la tabla: sale de `runs/`, no de el (A8)."""
+    frozen = FROZEN_REPORTS / "model_comparison_2026-09-22.json"
+    document = cast("dict[str, object]", json.loads(frozen.read_text(encoding="utf-8")))
+    comparison = cast("dict[str, object]", document["comparison"])
+    rows = cast("list[dict[str, object]]", comparison["rows"])
+    rows[0]["brier_score"] = 0.999
+    mutated = tmp_path / "reports"
+    mutated.mkdir()
+    (mutated / frozen.name).write_text(json.dumps(document), encoding="utf-8")
+    runs = tmp_path / "runs"
+    _copy_frozen_runs(runs)
+    fresh = analyse(
+        store=Store(REAL_DATA),
+        reports_dir=mutated,
+        runs_root=runs,
+        settings=Settings(),
+        as_of=NOW,
+        write=False,
+    )
+    assert [row["brier_score"] for row in _rows(fresh)] == [
+        row["brier_score"] for row in _rows(real_report)
+    ]
+    assert 0.999 not in [row["brier_score"] for row in _rows(fresh)]
+    assert fresh.report_sha256 == real_report.report_sha256
+
+
+def test_a8_a_wave_without_a_measure_has_no_delta() -> None:
+    """Una fila sin medida no publica cifras ni deltas, y la referencia ausente es `None` (A8)."""
+    block = search._comparison_block(  # pyright: ignore[reportPrivateUsage]
+        _synthetic_rows(),
+        registry=_registry_of(14),
+        reference_raw=None,
+        reference_winner=None,
+    )
+    assert block["basis"] == "declared_cost"
+    assert block["is_validation"] is False
+    assert block["n_rows"] == BUDGET
+    assert block["n_evaluated"] == 0
+    assert block["reference_raw"] is None
+    assert block["reference_winner_26"] is None
+    for row in cast("list[dict[str, object]]", block["rows"]):
+        assert row["state"] == "not_evaluable"
+        assert row["brier_score"] is None
+        assert row["delta_vs_baseline_raw"] is None
+        assert row["delta_vs_winner_26"] is None
+        assert row["deflated_sharpe_ratio"] is None
+
+
+@needs_store
+def test_a8_the_protocol_is_the_one_of_26(real_report: search.SearchReport) -> None:
+    """El protocolo publicado es el de #26: mismo plan, umbral 0,5 y coste declarado (A8)."""
+    protocol = _block(real_report, "protocol")
+    universe = cast("dict[str, object]", protocol["universe"])
+    assert protocol["decision_threshold"] == 0.5
+    assert protocol["cost_basis"] == "declared_cost"
+    assert protocol["features"] == list(BASELINE_FEATURES)
+    assert protocol["n_folds"] == 10
+    assert protocol["n_test"] == 500 == 10 * 50
+    assert protocol["plan_sha256"] == real_report.split_plan.plan_sha256
+    assert universe["n_sessions"] == len(real_report.universe.inputs)
+
+
+@needs_store
+def test_a8_the_markdown_declares_a_report_without_a_best(
+    real_report: search.SearchReport,
+) -> None:
+    """El `.md` declara el hueco cuando no hay mejor medido ni referencias (A8, A7)."""
+    payload = copy.deepcopy(real_report.payload)
+    sweep = cast("dict[str, object]", payload["sweep"])
+    sweep["best"] = None
+    sweep["state"] = "not_evaluable"
+    sweep["reason"] = "sintetico: matriz incompleta"
+    sweep["family_changed"] = True
+    sweep["follow_ups"] = ["#27", "#28"]
+    sweep["blockers"] = ["abc123"]
+    comparison = cast("dict[str, object]", payload["comparison"])
+    comparison["reference_raw"] = None
+    comparison["reference_winner_26"] = None
+    for row in cast("list[dict[str, object]]", comparison["rows"]):
+        row["deflated_sharpe_ratio"] = None
+        row["delta_vs_baseline_raw"] = None
+        row["delta_vs_winner_26"] = None
+    text = render_markdown(dataclasses.replace(real_report, payload=payload))
+    assert "**Sin mejor medido**" in text
+    assert "sintetico: matriz incompleta" in text
+    assert "**Vetos** (variante intentada sin columna)" in text
+    assert "no medida en esta corrida" in text
+    assert "Seguimiento: #27, #28." in text
+
+
+@needs_store
 def test_a8_the_markdown_carries_the_table_and_the_rule(real_report: search.SearchReport) -> None:
     """El `.md` lleva la tabla del barrido y la regla declarada, y termina en salto (A8)."""
     text = render_markdown(real_report)
@@ -1126,6 +1457,26 @@ def test_a9_a_worse_sweep_does_not_change_the_family_and_a_better_one_does() -> 
     assert search._beats_reference(worse, reference) is False  # pyright: ignore[reportPrivateUsage]
     assert search._beats_reference(tie, reference) is False  # pyright: ignore[reportPrivateUsage]
     assert search._beats_reference(worse, None) is True  # pyright: ignore[reportPrivateUsage]
+    better_log_loss = cast(
+        "Any",
+        SimpleNamespace(brier_score=0.2511170746947622, log_loss_value=0.60),
+    )
+    assert (
+        search._beats_reference(  # pyright: ignore[reportPrivateUsage]
+            better_log_loss, reference
+        )
+        is True
+    )
+    worse_log_loss = cast(
+        "Any",
+        SimpleNamespace(brier_score=0.2511170746947622, log_loss_value=0.99),
+    )
+    assert (
+        search._beats_reference(  # pyright: ignore[reportPrivateUsage]
+            worse_log_loss, reference
+        )
+        is False
+    )
 
 
 @needs_store
@@ -1221,6 +1572,10 @@ def test_a10_the_report_hash_ignores_the_paths() -> None:
     assert not Path(declared).is_absolute()
     assert "relativa" in str(block["note"])
     assert search.DEFAULT_RUNS_ROOT == "runs"
+    naive = datetime(2026, 1, 1)
+    assert search._as_utc(naive) == naive.replace(tzinfo=UTC)  # pyright: ignore[reportPrivateUsage]
+    aware = datetime(2026, 1, 1, 12, tzinfo=UTC)
+    assert search._as_utc(aware) == aware  # pyright: ignore[reportPrivateUsage]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1284,23 +1639,28 @@ def test_a11_the_signature_and_the_absence_of_the_clock() -> None:
     assert not found, found
 
 
-def test_a11_a_missing_dataset_exits_two_without_a_report(tmp_path: Path) -> None:
+def test_a11_a_missing_dataset_exits_two_without_a_report(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """Con un almacen vacio: exit 2, motivo en `stderr` y ningun informe escrito (A11)."""
     empty = tmp_path / "empty-store"
     empty.mkdir()
     reports = tmp_path / "reports"
-    completed = _cli(
-        "--data-root",
-        str(empty),
-        "--reports-dir",
-        str(reports),
-        "--runs-root",
-        str(tmp_path / "runs"),
-        "--as-of",
-        NOW.isoformat(),
+    code = main(
+        [
+            "--data-root",
+            str(empty),
+            "--reports-dir",
+            str(reports),
+            "--runs-root",
+            str(tmp_path / "runs"),
+            "--as-of",
+            NOW.isoformat(),
+        ]
     )
-    assert completed.returncode == 2
-    assert "barrido" in completed.stderr
+    assert code == 2
+    captured = capsys.readouterr()
+    assert "barrido" in captured.err
     assert not reports.exists()
 
 
@@ -1311,18 +1671,20 @@ def test_a11_the_dry_run_writes_nothing(tmp_path: Path) -> None:
     _copy_frozen_runs(runs)
     before = _fingerprint(runs)
     reports = tmp_path / "reports"
-    completed = _cli(
-        "--data-root",
-        str(REAL_DATA),
-        "--reports-dir",
-        str(reports),
-        "--runs-root",
-        str(runs),
-        "--as-of",
-        NOW.isoformat(),
-        "--dry-run",
+    code = main(
+        [
+            "--data-root",
+            str(REAL_DATA),
+            "--reports-dir",
+            str(reports),
+            "--runs-root",
+            str(runs),
+            "--as-of",
+            NOW.isoformat(),
+            "--dry-run",
+        ]
     )
-    assert completed.returncode == 0, completed.stderr
+    assert code == 0
     assert not reports.exists()
     assert _fingerprint(runs) == before
 

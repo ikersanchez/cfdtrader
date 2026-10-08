@@ -1498,15 +1498,21 @@ def _unit_bug_search_block(variant: Variant | None, *, model: CostModel) -> dict
     **mide** en esta corrida: con el motor corregido, la diferencia observada es 0.
     """
     measured = dict(_unit_bug_block(variant))
-    declared = float(model.spread_entry_pct)
+    # El diferencial declarado por operacion es el **viaje completo** (`plan.md` §3.3: 0,0021 %
+    # por lado ⇒ 0,0042 %), que es lo que el motor carga en cada operacion.
+    round_trip = model.spread_entry_pct + model.spread_exit_pct
+    declared = float(round_trip)
     fraction = declared / 100.0
     return {
         **measured,
         "displacement": {
-            "declared_pct": format(model.spread_entry_pct, "f"),
-            "correct_fraction": format(model.spread_entry_pct / 100, "f"),
+            "declared_pct": format(round_trip, "f"),
+            "correct_fraction": format(round_trip / 100, "f"),
             "per_operation": declared - fraction,
-            "identity": "`c_declared_pct - c_fraction_of_notional` = 0,0042 - 0,000042 = 0,004158",
+            "identity": (
+                "`c_declared_pct - c_fraction_of_notional` = 0,0042 - 0,000042 = 0,004158 "
+                "(el diferencial del viaje completo: 0,0021 % por lado)"
+            ),
             "state": "fixed_in_#80",
             "affects": (
                 "la media y la suma de `pnl_declared` de **todas** las variantes y, con ellas, el "
@@ -2148,25 +2154,15 @@ def _attempt(
     se pueda medir) y, si se pudo, el modelo y la medida del motor.
     """
     design = design_for(variant, features=frame.matrix.frame, labels=labels)
-    if design.n_nulls_in_features:
-        return (
-            design,
-            None,
-            None,
-            f"el subconjunto `{variant.feature_set}` deja {design.n_nulls_in_features} nulos de "
-            "diseno: no se imputa —un nulo rellenado seria un dato inventado— y la variante se "
-            "declara `not_evaluable` con su motivo (A2)",
-            "VariantNotEvaluableError",
-        )
     try:
-        model = fit_lightgbm(
-            design,
-            splits=split_assignments(plan),
-            hyperparameters=variant.hyperparameters,
-            seed=SEED,
-            label_horizon=horizon,
+        _, model = fit_search_variant(
+            variant,
+            features=frame.matrix.frame,
+            labels=labels,
+            plan=plan,
+            horizon=horizon,
         )
-    except (LightGBMError, HyperparameterSearchError) as failure:
+    except (VariantNotEvaluableError, LightGBMError, HyperparameterSearchError) as failure:
         return design, None, None, str(failure), type(failure).__name__
     measured = measure_variant(
         variant,
