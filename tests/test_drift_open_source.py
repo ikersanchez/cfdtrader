@@ -52,14 +52,15 @@ WRITTEN: Final[set[str]] = {
 FROZEN: Final[set[str]] = {
     # #108 retira `src/cfdtrader/analysis/drift.py`: el barrido de punteros `#50 -> #107` toca
     # sus limitaciones declaradas.
+    # #73 retira `analysis/feature_frame.py` (en sus dos formas de ruta): el productor real de
+    # `derived.features_daily` expone los frames **por familia** sobre el mismo adaptador, el
+    # mismo criterio que #108 aplico a `drift.py`.
     "backtest/baselines.py",
     "backtest/metrics.py",
     "models/baseline.py",
-    "analysis/feature_frame.py",
     "src/cfdtrader/backtest/baselines.py",
     "src/cfdtrader/backtest/metrics.py",
     "src/cfdtrader/models/baseline.py",
-    "src/cfdtrader/analysis/feature_frame.py",
 }
 
 #: Nombres que el módulo debe **importar** de `drift` y no redefinir (criterio 1).

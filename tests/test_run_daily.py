@@ -136,7 +136,10 @@ FROZEN: Final[frozenset[str]] = frozenset(
         # #113 retira `decision/gate.py` y `analysis/pipeline_report.py` de este conjunto: la
         # entrega del dia de mercado cerrado toca el gate (regla 19) y el informe (SESSION_RULES),
         # el mismo criterio que #80 aplico en `tests/test_pipeline_report.py`.
-        "src/cfdtrader/analysis/feature_frame.py",
+        # #73 retira `analysis/feature_frame.py` de este conjunto: el productor real de
+        # `derived.features_daily` expone los frames **por familia** (`build_family_frames`) y el
+        # cargador de `context_v1` sobre el adaptador que ya usa el camino diario, el mismo
+        # criterio que #113/#124/#131 aplicaron al gate, al calendario y al motor de costes.
         # #136 retira `analysis/model_comparison.py` de este conjunto: el guardian de reconstruccion
         # (A7) se relativiza —contra el resultado que publica la **propia** entrada, no contra un
         # literal `FROZEN_BASELINE` que caduca con cada ingesta—, el mismo criterio que #113, #124

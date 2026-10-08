@@ -776,7 +776,10 @@ WRITTEN: Final[tuple[str, ...]] = (
 FROZEN: Final[tuple[str, ...]] = (
     "src/cfdtrader/backtest/baselines.py",
     "src/cfdtrader/models/baseline.py",
-    "src/cfdtrader/analysis/feature_frame.py",
+    # #73 retira `analysis/feature_frame.py`: el productor real de `derived.features_daily`
+    # expone los frames **por familia** sobre el mismo adaptador, el mismo criterio que
+    # #113/#124/#131/#136 aplicaron al gate, al calendario, al motor de costes y a la
+    # comparacion de modelos.
 )
 
 #: Los **8** hiperparametros del estimador de #24 (C2); #25 anade las 3 de calibracion.
