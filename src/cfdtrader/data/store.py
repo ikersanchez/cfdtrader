@@ -131,11 +131,11 @@ cada dataset lo declara `cfdtrader.data.contracts` —firma por ``(capa, dataset
   **fichero**, la **columna** y los **dos tipos**. No hay coerción silenciosa.
 - **Columna desconocida** (la firma no la declara): también es error. Un cambio de
   semántica exige columna **nueva con nombre nuevo**; nunca se reinterpreta la vieja.
-- **Columna ausente** (fichero de un *layout* anterior, o escrito por una fuente que
-  no trae ese *payload*): **se lee**, la columna sale ``null`` **declarado** —nunca
-  ``0``— y el lector publica el *layout* con :meth:`Store.layout` y el log. Es el
-  único caso en que un histórico mezclado se puede leer entero, así que se declara en
-  vez de esconderse.
+- **Columna ausente**: si el fichero **es** un *layout* declarado más antiguo, la columna se
+  materializa a ``null`` **declarado** —nunca ``0``— y el lector publica el *layout* con
+  :meth:`Store.layout` y el log. Si al fichero le faltan columnas de la firma **original**,
+  no es ningún *layout* declarado: se lee **lo que trae** y el hueco se declara igual, sin
+  inventar columnas que nadie escribió.
 
 Un dataset **sin declaración** no se valida: la lista de firmas es una lista blanca, y
 un test comprueba que todos los datasets que el proyecto escribe están en ella.
@@ -765,9 +765,10 @@ class Store:
         del proyecto están declarados es lo que cierra ese hueco.
 
         Levanta :class:`LayoutMismatchError` en cuanto un fichero cambia el tipo de una
-        columna o trae una que la firma no declara. Un fichero al que solo le faltan
-        columnas **no** es un error: se lee con esas columnas a ``null`` y queda declarado
-        en ``old_layout``/``null_columns``.
+        columna o trae una que la firma no declara. Que a un fichero le falten columnas
+        **no** es un error: queda declarado en ``old_layout``/``null_columns``, y si es un
+        *layout* declarado más antiguo, las aditivas que no trae se materializan a ``null``
+        (:meth:`read_pit`).
         """
         declaration = layout_of(layer, dataset)
         paths = self._parquet_files(layer, dataset)
@@ -854,6 +855,13 @@ class Store:
         """
         declaration = layout_of(layer, dataset)
         if declaration is None:
+            return "*"
+        if any(file.layout_version == 0 for file in reading.files):
+            # A algún fichero le faltan columnas de la firma **original**: no es ningún layout
+            # declarado —el lector ya lo publica en `null_columns`— así que se lee **lo que
+            # trae**. Inventarle las columnas que nadie escribió sería peor que declarar el
+            # hueco, y el `null` implícito de `union_by_name` ya cubre lo que sí falta en un
+            # histórico mezclado.
             return "*"
         present = reading.present_columns
         absent = [spec for spec in declaration.payload if spec.name not in present]
