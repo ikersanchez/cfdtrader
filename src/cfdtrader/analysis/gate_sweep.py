@@ -191,8 +191,8 @@ INERT_PARAMETERS: Final[tuple[dict[str, str], ...]] = (
     {
         "field": "broker",
         "reason": (
-            "la regla declarada del brazo no lo lee: es un centinela de la decision abierta 4 "
-            "(#59) y se publica tal cual en toda la rejilla"
+            "la regla declarada del brazo no lo lee: es el broker **declarado** en #59 "
+            "(Revolut, cuenta CFD) y se publica tal cual en toda la rejilla"
         ),
     },
     {

@@ -206,13 +206,17 @@ ARM_NAMES: Final[tuple[str, ...]] = (ARM_OFICIAL, ARM_ESCENARIO, ARM_COSTE_DECLA
 #: La base de todo lo que se publica aqui: coste **declarado**, nunca medido (A9).
 BASIS_DECLARED_COST: Final[str] = "declared_cost"
 
-#: Escenario declarado S1 (tabla de la issue). El broker es un **centinela**: #59 sigue abierta.
+#: Escenario declarado S1 (tabla de la issue). El broker es el **declarado**: #59 (Revolut,
+#: cuenta CFD) esta **CERRADA**, asi que el centinela «escenario:sin-decidir-#59» se retira
+#: (#138). S1 se usa **hoy** (`run_daily`, `paper_trading`), asi que su campo `broker` no puede
+#: declarar abierta una decision cerrada.
 SCENARIO_ID: Final[str] = "S1"
-SCENARIO_BROKER: Final[str] = "escenario:sin-decidir-#59"
+SCENARIO_BROKER: Final[str] = "Revolut (Revolut Securities Europe UAB), cuenta CFD"
 
 #: Procedencia declarada de cada parametro de S1, en el orden de ``PARAMETER_ISSUES`` del gate.
 PROVENANCE: Final[dict[str, str]] = {
-    "broker": "centinela declarado: el broker real es #59",
+    "broker": "tech_stack.md §11 bis, decision 4: el broker declarado por el propietario, "
+    "CERRADA en #59 con el KID de Revolut Securities Europe UAB (cuenta CFD)",
     "risk_per_trade_pct": "§12 regla 2 (techo <= 1 %) y §4.6 (R = 0,5/1,0/1,5 %)",
     "ev_threshold_pct": "§12 regla 9 («p. ej. > 2c»): aqui, 2 x el coste declarado de la tabla",
     "max_daily_loss_pct": "§12 regla 3 (perdida diaria maxima)",

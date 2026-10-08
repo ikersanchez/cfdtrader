@@ -427,7 +427,7 @@ def test_a2_all_resolved_parameters_are_inside_the_grid(report: gate_sweep.GateS
     """A2: ningun parametro fuera de la rejilla: los cinco fijos son los declarados."""
     fixed = as_map(at(report.payload, "grid", "fixed"))
     assert fixed == {
-        "broker": "escenario:sin-decidir-#59",
+        "broker": "Revolut (Revolut Securities Europe UAB), cuenta CFD",
         "max_daily_loss_pct": "2",
         "max_weekly_loss_pct": "5",
         "max_monthly_loss_pct": "10",
@@ -1011,7 +1011,10 @@ def test_support_declared_grid_literals() -> None:
     """La rejilla del modulo y la tabla del test son la misma, literal a literal."""
     assert [cell.cell_id for cell in GRID_CELLS] == [row[0] for row in DECLARED_GRID]
     assert isinstance(GRID_CELLS[0], GridCell)
-    assert gate_sweep.FIXED_PARAMETERS["broker"] == "escenario:sin-decidir-#59"
+    assert (
+        gate_sweep.FIXED_PARAMETERS["broker"]
+        == "Revolut (Revolut Securities Europe UAB), cuenta CFD"
+    )
 
 
 def test_support_sequence_helpers() -> None:

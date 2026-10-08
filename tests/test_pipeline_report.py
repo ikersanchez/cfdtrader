@@ -706,7 +706,10 @@ def test_a4_escenario_declares_the_eleven_fields(real_report: PipelineReport) ->
     params = real_report.arm(ARM_ESCENARIO).params
     assert all(getattr(params, name) is not None for name in declared)
     assert params.authorized_tiers == ("A",)
-    assert params.broker == "escenario:sin-decidir-#59"
+    assert params.broker == "Revolut (Revolut Securities Europe UAB), cuenta CFD"
+    # #138: S1 se usa **hoy** (`run_daily`, `paper_trading`), asi que su broker no puede
+    # declarar abierta una decision que #59 cerro.
+    assert "sin-decidir" not in params.broker
 
 
 @needs_store
