@@ -105,10 +105,35 @@ OUT_OF_DELIVERY: Final[tuple[str, ...]] = (
     "_docs/plan.md",
 )
 
+#: Las dos familias que #24/#25/#26 registraron: sus entradas son las **congeladas** de esta tarea.
+FROZEN_FAMILIES: Final[tuple[str, ...]] = (BASELINE_VARIANT_ID, LIGHTGBM_VARIANT_ID)
+
+
+def _frozen_run_directories() -> tuple[str, ...]:
+    """Los directorios del registro del repositorio que son de #24/#25/#26 (A4).
+
+    Se identifican por su `variant_id`, **no** por «lo que haya en `runs/`»: el barrido de esta
+    tarea registra sus diez entradas ahi (es su comportamiento normal), y la guardia de A4 tiene
+    que seguir apuntando a las cuatro de las familias anteriores.
+    """
+    if not REPO_RUNS.is_dir():
+        return ()
+    out: list[str] = []
+    for child in sorted(REPO_RUNS.iterdir()):
+        if not child.is_dir():
+            continue
+        document = cast(
+            "dict[str, object]",
+            json.loads((child / "config.json").read_text(encoding="utf-8")),
+        )
+        config = cast("Mapping[str, object]", document["config"])
+        if config.get("variant_id") in FROZEN_FAMILIES:
+            out.append(child.name)
+    return tuple(out)
+
+
 #: Los cuatro directorios que #24/#25/#26 registraron: se copian y se huellan (A4).
-FROZEN_RUNS: Final[tuple[str, ...]] = tuple(
-    sorted(path.name for path in REPO_RUNS.iterdir() if path.is_dir())
-)
+FROZEN_RUNS: Final[tuple[str, ...]] = _frozen_run_directories()
 
 needs_store = pytest.mark.skipif(
     not (REAL_DATA / "derived" / "labels").exists(),
@@ -122,15 +147,13 @@ def _skip_without_store() -> None:
         pytest.skip("el almacen real no esta en el arbol: el CI corre sin data/")
 
 
-def _copy_frozen_runs(destination: Path) -> tuple[str, ...]:
-    """Copia al `destination` las cuatro entradas del registro de #24/#25/#26 (A4)."""
+def _copy_frozen_runs(destination: Path, digests: tuple[str, ...] | None = None) -> tuple[str, ...]:
+    """Copia al `destination` las entradas **congeladas** de #24/#25/#26, y solo esas (A4)."""
     destination.mkdir(parents=True, exist_ok=True)
     copied: list[str] = []
-    for child in sorted(REPO_RUNS.iterdir()):
-        if not child.is_dir():
-            continue
-        shutil.copytree(child, destination / child.name, dirs_exist_ok=True)
-        copied.append(child.name)
+    for digest in digests if digests is not None else FROZEN_RUNS:
+        shutil.copytree(REPO_RUNS / digest, destination / digest, dirs_exist_ok=True)
+        copied.append(digest)
     return tuple(copied)
 
 
