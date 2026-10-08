@@ -55,12 +55,13 @@ FROZEN: Final[set[str]] = {
     # #73 retira `analysis/feature_frame.py` (en sus dos formas de ruta): el productor real de
     # `derived.features_daily` expone los frames **por familia** sobre el mismo adaptador, el
     # mismo criterio que #108 aplico a `drift.py`.
+    # #82 retira `models/baseline.py` (en sus dos formas de ruta): el argumento aditivo de
+    # `design_frame` —que features entran— es lo que hace medible el subconjunto de features del
+    # barrido pre-registrado, el mismo criterio que #108/#73 aplicaron a los suyos.
     "backtest/baselines.py",
     "backtest/metrics.py",
-    "models/baseline.py",
     "src/cfdtrader/backtest/baselines.py",
     "src/cfdtrader/backtest/metrics.py",
-    "src/cfdtrader/models/baseline.py",
 }
 
 #: Nombres que el módulo debe **importar** de `drift` y no redefinir (criterio 1).

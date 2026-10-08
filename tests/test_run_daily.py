@@ -146,9 +146,11 @@ FROZEN: Final[frozenset[str]] = frozenset(
         # y #131 aplicaron al gate, al calendario y al motor de costes.
         # #108 retira `analysis/backtest_report.py` y `models/labels.py`: el barrido de punteros
         # `#50 -> #107` toca su prosa y sus punteros, el mismo criterio que #113/#124/#131.
-        "src/cfdtrader/models/baseline.py",
+        # #82 retira `models/baseline.py` y `models/lightgbm_model.py` de este conjunto: el
+        # argumento aditivo de `design_frame` y la lectura de esa lista por el modelo son lo que
+        # hace medible el subconjunto de features del barrido pre-registrado (#82), el mismo
+        # criterio que #113/#124/#131/#136/#73/#139 aplicaron a los suyos.
         "src/cfdtrader/models/calibration.py",
-        "src/cfdtrader/models/lightgbm_model.py",
         # #131 retira `backtest/costs.py` de este conjunto: cablear el `R` decidido en #60 en el
         # motor de costes —para que el supuesto de *slippage* tenga numero y el gate pueda
         # verificar la regla 9 sobre el coste declarado (`plan.md` §19.12)— es exactamente ese

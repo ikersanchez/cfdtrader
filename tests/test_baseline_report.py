@@ -775,11 +775,11 @@ WRITTEN: Final[tuple[str, ...]] = (
 #: Ficheros **congelados** por #97 (C15): el diff no puede tocarlos.
 FROZEN: Final[tuple[str, ...]] = (
     "src/cfdtrader/backtest/baselines.py",
-    "src/cfdtrader/models/baseline.py",
-    # #73 retira `analysis/feature_frame.py`: el productor real de `derived.features_daily`
-    # expone los frames **por familia** sobre el mismo adaptador, el mismo criterio que
-    # #113/#124/#131/#136 aplicaron al gate, al calendario, al motor de costes y a la
-    # comparacion de modelos.
+    # #82 retira `models/baseline.py` de este conjunto: el argumento **aditivo** de
+    # `design_frame` —que features entran, con las 10 de control por defecto— es lo que hace
+    # medible el subconjunto de features del barrido pre-registrado (#82), el mismo criterio que
+    # #113/#124/#131/#136/#73 aplicaron al gate, al calendario, al motor de costes, al guardian
+    # de reconstruccion y al productor de `derived.features_daily`.
 )
 
 #: Los **8** hiperparametros del estimador de #24 (C2); #25 anade las 3 de calibracion.

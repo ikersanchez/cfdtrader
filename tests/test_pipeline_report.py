@@ -129,13 +129,11 @@ WRITTEN: Final[frozenset[str]] = frozenset(
 )
 #: Los ficheros que la entrega de #80 **si** toca (motor, gate) se han retirado de
 #: ``FROZEN``: este modulo no los toca, pero la entrega transversal de #80 si (#80 A6).
-FROZEN: Final[tuple[str, ...]] = (
-    "src/cfdtrader/backtest/baselines.py",
-    "src/cfdtrader/models/baseline.py",
-    # #73 retira `analysis/feature_frame.py`: el productor real de `derived.features_daily`
-    # expone los frames **por familia** sobre el mismo adaptador, el mismo criterio que
-    # #113/#124/#131/#136/#108 aplicaron a los suyos.
-)
+#: #82 retira `models/baseline.py`: el argumento aditivo de `design_frame` —que features
+#: entran, con las 10 de control por defecto— es lo que hace medible el subconjunto de features
+#: del barrido pre-registrado, el mismo criterio que #113/#124/#131/#136/#73 aplicaron a los
+#: suyos.
+FROZEN: Final[tuple[str, ...]] = ("src/cfdtrader/backtest/baselines.py",)
 
 #: Modulos de red que el informe no puede importar (A1).
 FORBIDDEN_IMPORTS: Final[tuple[str, ...]] = (

@@ -195,8 +195,10 @@ class DesignFrame:
 
     ``n_shifted_rows`` son las sesiones etiquetadas que el corrimiento **pierde** (la primera
     sesion del diario no tiene anterior): se publican, nunca se rellenan. ``n_nulls_in_features``
-    son los nulos de las 10 columnas de diseno: un nulo aqui se publica y se rechaza antes de
-    entrenar, no se imputa.
+    son los nulos de las columnas de diseno: un nulo aqui se publica y se rechaza antes de
+    entrenar, no se imputa. ``features`` es la lista **que este frame declara**, en su orden: la
+    consumen :func:`_matrix` y los modelos, de modo que un frame construido con un subconjunto
+    del catalogo (el barrido de #82) no necesita que nadie le repita la lista.
     """
 
     frame: pl.DataFrame
@@ -205,6 +207,7 @@ class DesignFrame:
     n_shifted_rows: int
     n_nulls_in_features: int
     design_lag_sessions: int
+    features: tuple[str, ...] = BASELINE_FEATURES
 
     @property
     def sessions(self) -> tuple[date, ...]:
@@ -243,17 +246,29 @@ def _require_columns(frame: pl.DataFrame, *, columns: Sequence[str], what: str) 
     if missing:
         raise UnknownFeatureError(
             f"{what} no trae las columnas {missing}: las features declaradas son "
-            f"{list(BASELINE_FEATURES)} y no se sustituyen por otras (A4)"
+            f"{list(columns)} y no se sustituyen por otras (A4)"
         )
 
 
-def design_frame(features: pl.DataFrame, *, labels: pl.DataFrame) -> DesignFrame:
+def design_frame(
+    features: pl.DataFrame,
+    *,
+    labels: pl.DataFrame,
+    selected: Sequence[str] = BASELINE_FEATURES,
+) -> DesignFrame:
     """Construye la matriz de diseno desde el frame de features y las etiquetas (A2, A3).
 
     La fila de diseno de la sesion `t` es la fila de features de la **sesion anterior del
-    diario** (:data:`DESIGN_LAG_SESSIONS` = 1): una sola regla, aplicada a las 53 columnas, sin
-    filtrar por ``required_as_of``. La sesion de origen viaja en
+    diario** (:data:`DESIGN_LAG_SESSIONS` = 1): una sola regla, aplicada a **todas** las columnas
+    que entran, sin filtrar por ``required_as_of``. La sesion de origen viaja en
     :data:`DESIGN_SESSION_COLUMN` para poder auditarla.
+
+    ``selected`` declara **que** columnas entran y en que orden; por defecto, las 10 de
+    :data:`BASELINE_FEATURES` (el contrato de #24). Un subconjunto del catalogo de #73 cambia las
+    columnas y **nada mas**: la regla de corrimiento, el conteo de nulos y el de sesiones valen
+    igual para las 10 y para las 52, y la lista elegida viaja en :attr:`DesignFrame.features`
+    (el barrido de #82 la consume desde ahi). Un nombre que el frame no traiga es
+    :class:`UnknownFeatureError`, nunca una columna de ceros.
 
     ``labels`` trae ``session`` y ``ret_long``; el objetivo es ``y = 1{ret_long > 0}`` (A3).
     Las sesiones que no estan en las etiquetas se quedan fuera del diseno, y las etiquetas que
@@ -261,7 +276,13 @@ def design_frame(features: pl.DataFrame, *, labels: pl.DataFrame) -> DesignFrame
     """
     feature_frame = _require_frame(features, what="features")
     label_frame = _require_frame(labels, what="labels")
-    _require_columns(feature_frame, columns=("session", *BASELINE_FEATURES), what="features")
+    columns = tuple(selected)
+    if not columns:
+        raise UnknownFeatureError(
+            "la lista de features seleccionadas viene vacia: un diseno sin columnas no es una "
+            "matriz, y no se rellena con las 10 de control por defecto (A4)"
+        )
+    _require_columns(feature_frame, columns=("session", *columns), what="features")
     _require_columns(label_frame, columns=("session", "ret_long"), what="labels")
 
     ordered = feature_frame.sort("session")
@@ -269,7 +290,7 @@ def design_frame(features: pl.DataFrame, *, labels: pl.DataFrame) -> DesignFrame
         [
             pl.col("session"),
             pl.col("session").shift(DESIGN_LAG_SESSIONS).alias(DESIGN_SESSION_COLUMN),
-            *[pl.col(name).shift(DESIGN_LAG_SESSIONS) for name in BASELINE_FEATURES],
+            *[pl.col(name).shift(DESIGN_LAG_SESSIONS) for name in columns],
         ]
     )
     joined = shifted.join(
@@ -279,7 +300,7 @@ def design_frame(features: pl.DataFrame, *, labels: pl.DataFrame) -> DesignFrame
         (pl.col("ret_long") > 0).cast(pl.Int64).alias("y"),
     ).sort("session")
 
-    nulls = sum(joined.get_column(name).null_count() for name in BASELINE_FEATURES)
+    nulls = sum(joined.get_column(name).null_count() for name in columns)
     return DesignFrame(
         frame=joined,
         n_sessions=joined.height,
@@ -287,6 +308,7 @@ def design_frame(features: pl.DataFrame, *, labels: pl.DataFrame) -> DesignFrame
         n_shifted_rows=label_frame.height - joined.height,
         n_nulls_in_features=nulls,
         design_lag_sessions=DESIGN_LAG_SESSIONS,
+        features=columns,
     )
 
 
@@ -387,22 +409,29 @@ class BaselineModel:
         }
 
 
-def _matrix(frame: pl.DataFrame) -> NDArray[np.float64]:
-    """Las 10 columnas declaradas como matriz ``(n, 10)`` de ``float64``, en su orden (A4)."""
-    missing = [name for name in BASELINE_FEATURES if name not in frame.columns]
+def _matrix(frame: pl.DataFrame, *, features: Sequence[str] | None = None) -> NDArray[np.float64]:
+    """Las columnas declaradas como matriz ``(n, k)`` de ``float64``, en su orden (A4).
+
+    ``features`` es la lista que declara el frame de diseno (:attr:`DesignFrame.features`); sin
+    ella, las 10 de :data:`BASELINE_FEATURES`, que es el contrato de #24 y lo que ven los folds
+    del modelo lineal y de #26. Un subconjunto del catalogo (el barrido de #82) llega **por ese
+    argumento**, nunca por reordenar ni renombrar columnas.
+    """
+    columns = tuple(BASELINE_FEATURES if features is None else features)
+    missing = [name for name in columns if name not in frame.columns]
     if missing:
         raise UnknownFeatureError(
-            f"el frame de diseno no trae {missing}: el modelo solo acepta las 10 features "
-            f"declaradas, en su orden (A4)"
+            f"el frame de diseno no trae {missing}: el modelo solo acepta las {len(columns)} "
+            f"features declaradas ({list(columns)}), en su orden (A4)"
         )
-    for name in BASELINE_FEATURES:
+    for name in columns:
         dtype = str(frame.get_column(name).dtype)
         if dtype not in _FLOAT_DTYPE:
             raise InvalidDesignFrameError(
                 f"la columna '{name}' tiene tipo {dtype}: el modelo solo acepta columnas "
                 "numericas (los booleanos de polars se convierten a 0/1 float antes)"
             )
-    selected = frame.select(list(BASELINE_FEATURES)).cast(pl.Float64)
+    selected = frame.select(list(columns)).cast(pl.Float64)
     return cast("NDArray[np.float64]", selected.to_numpy())
 
 
@@ -454,7 +483,7 @@ def fit_baseline(
     assignments = tuple(splits)
     if not assignments:
         raise InvalidDesignFrameError("no hay folds que ajustar: el plan de #12 no vino vacio")
-    matrix = _matrix(design.frame)
+    matrix = _matrix(design.frame, features=design.features)
     label = _outcomes(design.frame)
     if matrix.shape[0] != label.shape[0]:
         raise InvalidDesignFrameError(
@@ -493,7 +522,7 @@ def fit_baseline(
             )
         )
     return BaselineModel(
-        features=BASELINE_FEATURES,
+        features=design.features,
         hyperparameters=parameters,
         seed=seed,
         folds=tuple(folds),
@@ -699,7 +728,7 @@ def probabilities(
     **no** vio esas sesiones, y una sesion que no cae en ningun test no se predice con un
     modelo que la vio en su train. ``None`` se publica como tal, nunca como ``0``.
     """
-    matrix = _matrix(frame)
+    matrix = _matrix(frame, features=model.features)
     out: list[float | None] = [None] * matrix.shape[0]
     for fold in model.folds:
         positions = list(fold.test_positions)
@@ -720,7 +749,7 @@ def calibrated_probabilities(
     cruda **tal cual**, y una sesion que no cae en ningun *test* sigue siendo ``None``: los
     estados no medibles se publican, no se degradan a un numero.
     """
-    matrix = _matrix(frame)
+    matrix = _matrix(frame, features=model.features)
     out: list[float | None] = [None] * matrix.shape[0]
     for fold in model.folds:
         positions = list(fold.test_positions)

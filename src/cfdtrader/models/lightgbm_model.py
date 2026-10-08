@@ -2,22 +2,29 @@
 
 Segunda **familia** del modelo supervisado: un ``LGBMClassifier`` con
 ``min_child_samples`` alto (``LIGHTGBM_HYPERPARAMETERS``), ajustado fold a fold sobre la
-**misma** matriz de diseno de #24 y calibrado por el **mismo** camino de
+**matriz de diseno de #24** y calibrado por el **mismo** camino de
 ``models.calibration`` (#25). Responde la misma pregunta —«la sesion `t` cierra por encima
 de su apertura?»— para la direccion **larga unica**.
 
 Este modulo es **puro** (A1): del frame etiquetado a las predicciones, sin almacen y sin
 capa de informe. No importa ``cfdtrader.data``, ``cfdtrader.analysis``, ``cfdtrader.backtest``
 ni ``duckdb``; de ``cfdtrader.models`` reutiliza los **contratos compartidos** de
-``models.baseline`` (``DesignFrame``, ``SplitAssignment``, la matriz de las 10 features y su
+``models.baseline`` (``DesignFrame``, ``SplitAssignment``, la matriz de features y su
 validacion) y los helpers de ``models.calibration``. El ``model_sha256`` y el ``model.json``
 los escribe quien puede importar el canonicamente hasheable de #13
 (``analysis.model_comparison``).
 
-Hiperparametros **fijos** (A4), sin busqueda ni barrido: ``LIGHTGBM_HYPERPARAMETERS`` es la
+Que features entran lo declara el **propio** frame de diseno (``DesignFrame.features``, el
+argumento aditivo de #82): con las 10 de ``BASELINE_FEATURES`` —el contrato de #24— el modulo
+se comporta exactamente como antes, y con un subconjunto del catalogo de #73 ajusta ese
+subconjunto sin que nadie reordene ni renombre columnas.
+
+Hiperparametros **fijos** (A4), sin ajuste en este modulo: ``LIGHTGBM_HYPERPARAMETERS`` es la
 constante declarada, viaja a la configuracion registrada de #16 y por tanto al
-``run_sha256``. Otra variante exige una entrada nueva en ``runs/`` con otro ``variant_id``
-(la busqueda es #82).
+``run_sha256``. Una variante con otros hiperparametros se **pasa por argumento**
+(``fit_lightgbm(..., hyperparameters=...)``) y se registra como otro experimento: el barrido
+declarado, con su espacio y su presupuesto pre-registrados, vive en #82
+(``analysis.hyperparameter_search``), y es quien itera; aqui no hay ninguna rejilla.
 
 Determinismo (A5): el ajuste esta **pinnado** (``deterministic=True``,
 ``force_row_wise=True``, ``num_threads=1``, ``random_state`` fijo) y el modulo lo **mide**:
@@ -41,7 +48,6 @@ from lightgbm import Booster, LGBMClassifier
 from numpy.typing import NDArray
 
 from cfdtrader.models.baseline import (
-    BASELINE_FEATURES,
     DECISION_THRESHOLD,
     DESIGN_LAG_SESSIONS,
     SEED,
@@ -79,8 +85,9 @@ __all__ = [
 #: La familia es **reducida a proposito**: ``num_leaves = 4`` y ``max_depth = 2`` dan arboles
 #: de profundidad 2 (tres cortes), y ``min_child_samples = 200`` es del 7,6-9,1 % del *train*
 #: menor (2.187 sesiones): cada hoja exige una muestra grande, que es la lectura de
-#: ``tech_stack.md`` («LightGBM por ``min_child_samples`` alto») y el motivo de que la
-#: busqueda de hiperparametros sea **#82** y no esta tarea.
+#: ``tech_stack.md`` («LightGBM por ``min_child_samples`` alto») y el motivo de que el barrido
+#: de hiperparametros viva en otra tarea (#82) y no en esta: mover un eje exige un presupuesto
+#: declarado y una entrada nueva en `runs/`.
 #:
 #: ``deterministic = True``, ``force_row_wise = True`` y ``num_threads = 1`` son las tres
 #: condiciones del determinismo **medido** (A5): con 16 hilos el modelo cambia, con y sin
@@ -113,10 +120,11 @@ LMODEL_DOES_NOT_DO: Final[tuple[dict[str, str], ...]] = (
         "id": "no_barre_hiperparametros",
         "issue": "#82",
         "statement": (
-            "los hiperparametros son **fijos** y no hay bucle de barrido: la constante "
-            "`LIGHTGBM_HYPERPARAMETERS` viaja a la configuracion y el CLI no acepta "
-            "banderas que la muevan. La busqueda de hiperparametros y de subconjunto de "
-            "features es #82"
+            "los hiperparametros son **fijos** aqui y el modulo no itera ninguna rejilla: la "
+            "constante `LIGHTGBM_HYPERPARAMETERS` es el valor con el que se ajusta salvo que "
+            "el llamante pase `hyperparameters`, y el CLI no acepta banderas que la muevan. El "
+            "barrido declarado de #82 (espacio y presupuesto pre-registrados) vive en "
+            "`analysis.hyperparameter_search` y es quien itera"
         ),
     },
     {
@@ -245,16 +253,16 @@ class LightGBMModel:
         }
 
 
-def _require_design_columns(frame: pl.DataFrame) -> None:
-    """Las 10 columnas declaradas tienen que estar y ser numericas (el contrato de #24)."""
-    missing = sorted(name for name in BASELINE_FEATURES if name not in frame.columns)
+def _require_design_columns(frame: pl.DataFrame, *, features: Sequence[str]) -> None:
+    """Las columnas declaradas por el frame de diseno tienen que estar y ser numericas."""
+    missing = sorted(name for name in features if name not in frame.columns)
     if missing:
         raise InvalidLightGBMInputError(
-            f"el frame de diseno no trae {missing}: la familia LightGBM usa **las mismas** 10 "
-            f"features declaradas ({list(BASELINE_FEATURES)}) y no se sustituyen por otras (A4)"
+            f"el frame de diseno no trae {missing}: la familia LightGBM usa **las mismas** "
+            f"features que declara el diseno ({list(features)}) y no se sustituyen por otras (A4)"
         )
     wrong = sorted(
-        name for name in BASELINE_FEATURES if str(frame.get_column(name).dtype) not in _FLOAT_DTYPE
+        name for name in features if str(frame.get_column(name).dtype) not in _FLOAT_DTYPE
     )
     if wrong:
         raise InvalidLightGBMInputError(
@@ -400,8 +408,8 @@ def fit_lightgbm(
     assignments = tuple(splits)
     if not assignments:
         raise InvalidLightGBMInputError("no hay folds que ajustar: el plan de #12 no vino vacio")
-    _require_design_columns(design.frame)
-    matrix = _matrix(design.frame)
+    _require_design_columns(design.frame, features=design.features)
+    matrix = _matrix(design.frame, features=design.features)
     label = _outcomes(design.frame)
     horizon = (
         (0,) * matrix.shape[0]
@@ -440,7 +448,7 @@ def fit_lightgbm(
             )
         )
     return LightGBMModel(
-        features=BASELINE_FEATURES,
+        features=design.features,
         hyperparameters=parameters,
         seed=seed,
         folds=tuple(folds),
@@ -456,8 +464,8 @@ def probabilities(
     Fuera de todo *test* no hay prediccion honesta: ``None`` se publica como tal, nunca
     como ``0`` (el contrato de #24, reutilizado tal cual).
     """
-    _require_design_columns(frame)
-    size = int(_matrix(frame).shape[0])
+    _require_design_columns(frame, features=model.features)
+    size = int(_matrix(frame, features=model.features).shape[0])
     out: list[float | None] = [None] * size
     for fold in model.folds:
         for position, value in zip(fold.test_positions, fold.test_probabilities, strict=True):
@@ -474,8 +482,8 @@ def calibrated_probabilities(
     Es la que decide. Un fold sin calibrador publicado (``method: "none"``) pasa su
     probabilidad cruda, exactamente como ``models.baseline``.
     """
-    _require_design_columns(frame)
-    size = int(_matrix(frame).shape[0])
+    _require_design_columns(frame, features=model.features)
+    size = int(_matrix(frame, features=model.features).shape[0])
     out: list[float | None] = [None] * size
     for fold in model.folds:
         calibrated = fold.calibration.calibrate(list(fold.test_scores))

@@ -77,11 +77,11 @@ BASE_COMMIT: Final[str] = "9cb5068"
 
 #: Ficheros que la entrega **no** puede tocar (A1, A12). #80 retira `engine.py` y `costs.py`:
 #: la entrega transversal de #80 **si** toca el motor (es su arreglo) y la guardia de `git diff`
-#: se reduce a los modulos que siguen congelados (A8).
-UNTOUCHABLE: Final[tuple[str, ...]] = (
-    "src/cfdtrader/models/baseline.py",
-    "src/cfdtrader/models/calibration.py",
-)
+#: se reduce a los modulos que siguen congelados (A8). #82 retira `models/baseline.py`: el
+#: argumento aditivo de `design_frame` —que features entran, con las 10 de control por defecto—
+#: es lo que hace medible el subconjunto de features del barrido pre-registrado, el mismo
+#: criterio que #113/#124/#131/#136/#73/#139 aplicaron a los suyos.
+UNTOUCHABLE: Final[tuple[str, ...]] = ("src/cfdtrader/models/calibration.py",)
 
 #: Los dos modulos nuevos y sus tests (A1, A14).
 NEW_MODULES: Final[tuple[Path, ...]] = (
