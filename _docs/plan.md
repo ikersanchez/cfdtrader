@@ -2,7 +2,7 @@
 
 | Campo | Valor |
 |---|---|
-| **Versión** | **2.24** |
+| **Versión** | **2.25** |
 | **Fecha** | 2026-10-09 |
 | **Estado** | Diseño — pendiente de ejecutar Fase 0 |
 | **Instrumento** | **SPX500:CFD**, cotizando en el horario de la sesión regular estadounidense; las horas se calculan en `America/New_York` y se presentan en `Europe/Madrid` |
@@ -1482,6 +1482,39 @@ ahora en `analysis/portfolio_rules.py`.
   tres reglas de §12 que hasta hoy no lo eran. `§11.6` **no** se altera, el carril B sigue bloqueado
   (`phase2_ready = false`) y la ejecución sigue siendo **manual**. La lectura de cartera del *backtest*
   sesión a sesión sigue siendo de **#28**, que ahora tiene la pieza que le faltaba.
+
+### 19.21 El *bracket* de la regla 16 y el registro de la operación real — #84 (2026-10-09)
+
+✅ **Ejecutado (2026-10-09, tarea #84).** La regla 16 de §12 exigía una orden *bracket* (objetivo y
+stop) colocado **inmediatamente** al entrar y el cierre obligatorio a las 16:00 ET, con el bróker ya
+declarado (#59, Revolut). Faltaba el mecanismo: **cómo** se compone esa orden con el bróker real,
+**qué** se hace si no la acepta y **dónde** se registra lo que pasó. Vive en `delivery/bracket.py`.
+
+- **El billete de ejecución.** Con la geometría que publica el gate —dirección, nocional, `stop_pct` y
+  `target_pct`— el billete da los **precios** (con el relleno de la subasta), el **orden exacto de los
+  pasos** con su ancla ET (informe 09:00, *deadline* 09:20–09:30, entrada 09:30, *bracket* inmediato,
+  verificación manual 15:45, cierre 16:00, registro 16:15) y el **protocolo de fallo**. Sin objetivo
+  declarado **no hay billete**: la regla 16 es «las dos o ninguna» y el protocolo es **no operar**.
+- **Una sola aritmética de precios.** La conversión de `%` a precio es la del gate
+  (`to_engine_decision(entry_px=...)`, A23) y el billete existe sin un `GateOutput` porque el operador
+  lo saca de la fila del diario; para que la repetición no derive en dos aritméticas hay un test que la
+  **coteja** contra la del gate (`tests/test_bracket.py`). Si #27 cambia su convención, ese test cae.
+- **El protocolo de fallo, declarado y sin silencios.** `broker_rechaza_el_bracket` ⇒ **no se opera**
+  (y no se escribe ninguna fila: no hubo operación); `una_sola_pata` ⇒ **cerrar de inmediato** y
+  registrarlo; `sin_relleno` ⇒ no se opera; `paso_la_noche` ⇒ cerrar al abrir y registrarlo con
+  `closed_by_close = false`; `salto_el_bracket` ⇒ registro con su motivo de salida.
+- **El registro real en `journal.trades` (§12.5).** Las **diez** columnas del esquema cerrado, con la
+  fila escribiéndose **una sola vez** por sesión (el diario no sobrescribe, §19.1) y un `pnl_pct`
+  **neto y en `%` del nocional** —el recorrido de precio con signo menos el coste efectivo—, que es
+  exactamente la magnitud que la valla de cartera de §19.20 lee. El incumplimiento de las 16:00 ET es
+  un dato, no una nota: `closed_by_close = false` con la financiación dentro del coste.
+- **Sin alarma, por diseño.** La verificación de las 15:45 ET sigue siendo **manual y del operador**:
+  el billete lo dice en voz alta. No se añade *scheduler*, ni notificación, ni llamada al bróker.
+- **Valla de honestidad (se mantiene).** No hay API del bróker en el proyecto: este módulo compone el
+  billete y registra lo que el operador lee; **no** coloca nada, **no** decide la geometría y **no**
+  mide el *slippage* (#62). `§11.6` **no** se altera, el carril B sigue bloqueado
+  (`phase2_ready = false`) y la ejecución sigue siendo **manual**. El primer uso con dinero real es
+  **#47**, que ahora tiene el mecanismo y el sitio donde escribir el resultado.
 
 ---
 

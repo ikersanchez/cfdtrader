@@ -218,6 +218,41 @@ uv run python -m cfdtrader.analysis.portfolio_rules \
 > apalancamiento de cada operación (§19.20). Sin operaciones cerradas el estado es `sin_historial` y
 > las tres salen `null`, nunca `0`.
 
+## 3 bis. Ejecución: el *bracket* y el registro real (#84)
+
+Solo si la pista es **direccional**. El billete de ejecución y su protocolo de fallo salen del
+módulo `delivery/bracket.py`:
+
+```bash
+# 09:30 ET, con el relleno de la subasta delante (los pasos y los precios del billete):
+uv run python -m cfdtrader.delivery.bracket \
+    --journal-root journal \
+    --session "$(date -u +%Y-%m-%d)" \
+    --entry-px 7839.0
+
+# 16:15 ET, con los datos REALES de la sesión (escribe la fila de `journal.trades`):
+uv run python -m cfdtrader.delivery.bracket \
+    --journal-root journal \
+    --session "$(date -u +%Y-%m-%d)" \
+    --record --entry-px 7839.0 --exit-px 7861.5 \
+    --exit-reason close --costs-pct 0.0042 \
+    --entry-time "$(date -u +%Y-%m-%d)T13:30:00+00:00" \
+    --exit-time "$(date -u +%Y-%m-%d)T20:00:00+00:00"
+```
+
+> La entrada es el **relleno de la subasta** y no se inventa: sin `--entry-px`, el billete publica
+> los `%` y la instrucción de multiplicarlos por el relleno. `--overnight` marca el incumplimiento de
+> las 16:00 ET (`closed_by_close = false`, con la financiación en `--costs-pct`). El motivo de salida
+> es del vocabulario `target`/`stop`/`close`, el mismo que #45 usa al recomputar.
+>
+> **Las dos patas o ninguna.** Si el bróker no acepta el *bracket*, **no se opera** (y no se escribe
+> ninguna fila); si acepta solo una, se **cierra de inmediato** y se registra el cierre real. El
+> protocolo entero, con lo que se registra en cada caso, lo imprime el propio billete.
+
+La fila escrita es la que lee la valla de cartera de §3 (`#83`): `pnl_pct` va **neto y en % del
+nocional** (el recorrido de precio con signo menos el coste efectivo), y es #83 quien lo convierte a
+`%` del capital con el apalancamiento.
+
 ## 4. Puerta de la Fase 4 — el veredicto del *paper*
 
 ```bash
