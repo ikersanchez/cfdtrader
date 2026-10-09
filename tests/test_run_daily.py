@@ -44,7 +44,7 @@ from cfdtrader.agents.event_calendar import (
     calendar_signal,
 )
 from cfdtrader.agents.news import PROMPT_TEMPLATE_NAME
-from cfdtrader.analysis import experiment_log, model_comparison
+from cfdtrader.analysis import experiment_log, model_comparison, portfolio_rules
 from cfdtrader.analysis.backtest_report import NOTIONAL_USD
 from cfdtrader.analysis.model_comparison import BASELINE_VARIANT_ID, VARIANT_ID
 from cfdtrader.analysis.pipeline_report import (
@@ -70,7 +70,7 @@ from cfdtrader.data.sources.news import Headline
 from cfdtrader.data.store import Store
 from cfdtrader.decision.gate import GateOutput, GateStatus, evaluate_gate, gate_sha256
 from cfdtrader.decision.overlay import OverlayDecision, OverlayState, disabled_overlay
-from cfdtrader.delivery import run_daily
+from cfdtrader.delivery import bracket, production, run_daily
 from cfdtrader.features import store as feature_store
 from cfdtrader.features.store import FEATURE_VERSION_PREFIX
 from cfdtrader.journal.decision_log import Journal, build_decision, read_decision
@@ -3379,3 +3379,72 @@ def test_83_a_closed_trade_after_the_session_is_not_used(
     captured = capsys.readouterr()
     assert "bloqueo: 4:" not in captured.out
     assert "bloqueo: 3:" not in captured.out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #47 · El dia completo ensayado: la pista, la tarjeta, el billete, el registro y la valla
+# ─────────────────────────────────────────────────────────────────────────────
+def test_47_the_whole_operating_day_is_rehearsed(
+    store_root: Path, runs_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Artefacto de aceptacion de #47: un dia entero, de la pista al veredicto de la valla.
+
+    El dia se ensaya sobre el almacen y el diario **sinteticos**: la pista (08:45), la tarjeta de
+    operacion (09:20), el billete con el relleno (09:30), el registro real del cierre (16:15) y la
+    valla de cartera leyendolo (16:30). Ninguna cifra se inventa: la geometria sale del diario y los
+    precios los declara el operador.
+    """
+    journal_root = tmp_path / "journal"
+    # 08:45 — el camino diario emite la pista y la registra.
+    assert _daily_run(store_root, runs_root, journal_root) == 0
+    capsys.readouterr()
+
+    # 09:20 — la tarjeta dice si se opera: la pista del fixture es direccional y de tier A.
+    card = production.operating_card(journal_root, NEXT_SESSION)
+    assert card.operable is True
+    assert card.direction == "short" and card.tier == "A"
+    assert card.notional_usd is not None and card.notional_usd > 0
+    assert card.ticket is not None
+
+    # 09:30 — con el relleno declarado, el billete da las dos patas (el stop, en corto, arriba).
+    stop_pct = Decimal(str(card.ticket["stop_pct"]))
+    entry_px = 5000.0
+    exit_px = entry_px * (1.0 + float(stop_pct) / 100.0)
+    billete = bracket.ticket_from_decision_row(
+        NEXT_SESSION,
+        read_decision(journal_root, NEXT_SESSION),
+        entry_px=entry_px,
+    )
+    assert billete.stop_px == pytest.approx(exit_px)
+    assert billete.target_px is not None and billete.target_px < entry_px
+
+    # 16:15 — se registra el cierre **real**: el stop salto (el peor caso de la regla 2).
+    record = bracket.ExecutionFacts(
+        session=NEXT_SESSION,
+        direction="short",
+        entry_px=entry_px,
+        exit_px=exit_px,
+        notional=card.notional_usd,
+        costs_pct=Decimal("0.0042"),
+        exit_reason="stop",
+        entry_time=datetime(2026, 9, 17, 13, 30, tzinfo=UTC),
+        exit_time=datetime(2026, 9, 17, 20, 0, tzinfo=UTC),
+        closed_by_close=True,
+    )
+    assert bracket.record_trade(journal_root, record).is_file()
+
+    # 16:30 — la valla de cartera lo ve, con la conversion a `%` del capital.
+    ledger = portfolio_rules.closed_trades_from_journal(journal_root)
+    assert ledger.skipped == ()
+    (trade,) = ledger.trades
+    assert trade.trade_date == NEXT_SESSION
+    assert trade.capital_pct < 0
+    totals = portfolio_rules.accumulate(ledger.trades, session=date(2026, 9, 18))
+    assert totals.weekly_pnl_pct == trade.capital_pct
+    verdicts = {entry["rule"]: entry for entry in portfolio_rules.assess(totals)}
+    # Un stop-out pierde el 1 % del capital (regla 2): dentro del limite semanal del 5 %.
+    assert verdicts["4"]["breached"] is False
+    assert verdicts["4"]["closed_trades"] == 1
+    # El bloqueo de la sesion siguiente cuando la perdida **si** alcanza el limite esta cubierto en
+    # `test_83_a_weekly_loss_blocks_the_session_and_is_declared`: aqui el dia cierra dentro de la
+    # valla, que es el caso normal.

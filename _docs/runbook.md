@@ -253,6 +253,30 @@ La fila escrita es la que lee la valla de cartera de §3 (`#83`): `pnl_pct` va *
 nocional** (el recorrido de precio con signo menos el coste efectivo), y es #83 quien lo convierte a
 `%` del capital con el apalancamiento.
 
+## 5. Puesta en producción con tamaño mínimo (#47)
+
+La tarjeta de operación de un día dice **si se opera** y con qué geometría, leyendo la pista del
+diario (no inventa nada: sin fila, `nothing`, un "no se" o un tier B/C ⇒ **no operar**, con su
+motivo):
+
+```bash
+uv run python -m cfdtrader.delivery.production \
+    --journal-root journal --session "$(date -u +%Y-%m-%d)"
+```
+
+**Tamaño mínimo.** El nocional que publica el gate es un **techo** (1 % del capital en el peor caso,
+regla 2), nunca un objetivo: se opera el **menor tamaño admisible** del bróker y **nunca** por encima
+de ese techo. Si el mínimo del bróker ya lo supera, **no se opera**.
+
+**Las reglas duras, activas.** Solo tier A (regla 10), una operación por sesión (regla 1), sin
+overnight con cierre obligatorio a las 16:00 ET (reglas 6 y 16) y la **valla de cartera** (§3: −2 %
+diario, −5 % semanal, −10 % mensual) evaluada con el P&L realizado del diario.
+
+> **Valla de honestidad.** Esto **no** es una afirmación de *edge*: la Fase 2 dio `fail` en la base
+> neta (§19.13) y el valor esperado **medido** sale negativo. Operar con dinero real, aunque sea con
+> tamaño mínimo, es una **decisión del propietario**, no una conclusión del sistema. `§11.6` no se
+> altera y el carril B sigue bloqueado.
+
 ## 4. Puerta de la Fase 4 — el veredicto del *paper*
 
 ```bash

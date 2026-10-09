@@ -75,11 +75,13 @@ __all__ = [
     "BracketTicket",
     "ExecutionFacts",
     "execution_pnl_pct",
+    "geometry_from_journal",
     "main",
     "read_trade",
     "record_trade",
     "render_ticket",
     "ticket",
+    "ticket_from_decision_row",
 ]
 
 MODULE: Final[str] = "cfdtrader.delivery.bracket"
@@ -535,12 +537,12 @@ def _dec(value: object, *, field_name: str) -> Decimal:
         raise BracketError(f"`{field_name}` no es un numero legible: {value!r}") from error
 
 
-def _geometry_from_journal(session: date, row: dict[str, object]) -> dict[str, object]:
+def geometry_from_journal(session: date, row: dict[str, object]) -> dict[str, object]:
     """La geometria declarada de la fila de ``journal.decisions``, sin inventar campos que no trae.
 
     El nocional no lo guarda el esquema de decisiones: sale del apalancamiento que el gate publico
     (`leverage_implied`) por el capital declarado, que es la misma relacion que el gate aplico
-    (`notional = capital x riesgo / stop`, #27 A5). ``--notional`` lo puede sobrescribir.
+    (`notional = capital x riesgo / stop`, #27 A5). El llamante lo puede sobrescribir.
     """
     leverage = row.get("leverage_implied")
     leverage_dec = None if leverage is None else _dec(leverage, field_name="leverage_implied")
@@ -555,6 +557,30 @@ def _geometry_from_journal(session: date, row: dict[str, object]) -> dict[str, o
         "stop_pct": _dec(row.get("stop_pct"), field_name="stop_pct"),
         "target_pct": None if target is None else _dec(target, field_name="target_pct"),
     }
+
+
+def ticket_from_decision_row(
+    session: date,
+    row: dict[str, object],
+    *,
+    entry_px: float | None = None,
+    notional_usd: Decimal | None = None,
+) -> BracketTicket:
+    """El billete desde la fila de ``journal.decisions``: el camino del **operador** (#47)."""
+    geometry = geometry_from_journal(session, row)
+    return ticket(
+        session=session,
+        direction=cast("str", geometry["direction"]) or "",
+        tier=cast("str", geometry["tier"]),
+        notional_usd=(
+            notional_usd if notional_usd is not None else cast("Decimal", geometry["notional_usd"])
+        ),
+        stop_pct=cast("Decimal", geometry["stop_pct"]),
+        target_pct=cast("Decimal | None", geometry["target_pct"]),
+        leverage_implied=cast("Decimal | None", geometry["leverage_implied"]),
+        entry_px=entry_px,
+        source=f"journal.decisions/{session.isoformat()}.json",
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -609,16 +635,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     journal_root = Path(cast("str", args.journal_root))
     try:
         row = read_decision(journal_root, session)
-        geometry = _geometry_from_journal(session, row)
+        geometry = geometry_from_journal(session, row)
     except (DecisionLogError, BracketError) as error:
         print(f"error: no se puede leer la sesion del diario: {error}", file=sys.stderr)
         return 2
+    notional_override: Decimal | None = None
     if args.notional is not None:
         try:
-            geometry["notional_usd"] = _dec(args.notional, field_name="--notional")
+            notional_override = _dec(args.notional, field_name="--notional")
         except BracketError as error:
             print(f"error: {error}", file=sys.stderr)
             return 2
+        geometry["notional_usd"] = notional_override
     direction = cast("str | None", args.direction if args.direction else geometry["direction"])
 
     if args.record:
@@ -627,16 +655,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     try:
-        billete = ticket(
-            session=session,
-            direction=cast("str", direction) or "",
-            tier=cast("str", geometry["tier"]),
-            notional_usd=cast("Decimal", geometry["notional_usd"]),
-            stop_pct=cast("Decimal", geometry["stop_pct"]),
-            target_pct=cast("Decimal | None", geometry["target_pct"]),
-            leverage_implied=cast("Decimal | None", geometry["leverage_implied"]),
+        # La direccion del billete es la de la **pista** (el override de `--direction` es para el
+        # registro real): el billete describe lo que el gate autorizo, no lo que el operador hizo.
+        billete = ticket_from_decision_row(
+            session,
+            row,
             entry_px=cast("float | None", args.entry_px),
-            source=f"journal.decisions/{session.isoformat()}.json",
+            notional_usd=notional_override,
         )
     except BracketError as error:
         print(f"no se opera: {error}", file=sys.stderr)

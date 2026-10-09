@@ -2,7 +2,7 @@
 
 | Campo | Valor |
 |---|---|
-| **Versión** | **2.25** |
+| **Versión** | **2.26** |
 | **Fecha** | 2026-10-09 |
 | **Estado** | Diseño — pendiente de ejecutar Fase 0 |
 | **Instrumento** | **SPX500:CFD**, cotizando en el horario de la sesión regular estadounidense; las horas se calculan en `America/New_York` y se presentan en `Europe/Madrid` |
@@ -1516,6 +1516,35 @@ declarado (#59, Revolut). Faltaba el mecanismo: **cómo** se compone esa orden c
   (`phase2_ready = false`) y la ejecución sigue siendo **manual**. El primer uso con dinero real es
   **#47**, que ahora tiene el mecanismo y el sitio donde escribir el resultado.
 
+### 19.22 Puesta en producción con tamaño mínimo: el procedimiento del día — #47 (2026-10-09)
+
+✅ **Ejecutado (2026-10-09, tarea #47).** El carril A llega a su último eslabón: el sistema lleva desde
+#39 registrando decisiones, desde #45 observando y desde #83/#84 con valla de cartera y mecanismo de
+*bracket*; aquí se declara **cómo se opera con dinero real** sin arriesgar más de lo que el sistema ha
+demostrado. Vive en `delivery/production.py`.
+
+- **La tarjeta de operación.** Lee la pista del diario y dice si se opera, con qué geometría y con qué
+  comandos. Se opera **sii** hay `recommendation`, dirección operada y **tier A** (regla 10); cualquier
+  otra cosa —sin fila, `nothing`, un "no se" o un tier B/C— es **no operar** con su motivo. No inventa
+  ni un precio ni un nocional.
+- **Tamaño mínimo, declarado.** El nocional del gate es un **techo** (riesgo del 1 % del capital,
+  regla 2), nunca un objetivo: se opera el **menor tamaño admisible** del bróker y **nunca** por encima
+  de ese techo; si el mínimo del bróker lo supera, **no se opera**.
+- **El día, paso a paso y con sus comandos.** Los diez pasos (§13: ingesta, pre-mercado, pista,
+  *deadline*, entrada, *bracket* inmediato, verificación manual de las 15:45, cierre obligatorio de las
+  16:00, registro de las 16:15 y valla de las 16:30) con el comando exacto de cada uno. Sin *scheduler*
+  y sin alarma: la verificación de las 15:45 la garantiza el operador, por decisión de diseño.
+- **El ensayo del día completo, como artefacto de aceptación.** `tests/test_run_daily.py` recorre el
+  día entero sobre un almacén y un diario sintéticos: la pista registrada, la tarjeta operable con su
+  billete, el cierre real registrado en `journal.trades`, la valla de #83 leyéndolo con la conversión a
+  `%` del capital y el veredicto dentro del límite. El bloqueo del día siguiente cuando la pérdida
+  **alcanza** el límite está cubierto por la prueba de #83.
+- **Valla de honestidad (se mantiene, y ahora es explícita).** La Fase 2 dio `fail` en la base neta
+  (§19.13): el valor esperado **medido** sale **negativo** y operar con tamaño mínimo **no** es una
+  conclusión del sistema sino una **decisión del propietario** para poder auditar la ejecución real.
+  `§11.6` **no** se altera, el carril B sigue bloqueado (`phase2_ready = false`) y la ejecución sigue
+  siendo **manual**.
+
 ---
 
 ## Apéndice B · Versionado de features
@@ -1572,3 +1601,4 @@ declarado (#59, Revolut). Faltaba el mecanismo: **cómo** se compone esa orden c
 | 2026-10-09 | **2.22** | 🚫 **§19.18 (#107): el `SPX500:CFD` no se adquiere — el proxy declarado es la ruta definitiva.** El propietario resuelve **#107** (seguimiento de #50) por su criterio de cierre **(b)**: **no** se adquiere el intradía ni el `bid`/`ask` reales del CFD y el límite queda **aceptado y declarado**. La **ruta 3 — proxy declarado** (`^GSPC` 5 min + `open` diario, `_docs/data_sources.md`) pasa de **provisional** a **definitiva**; el **pliego de adquisición** se descarta (no en espera) y no nace la tarea de ingeniería que cablearía el dato. **No** cambia `phase1_ready` (`false`, `cfd_source_missing`), **no** se registra ningún proxy como cotización del CFD y **§11.6 no se altera** (carril B bloqueado, `phase2_ready = false`). No decide §11 bis **3** (#57), **#62** ni **#51**. Cabecera a 2.22 | Cerrar una decisión abierta del propietario por su criterio (b), **declarando** el límite en vez de dejarlo provisional: el único cambio de veredicto que quedaba (mitad (a), apertura real del CFD) se **renuncia** de forma explícita |
 | 2026-10-09 | **2.23** | 🧾 **§19.19 (#148): el overlay no cambia la recomendación.** Se implementa la consecuencia que la puerta de Fase 3 declaró de antemano (§16/§19.8/§19.9): la recomendación que se **publica y registra** es la del **modelo** (`evaluate_gate(overlay=None)`) y el overlay se registra **aparte** como la variante «con overlay» (`journal.agent_signals`, `agent = "news"`). Antes el camino diario aplicaba el **veto** (regla 20) y el ajuste ±10 pp a la recomendación publicada. **§11.6, la puerta de Fase 3 (§19.9), la regla de Fase 4 y el backtest no cambian.** Implementación en **#149**; comparación pareada en **#150**. Cabecera a 2.23 | Alinear el camino diario con la consecuencia pre-registrada de §19.9, sin reabrir ninguna decisión ni tocar §11.6 |
 | 2026-10-09 | **2.24** | 🛡️ **§19.20 (#83): la contabilidad de cartera del *kill switch* (reglas 3, 4 y 5).** Se cierra el hueco que `gate_sweep` publicaba como parámetro inerte: el acumulado de P&L realizado vive en **`journal.trades`** (recomputado, no un contador aparte) y lo sirve `analysis/portfolio_rules.py`. Se declaran las **ventanas de calendario** (día natural ET, semana ISO-8601, mes natural), su **rearme**, el criterio **point-in-time** (`trade_date` estrictamente anterior a la sesión) y la **conversión explícita** de `%` del nocional a `%` del capital vía apalancamiento (la trampa de #80: sin ella la valla sería decorativa). El camino diario pasa ya las tres cifras al gate, con `None` mientras el diario no tenga operaciones cerradas (en observación `journal.trades` está vacío, §19.11). **No** cambia `§11.6`, ni el carril B (`phase2_ready = false`), ni el carril A: hace **verificables** tres reglas de §12. La lectura de cartera del backtest sesión a sesión sigue siendo #28. Cabecera a 2.24 | Las reglas 3, 4 y 5 se evaluaban contra un `None`: la valla de pérdida máxima diaria, semanal y mensual no podía dispararse, y el sistema iba a operar dinero real sin ella |
+| 2026-10-09 | **2.26** | 🚀 **§19.22 (#47): puesta en producción con tamaño mínimo.** Se declara el procedimiento del día en `delivery/production.py`: la **tarjeta de operación** (se opera sii hay `recommendation` direccional de **tier A**; cualquier otro caso es *no operar* con su motivo), el **tamaño mínimo** (el nocional del gate es un **techo**, nunca un objetivo), los diez pasos con su comando y el **ensayo del día completo** como artefacto de aceptación. **La valla de honestidad es ahora explícita:** la Fase 2 dio `fail` en la base neta y el valor esperado **medido** sale negativo, así que operar con dinero real es una **decisión del propietario**, no una conclusión del sistema. `§11.6` **no** se altera y el carril B sigue bloqueado. Cabecera a 2.26 | Cerrar el último eslabón del carril A sin disfrazar de *edge* una decisión del propietario: el sistema ya sabe decidir, cubrirse y registrar; faltaba declarar **cómo se opera** |

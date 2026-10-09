@@ -121,11 +121,13 @@ def test_84_the_module_exports_the_declared_contract() -> None:
         "BracketTicket",
         "ExecutionFacts",
         "execution_pnl_pct",
+        "geometry_from_journal",
         "main",
         "read_trade",
         "record_trade",
         "render_ticket",
         "ticket",
+        "ticket_from_decision_row",
     }
     assert TASK == "#84"
     assert MODULE == "cfdtrader.delivery.bracket"
