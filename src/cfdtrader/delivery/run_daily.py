@@ -85,6 +85,17 @@ evaluada, **en los cuatro estados** de §19.2 y con el ``report_text`` verbatim.
 ``git_commit`` (inyectado), ``features_version`` (``FeatureMatrix.matrix_sha256``) y
 ``model_version`` (el ``run_sha256``), mas ``prob_up_raw`` (el ``sigmoid(score)`` previo al
 calibrador) y ``prob_up_calibrated``. La salida por pantalla **no** cambia respecto a #110.
+
+El overlay del LLM no decide: §19.19 (#148)
+-------------------------------------------
+
+La recomendacion que se **publica** y se registra en ``journal.decisions`` se emite **sin** overlay
+(``evaluate_gate(..., overlay=None)``): es la consecuencia que la puerta de Fase 3 declaro de
+antemano (§19.9, *«el LLM queda solo como redactor»*). El overlay se **sigue calculando** para el
+informe y el estado ``llm_overlay``, y su efecto se conserva **aparte** como la variante «con
+overlay» en ``journal.agent_signals`` (``agent = "news"``, #149) para el registro prospectivo de la
+Fase 4. La **regla 20** (veto ⇒ ``NOTHING``) y ``apply_overlay`` (±10 pp) siguen implementados y
+probados en el gate; lo que cambia es que el camino diario **no** le pasa overlay.
 """
 
 from __future__ import annotations
@@ -197,6 +208,11 @@ MODEL_FILE: Final[str] = "model.json"
 
 #: Etiqueta del escenario declarado que cierra los parametros del gate (S1).
 SCENARIO_LABEL: Final[str] = "S1"
+
+#: Nombre del agente del overlay de noticias en `journal.agent_signals` (§12.5). Bajo §19.19
+#: (#148) la recomendacion **publicada** se emite sin overlay; su efecto se conserva en esa tabla
+#: como la variante «con overlay» (#149).
+NEWS_OVERLAY_AGENT: Final[str] = "news"
 
 #: Valla de honestidad (#109): viaja en **las cuatro** salidas, sin excepcion.
 HONESTY_FENCE: Final[tuple[str, ...]] = (
@@ -1012,6 +1028,44 @@ def _record(
     Journal(journal_root).write("decisions", payload)
 
 
+def _record_overlay_signal(
+    journal_root: Path,
+    *,
+    session: date,
+    overlay: OverlayDecision,
+    output: GateOutput,
+) -> None:
+    """Registra la variante «con overlay» en `journal.agent_signals` (#149).
+
+    Bajo §19.19 (#148) la recomendacion que se **publica** se emite **sin** overlay; esta fila
+    conserva el efecto del overlay —estado, `veto`, su motivo y la probabilidad **ajustada**— para
+    el registro prospectivo de la Fase 4 (§19.9). Solo se escribe cuando el overlay produce decision
+    (`applied` o `veto`): en `disabled_*` no hay senal que registrar y basta `llm_overlay`.
+    """
+    if overlay.state not in (OverlayState.APPLIED, OverlayState.VETO):
+        return
+    veto = overlay.state is OverlayState.VETO
+    Journal(journal_root).write(
+        "agent_signals",
+        {
+            "trade_date": session.isoformat(),
+            "agent": NEWS_OVERLAY_AGENT,
+            "prob_up": output.prob_up_calibrated,
+            "confidence": None,
+            "veto": veto,
+            "veto_reason": "; ".join(overlay.reasons) if veto else None,
+            "evidence": {
+                "state": overlay.state.value,
+                "adjustment_pct": overlay.adjustment_pct,
+                "direction": None if output.direction is None else output.direction.value,
+                "status": output.status.value,
+                "reasons": list(overlay.reasons),
+                "prompt_hash": overlay.prompt_hash,
+            },
+        },
+    )
+
+
 def _record_or_report(
     journal_root: Path,
     *,
@@ -1458,8 +1512,10 @@ def _deliver(
         # el coste por titular y lo que la deduplicacion evito (#117, §6.3.5).
         for name, value in headline_counters.items():
             observer.add_counter(name, value)
-        with observer.stage("gate"):
-            output = evaluate_gate(
+
+        def _run_gate(declared_overlay: OverlayDecision | None) -> GateOutput:
+            """El gate con ese overlay declarado; ``None`` = la recomendacion **sin** overlay."""
+            return evaluate_gate(
                 session=session,
                 as_of=as_of_et,
                 today=session,
@@ -1479,8 +1535,15 @@ def _deliver(
                 weekly_pnl_pct=None,
                 monthly_pnl_pct=None,
                 observation_sessions_remaining=guard.observation_sessions_remaining,
-                overlay=overlay,
+                overlay=declared_overlay,
             )
+
+        with observer.stage("gate"):
+            # §19.19 (#148): la recomendacion que se **publica** se emite **sin** overlay. El
+            # overlay se evalua aparte (`overlay_output`) y su efecto se conserva como la variante
+            # «con overlay» en `agent_signals` (#149) para el registro prospectivo de §19.9.
+            output = _run_gate(None)
+            overlay_output = _run_gate(overlay)
     except (MissingModelError, UnsupportedModelError) as error:
         with observer.stage("journal"):
             return _fail_with_error(
@@ -1551,6 +1614,19 @@ def _deliver(
             prompt_hashes={**prompt_hashes, **report_hashes},
             extra_blockers=earnings_blockers,
         )
+        if failure is None:
+            # §19.19 (#148): la fila publicada va **sin** overlay; aqui se conserva la variante
+            # «con overlay» (#149) para el registro prospectivo de la Fase 4 (§19.9).
+            try:
+                _record_overlay_signal(
+                    journal_root, session=session, overlay=overlay, output=overlay_output
+                )
+            except DecisionLogError as error:
+                print(
+                    f"no se puede registrar la senal del overlay en el diario: {error}",
+                    file=sys.stderr,
+                )
+                failure = 2
     if failure is not None:
         return failure
     print(text)

@@ -982,7 +982,7 @@ def _no_llm_report(monkeypatch: pytest.MonkeyPatch) -> None:
 
 #: El `_compose_report` **real**, capturado al importar y **antes** de que el fixture autouse lo
 #: sustituya por el no-op; lo usan las pruebas que necesitan la redaccion real (p. ej. #147).
-_REAL_COMPOSE_REPORT = run_daily._compose_report
+_REAL_COMPOSE_REPORT = run_daily._compose_report  # pyright: ignore[reportPrivateUsage]
 
 
 def test_a7_the_journal_records_what_the_overlay_did(
@@ -1014,9 +1014,52 @@ def test_a7_the_journal_records_what_the_overlay_did(
     row = _journal_row(journal_root)
     assert row["llm_overlay"] == "veto"
     assert row["prompt_hashes"] == {PROMPT_TEMPLATE_NAME: prompt_hash}
-    assert row["direction"] == "nothing", "un veto convierte el dia en NOTHING"
-    report = cast("str", row["report_text"])
-    assert "bloqueo: 20:overlay_veto" in report, "el veto es trazable como regla 20"
+
+
+def test_148_a_veto_no_cambia_la_recomendacion_publicada(
+    store_root: Path,
+    runs_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """§19.19 (#148): la recomendacion **publicada** se emite **sin** overlay.
+
+    El veto del overlay (rule 20) **no** fuerza `NOTHING` en la fila publicada: se conserva como la
+    variante «con overlay» en `journal.agent_signals` (`agent = "news"`, #149).
+    """
+    reason = "monetary_policy/high: una frase"
+    monkeypatch.setattr(
+        run_daily,
+        "_compute_overlay",
+        _stub_overlay(
+            OverlayDecision(
+                state=OverlayState.VETO,
+                reasons=(reason,),
+                prompt_hash="sha256:" + "d" * 64,
+            ),
+            {},
+        ),
+    )
+    journal_root = tmp_path / "journal"
+
+    assert _daily_run(store_root, runs_root, journal_root) == 0
+    capsys.readouterr()
+
+    row = _journal_row(journal_root)
+    assert row["llm_overlay"] == "veto", "el estado del overlay sigue registrandose (§19.3)"
+    assert row["direction"] in ("long", "short"), "sin overlay, el veto NO convierte el dia"
+    assert "overlay_veto" not in cast("list[str]", row["blocking_events"])
+    assert "overlay_veto" not in cast("str", row["report_text"])
+
+    signal = Journal(journal_root).read(
+        "agent_signals", {"trade_date": NEXT_SESSION.isoformat(), "agent": "news"}
+    )
+    assert signal["veto"] is True
+    assert reason in cast("str", signal["veto_reason"])
+    evidence = cast("Mapping[str, object]", signal["evidence"])
+    assert evidence["state"] == "veto"
+    assert evidence["direction"] == "nothing", "la variante con overlay si da NOTHING"
 
 
 def test_a8_without_news_the_recommendation_still_comes_out(
