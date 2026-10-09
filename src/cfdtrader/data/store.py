@@ -46,6 +46,14 @@ una capa. Un ``dataset`` es el nombre de la tabla documentada (``market_daily``,
 ``macro``…); vive como directorio, no como columna. La capa (``raw`` o
 ``derived``) se pasa como argumento aparte y no forma parte del nombre.
 
+Ese trío **puede ampliarse por dataset** con columnas de *payload* ya declaradas
+(``DatasetLayout.identity_columns``, #144): la identidad pasa a
+``(source, series_id, as_of, *esas columnas)``. Lo necesita un dataset donde el
+trío no sea único —``raw.news_headlines``, con dos titulares del mismo feed en el
+mismo instante—; el resto declara ``()`` y se comporta igual que siempre. Ampliar
+la identidad **no** cambia el esquema del Parquet ni ``layout_version``: la columna
+extra ya estaba en el *payload*.
+
 ``dataset`` y ``source`` acaban en rutas y en nombres de vista, así que se
 exigen nombres simples: ``dataset`` empieza por letra y solo usa letras, dígitos
 o ``_``; ``source`` admite además ``.`` y ``-`` (``yfinance``, ``ecb_sdw``).
@@ -242,12 +250,17 @@ _POLARS_TYPES: dict[str, pl.DataType] = {
     "datetime": pl.Datetime("us", "UTC"),
 }
 
-#: Expresión de ventana que define la **revisión vigente** de una identidad: la
-#: de mayor ``version``. La usan la lectura *point-in-time* (que además filtra
-#: por visibilidad) y las vistas SQL (que exponen el estado actual).
-_CURRENT_ROW_WINDOW = (
-    "row_number() OVER (PARTITION BY source, series_id, as_of ORDER BY version DESC)"
-)
+
+#: Expresión de ventana que define la **revisión vigente** de una identidad: la de
+#: mayor ``version``. La partición es la identidad **completa** del dataset
+#: —``(source, series_id, as_of)`` más las columnas que la amplían
+#: (:attr:`DatasetLayout.identity_columns`, #144)—, así que se construye por dataset.
+#: La usan la lectura *point-in-time*, `_latest_rows` y las vistas SQL: un solo
+#: generador para que las tres coincidan.
+def _current_row_window(identity_columns: Sequence[str] = ()) -> str:
+    """Ventana de la revisión vigente para esa identidad (ampliada o no)."""
+    keys = ", ".join(("source", "series_id", "as_of", *identity_columns))
+    return f"row_number() OVER (PARTITION BY {keys} ORDER BY version DESC)"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -391,14 +404,27 @@ def _canonical(value: object) -> str:
     return f"{type(value).__name__}:{value!r}"
 
 
-def _identity_key(source: str, series_id: str, as_of: date | datetime) -> tuple[str, str, str]:
+def _identity_columns(layer: str, dataset: str) -> tuple[str, ...]:
+    """Columnas que **amplían** la identidad del dataset; vacío si no está declarado (#144)."""
+    declaration = layout_of(layer, dataset)
+    return () if declaration is None else declaration.identity_columns
+
+
+def _identity_key(
+    source: str,
+    series_id: str,
+    as_of: date | datetime,
+    extra: Sequence[object] = (),
+) -> tuple[str, ...]:
     """Clave de identidad comparable entre un registro y una fila releída del almacén.
 
     Se usa la forma canónica de ``as_of`` en lugar del valor: el mismo instante
     vuelve del almacén como ``date`` (series macro) o como ``datetime`` con zona
-    UTC (barras), y comparar objetos de distinto tipo no sirve.
+    UTC (barras), y comparar objetos de distinto tipo no sirve. ``extra`` son los
+    valores de las columnas que amplían la identidad (:func:`_identity_columns`),
+    **en el orden declarado**, cada uno en su forma canónica.
     """
-    return (source, series_id, _canonical(as_of))
+    return (source, series_id, _canonical(as_of), *(_canonical(value) for value in extra))
 
 
 def _content_key(values: Mapping[str, object]) -> tuple[str, ...]:
@@ -425,6 +451,12 @@ class PreparedRecord:
     version: int
     payload: tuple[tuple[str, object], ...]
     """Columnas propias del dataset, ordenadas por nombre para ser deterministas."""
+
+    identity: tuple[str, ...]
+    """Identidad del registro ya canonizada: ``(source, series_id, as_of, *extras)``.
+
+    ``extras`` son los valores de las columnas que amplían la identidad del dataset
+    (:func:`_identity_columns`); vacío para los datasets que no la amplían (#144)."""
 
     def as_values(self) -> dict[str, object]:
         """Todas las columnas del registro, en orden de escritura."""
@@ -559,7 +591,26 @@ def _prepare(layer: Layer, dataset: str, record: Record) -> PreparedRecord:
         published_at=published_at,
         version=version,
         payload=payload,
+        identity=_identity_key(source, series_id, as_of, _identity_extras(layer, dataset, values)),
     )
+
+
+def _identity_extras(layer: str, dataset: str, values: Mapping[str, object]) -> tuple[object, ...]:
+    """Valores de las columnas que amplían la identidad, en el orden declarado (#144).
+
+    Una columna de identidad ausente o vacía es un registro que el almacén no puede
+    identificar: levanta :class:`InvalidRecordError` nombrándola, nunca la rellena.
+    """
+    extras: list[object] = []
+    for name in _identity_columns(layer, dataset):
+        value = values.get(name)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            raise InvalidRecordError(
+                f"'{name}' amplía la identidad de '{layer}.{dataset}' y no puede faltar ni estar "
+                f"vacía (registro: {name})"
+            )
+        extras.append(value)
+    return tuple(extras)
 
 
 def _as_of_is_date(record: PreparedRecord) -> bool:
@@ -735,10 +786,11 @@ class Store:
             params.append(series_id)
 
         select = "*" if reading is None else self._layout_projection(layer, dataset, reading)
+        window = _current_row_window(_identity_columns(layer, dataset))
         query = (
             f"WITH visible AS (SELECT {select} FROM "
             f"{_read_parquet_expr(paths)} WHERE {' AND '.join(conditions)}), "
-            f"ranked AS (SELECT *, {_CURRENT_ROW_WINDOW} AS pit_rank FROM visible) "
+            f"ranked AS (SELECT *, {window} AS pit_rank FROM visible) "
             "SELECT * EXCLUDE (pit_rank) FROM ranked WHERE pit_rank = 1 "
             "ORDER BY series_id, as_of"
         )
@@ -898,7 +950,7 @@ class Store:
 
         planned: list[PreparedRecord] = []
         for item in prepared:
-            identity = _identity_key(item.source, item.series_id, item.as_of)
+            identity = item.identity
             stored = stored_by_identity.get(identity)
             if stored is None:
                 planned.append(dataclasses.replace(item, version=1))
@@ -941,9 +993,12 @@ class Store:
                 "todos los registros de una escritura deben tener las mismas columnas "
                 "(una escritura, un esquema)"
             )
-        identities = [(record.source, record.series_id, record.as_of) for record in prepared]
+        identities = [record.identity for record in prepared]
         if len(set(identities)) != len(identities):
-            raise InvalidRecordError("la escritura repite una misma identidad más de una vez")
+            raise InvalidRecordError(
+                "la escritura repite una misma identidad más de una vez "
+                "(source, series_id, as_of y las columnas que la amplían)"
+            )
         return prepared
 
     def _validate_as_of_kind(
@@ -981,7 +1036,7 @@ class Store:
 
     def _latest_rows(
         self, records: Sequence[PreparedRecord]
-    ) -> dict[tuple[str, str, str], dict[str, object]]:
+    ) -> dict[tuple[str, ...], dict[str, object]]:
         """Última revisión almacenada de cada identidad del lote, sin filtro de visibilidad.
 
         Comprobar la identidad era el coste dominante de escribir, porque se hacía
@@ -998,7 +1053,7 @@ class Store:
 
         Returns
         -------
-        dict[tuple[str, str, str], dict[str, object]]
+        dict[tuple[str, ...], dict[str, object]]
             Identidad canónica → fila vigente. Si una identidad no aparece, es que
             no está almacenada.
         """
@@ -1007,21 +1062,30 @@ class Store:
             key = (record.layer, record.dataset, record.source, record.year)
             groups.setdefault(key, []).append(record)
 
-        stored: dict[tuple[str, str, str], dict[str, object]] = {}
+        stored: dict[tuple[str, ...], dict[str, object]] = {}
         for (layer, dataset, source, year), group in groups.items():
             paths = self._parquet_files(layer, dataset, source=source, year=year)
             if not paths:
                 continue
+            identity_columns = _identity_columns(layer, dataset)
+            reading = self._declare_layout(layer, dataset)
+            select = "*" if reading is None else self._layout_projection(layer, dataset, reading)
             series = sorted({item.series_id for item in group})
             placeholders = ", ".join("?" for _ in series)
             query = (
-                "WITH ranked AS (SELECT *, "
-                f"{_CURRENT_ROW_WINDOW} AS pit_rank FROM {_read_parquet_expr(paths)} "
+                f"WITH ranked AS (SELECT {select}, "
+                f"{_current_row_window(identity_columns)} AS pit_rank "
+                f"FROM {_read_parquet_expr(paths)} "
                 f"WHERE series_id IN ({placeholders})) "
                 "SELECT * EXCLUDE (pit_rank) FROM ranked WHERE pit_rank = 1"
             )
             for row in self._fetch(query, list(series)).to_dicts():
-                key = _identity_key(str(row["source"]), str(row["series_id"]), row["as_of"])
+                key = _identity_key(
+                    str(row["source"]),
+                    str(row["series_id"]),
+                    row["as_of"],
+                    tuple(row.get(name) for name in identity_columns),
+                )
                 stored[key] = row
         return stored
 
@@ -1114,8 +1178,8 @@ class Store:
                 connection.execute(
                     f'CREATE OR REPLACE VIEW "{layer}"."{dataset}" AS '
                     "SELECT * EXCLUDE (pit_rank) FROM ("
-                    f"SELECT {select}, {_CURRENT_ROW_WINDOW} AS pit_rank "
-                    f"FROM {_read_parquet_expr(paths)}) WHERE pit_rank = 1"
+                    f"SELECT {select}, {_current_row_window(_identity_columns(layer, dataset))} "
+                    f"AS pit_rank FROM {_read_parquet_expr(paths)}) WHERE pit_rank = 1"
                 )
 
     def _fetch(self, query: str, params: Sequence[object]) -> pl.DataFrame:

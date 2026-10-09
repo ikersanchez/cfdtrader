@@ -23,6 +23,12 @@ Los tres casos de §12.10, y cómo se declaran aquí:
 Un dataset sin declaración **no se valida** (el almacén lee lo que haya, como antes de
 #139): la declaración es una lista blanca, y un test comprueba que *todos* los datasets
 que el proyecto escribe están en ella, para que no haya huecos por olvido.
+
+**Identidad ampliada (#144):** además del *payload*, un dataset puede declarar
+``identity_columns`` —columnas de *payload* que se suman a ``(source, series_id, as_of)``
+para identificar el registro—. Solo lo necesita un dataset donde ese trío no sea único
+(``news_headlines``). Ampliar la identidad **no** cambia la firma del Parquet, así que no
+sube ``layout_version``.
 """
 
 from __future__ import annotations
@@ -99,6 +105,36 @@ class DatasetLayout:
     dataset: str
     layout_version: int
     payload: tuple[ColumnSpec, ...]
+    identity_columns: tuple[str, ...] = ()
+    """Columnas de *payload* que **amplían la identidad** del registro, además de
+    ``(source, series_id, as_of)``. Por defecto ``()``: la identidad no cambia.
+
+    Existe para datasets donde ``(source, series_id, as_of)`` **no** es único: en
+    ``raw.news_headlines`` dos titulares del mismo feed pueden compartir instante y
+    se distinguen por su ``headline_hash`` (#144). Ampliar la identidad **no** cambia
+    el esquema del Parquet —``headline_hash`` ya era una columna de *payload*—, así
+    que **no** exige subir ``layout_version`` ni migrar ficheros.
+    """
+
+    def __post_init__(self) -> None:
+        declared = self.signature
+        seen: set[str] = set()
+        for name in self.identity_columns:
+            if name in REQUIRED_SIGNATURE:
+                raise ValueError(
+                    f"{name!r} es una columna obligatoria del almacén: no puede ampliar "
+                    f"la identidad de {self.layer}.{self.dataset}"
+                )
+            if name not in declared:
+                raise ValueError(
+                    f"{name!r} amplía la identidad de {self.layer}.{self.dataset} pero no está "
+                    f"declarada en su payload: {list(declared)}"
+                )
+            if name in seen:
+                raise ValueError(
+                    f"{name!r} está repetida en identity_columns de {self.layer}.{self.dataset}"
+                )
+            seen.add(name)
 
     @property
     def signature(self) -> tuple[str, ...]:
@@ -258,6 +294,7 @@ LAYOUTS: Final[dict[tuple[str, str], DatasetLayout]] = {
             ColumnSpec("url", "str"),
             ColumnSpec("headline_hash", "str"),
         ),
+        identity_columns=("headline_hash",),
     ),
     ("raw", "earnings"): DatasetLayout(
         layer="raw",

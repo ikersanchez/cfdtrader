@@ -328,9 +328,15 @@ Medición y decisión completas en **`_docs/news_sources_2026-10-09.md`**. Resum
   archivo de pago (`tech_stack.md` §4.9, decisión 2).
 - **Licencia:** GDELT, uso libre; RSS, se guarda **titular + URL + `published_at` + hash**, nunca el
   cuerpo del artículo (§12.7).
-- **Follow-ups abiertos:** (1) la identidad del almacén `(source, series_id, as_of)` colisiona con
-  noticias (dos titulares del mismo feed al mismo instante); (2) un feed bloqueado tumba el lote
-  entero; (3) GDELT DOC sigue sin plan B.
+- **Identidad ampliada (#144):** `raw.news_headlines` identifica cada titular por
+  `(source, series_id, as_of, headline_hash)` —vía `DatasetLayout.identity_columns` en
+  `data/contracts.py`—, así que **dos titulares del mismo feed en el mismo instante son dos
+  filas**. Ampliar la identidad **no** cambia el esquema del Parquet ni el `layout_version`:
+  ninguna migración. Con esto **`google-news` entra** en la ingesta (antes abortaba el lote).
+  El contrato está escrito en el docstring de `data/store.py` (sección «Identidad de un
+  registro»).
+- **Follow-ups abiertos:** (1) un feed bloqueado tumba el lote entero, sin tolerancia por-feed
+  (**#145**); (2) GDELT DOC sigue sin plan B.
 
 ## Cómo reproducir la ingesta
 
