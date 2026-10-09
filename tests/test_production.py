@@ -34,7 +34,9 @@ SESSION: Final[date] = date(2026, 10, 9)
 ZERO_SHA: Final[str] = "sha256:" + "0" * 64
 
 
-def _row(*, status: str = "recommendation", direction: object = "long", tier: object = "A") -> dict:
+def _row(
+    *, status: str = "recommendation", direction: object = "long", tier: object = "A"
+) -> dict[str, object]:
     """Una fila completa de ``journal.decisions`` con lo que la tarjeta necesita."""
     return {
         "trade_date": SESSION.isoformat(),
