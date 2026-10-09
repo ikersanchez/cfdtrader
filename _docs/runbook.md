@@ -121,6 +121,43 @@ Con el registro ya solo de la ventana vigente, el paso 7 vuelve a `selected` (**
 2026-10-06) y el 10 emite. La poda es **la contrapartida** de la regla 1 de `process.md`: si la
 ventana se mide en vez de fijarse, el registro que la declaraba hay que mantenerlo vivo.
 
+### El registro que ve `model_comparison` es el de **familias**, no el del barrido (`#82`)
+
+`runs/` es un registro **compartido** (`DEFAULT_RUNS_ROOT`). El barrido de §19.17 (#82) registra ahí
+sus `BUDGET = 10` ensayos (`lightgbm_search_v1#<nombre>`): tras el barrido el registro tiene **14**
+entradas —las 4 de #24/#25/#26 más esas 10—, que es el estado **declarado** (es el `n_trials` que
+publica el informe del barrido). Pero `model_comparison` reconstruye **una columna por entrada** y
+sólo sabe reconstruir `baseline_logit_elasticnet_v1` y `lightgbm_gbdt_v1`:
+
+- un ensayo `lightgbm_search_v1#*` —y **también cualquier entrada de LightGBM de una ventana
+  anterior**: su mapa `known` sólo tiene las dos que acaba de re-entrenar— cae a
+  `reconstruct_baseline` → `UnknownVariantError`;
+- la matriz queda incompleta (`n_variants < registry_n_trials`), la selección se declara
+  `not_evaluable` y **no hay `pbo`**: el pipeline no puede copiarlo y `phase2_dominance` falla con
+  «falta el campo obligatorio `pbo`» (A10/A5).
+
+El orden declarado es: **cadena §2 sobre el registro de modelos y, después, el barrido.** Para
+regenerar los pasos 7-10 hay que **apartar** los ensayos del barrido, correr la cadena y
+devolverlos; el registro de familias debe quedar en **4** entradas (2 lineales + las 2 de LightGBM
+de la ventana vigente):
+
+```bash
+STASH=.scratch/runs_search; mkdir -p "$STASH"; trap 'for d in "$STASH"/*/; do mv "$d" runs/; done' EXIT
+for d in runs/*/; do
+    case "$(python3 -c "import json;print(json.load(open('$d/config.json'))['config']['variant_id'])")" in
+        lightgbm_search_v1#*) mv "$d" "$STASH/" ;;
+    esac
+done
+uv run python -m cfdtrader.analysis.model_comparison --data-root data --reports-dir data/derived/reports --runs-root runs --as-of 2026-09-22T22:00:00+00:00 --previous-artifact data/derived/reports/model_comparison_2026-09-22.json
+uv run python -m cfdtrader.analysis.pipeline_report  --data-root data --reports-dir data/derived/reports --as-of 2026-09-23T22:00:00+00:00 --previous-artifact data/derived/reports/pipeline_backtest_2026-09-23.json
+uv run python -m cfdtrader.analysis.phase2_dominance --data-root data --reports-dir data/derived/reports --as-of 2026-09-24T00:00:00+00:00 --previous-artifact data/derived/reports/phase2_dominance_2026-09-24.json
+```
+
+Con los ensayos apartados, el paso 7 vuelve a `selected` (**4/4**) y el 10 emite. La poda de la
+subsección anterior **no** basta por sí sola cuando ya corrió el barrido: hay que apartarlos.
+
+
+
 ## 3. Camino diario — la pista, o el estado «sin recomendación»
 
 ```bash
