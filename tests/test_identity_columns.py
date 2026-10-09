@@ -129,7 +129,7 @@ def test_a2_the_layout_version_is_not_bumped() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 def test_a3_the_identity_key_grows_with_the_declared_columns() -> None:
     """A3: dos valores distintos de la columna extra dan dos identidades."""
-    from cfdtrader.data.store import _identity_key
+    from cfdtrader.data.store import _identity_key  # pyright: ignore[reportPrivateUsage]
 
     base = _identity_key("rss", "cnbc", PUB)
     with_a = _identity_key("rss", "cnbc", PUB, (_HASH_A,))
@@ -146,7 +146,8 @@ def test_a3_the_identity_key_grows_with_the_declared_columns() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 def test_a4_the_current_row_window_partitions_by_the_full_identity() -> None:
     """A4: sin columnas extra la ventana es la clásica; con ellas, la completa."""
-    from cfdtrader.data.store import _current_row_window
+    # pyright: ignore[reportPrivateUsage] - la ventana vigente es justo lo que se comprueba
+    from cfdtrader.data.store import _current_row_window  # pyright: ignore[reportPrivateUsage]
 
     assert (
         _current_row_window()

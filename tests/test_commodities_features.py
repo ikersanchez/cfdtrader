@@ -13,6 +13,7 @@ y no se repite aqui: aqui se blinda lo que el **codigo** declara.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Final
@@ -82,10 +83,12 @@ _ANCHOR: Final[str] = "^GSPC"
 
 
 def _inputs(
-    *, sessions: dict[str, tuple[date, ...]] | None = None, **overrides: tuple[float, ...]
+    *,
+    sessions: Mapping[str, tuple[date, ...]] | None = None,
+    overrides: Mapping[str, tuple[float, ...]] | None = None,
 ) -> dict[str, pl.DataFrame]:
     """El ``Mapping`` de las cuatro series, con las que se quieran sustituir."""
-    closes = {**_BASE, **overrides}
+    closes = {**_BASE, **(overrides or {})}
     dates = {"^GSPC": SESSIONS, **(sessions or {})}
     return {
         name: _input_frame(
@@ -96,10 +99,14 @@ def _inputs(
 
 
 def _matrix(
-    *, sessions: dict[str, tuple[date, ...]] | None = None, **overrides: tuple[float, ...]
+    *,
+    sessions: Mapping[str, tuple[date, ...]] | None = None,
+    overrides: Mapping[str, tuple[float, ...]] | None = None,
 ) -> pl.DataFrame:
     """La matriz de la familia con la muestra sintetica."""
-    return commodities_matrix(_inputs(sessions=sessions, **overrides), spec=commodities_spec())
+    return commodities_matrix(
+        _inputs(sessions=sessions, overrides=overrides), spec=commodities_spec()
+    )
 
 
 def _column(frame: pl.DataFrame, name: str) -> list[float | None]:
@@ -196,7 +203,7 @@ def test_a6_the_row_of_t_does_not_read_the_close_of_t() -> None:
     closes = list(_BASE["CL=F"])
     closes[target] *= 3.0
     base = _matrix()
-    mutated = _matrix(**{"CL=F": tuple(closes)})
+    mutated = _matrix(overrides={"CL=F": tuple(closes)})
 
     for name in store.COMMODITIES_FEATURE_COLUMNS:
         assert _column(mutated, name)[: target + 1] == _column(base, name)[: target + 1], name
@@ -210,7 +217,7 @@ def test_a6_mutating_a_later_session_does_not_move_the_previous_rows() -> None:
     closes[-1] *= 5.0
     closes[-2] *= 2.0
     base = _matrix()
-    mutated = _matrix(**{"CL=F": tuple(closes)})
+    mutated = _matrix(overrides={"CL=F": tuple(closes)})
 
     for name in ("oil_ret_1", "oil_ret_5", "gold_ret_1", "eurusd_ret_1"):
         assert _column(mutated, name)[:-1] == _column(base, name)[:-1], name
@@ -242,7 +249,7 @@ def test_a7_the_return_is_computed_on_the_calendar_of_its_own_series() -> None:
     )
     frame = _matrix(
         sessions={"CL=F": gap},
-        **{"CL=F": (70.0, 71.0, 73.0, 74.0, 75.0, 76.0, 77.0)},
+        overrides={"CL=F": (70.0, 71.0, 73.0, 74.0, 75.0, 76.0, 77.0)},
     )
 
     # la fila del 2024-01-08 (indice 4) lee la ultima sesion del crudo `< t`, que es el 01-05
@@ -259,7 +266,7 @@ def test_a7_a_series_without_history_is_null_and_never_forward_filled() -> None:
     late = SESSIONS[4:]
     frame = _matrix(
         sessions={"GC=F": late},
-        **{"GC=F": (2000.0, 2010.0, 2020.0, 2030.0)},
+        overrides={"GC=F": (2000.0, 2010.0, 2020.0, 2030.0)},
     )
     gold = _column(frame, "gold_ret_1")
     assert gold[:4] == [None, None, None, None]

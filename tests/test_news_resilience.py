@@ -103,7 +103,13 @@ def test_a1_the_source_outcome_declares_the_state_and_forbids_extra_fields() -> 
     )
 
     with pytest.raises(ValueError):
-        SourceOutcome(ref="x", kind="rss", status=SourceStatus.OK, invented=1)
+        # el modelo prohibe los campos de mas: se comprueba a proposito
+        SourceOutcome(
+            ref="x",
+            kind="rss",
+            status=SourceStatus.OK,
+            invented=1,  # pyright: ignore[reportCallIssue]
+        )
 
     report = NewsReport(
         as_of=NOW.isoformat(),
@@ -205,7 +211,10 @@ def _run_main(
         def __exit__(self, *arguments: object) -> None:
             return None
 
-    monkeypatch.setattr(news, "CachedHttpClient", lambda **_kwargs: _Context())
+    def _client(**_kwargs: object) -> _Context:
+        return _Context()
+
+    monkeypatch.setattr(news, "CachedHttpClient", _client)
     monkeypatch.setattr(news, "GdeltAdapter", _adapter(_FakeGdelt, queries or {}))
     monkeypatch.setattr(news, "RssAdapter", _adapter(_FakeRss, feeds))
 
