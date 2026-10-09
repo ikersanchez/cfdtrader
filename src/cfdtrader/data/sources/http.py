@@ -47,21 +47,29 @@ __all__ = [
 #: Content-types que se aceptan como "formato de datos". Cualquier otra cosa se
 #: considera bloqueo salvo que el adaptador declare lo contrario.
 #: ``text/plain`` se admite porque Stooq sirve CSV con ese tipo (cuando no bloquea).
+#: ``text/xml`` y sus variantes ``rss``/``atom`` se admiten porque un RSS/Atom es
+#: dato válido, no una página de bloqueo (#142): sin ellos, el cliente rechazaba
+#: todos los feeds pese a que la red los sirve.
 ACCEPTED_CONTENT_TYPES: tuple[str, ...] = (
     "text/csv",
     "text/plain",
     "application/json",
     "application/csv",
     "text/json",
+    "text/xml",
+    "application/xml",
+    "application/rss+xml",
+    "application/atom+xml",
 )
 
-#: Firmas de bloqueo conocidas: HTML, doctype, XML/HTML y el *challenge* de Stooq.
+#: Firmas de bloqueo conocidas: HTML/doctype, ``<script`` y el *challenge* de Stooq.
+#: **``<?xml`` NO es una firma de bloqueo**: un RSS/Atom empieza justo así y es dato
+#: legítimo (#142). Las páginas de error HTML siguen cazándose por ``<!DOCTYPE``/``<html``.
 LOCK_DETECTOR: tuple[bytes, ...] = (
     b"<!DOCTYPE",
     b"<!doctype",
     b"<html",
     b"<HTML",
-    b"<?xml",
     b"<script",
     b"__verify",
 )
@@ -345,8 +353,16 @@ def _lock_signature(body: bytes) -> bytes | None:
 
 
 def _content_type_accepted(content_type: str) -> bool:
-    """``True`` si el ``Content-Type`` declara un formato de datos aceptado."""
+    """``True`` si el ``Content-Type`` declara un formato de datos aceptado.
+
+    Además de la lista, se acepta cualquier subtipo ``+xml`` (``rss+xml``,
+    ``atom+xml``…): hay medios que sirven el feed **sin** el prefijo ``application/``
+    y el feed es dato válido (#142). Las páginas HTML siguen cazándose antes por la
+    firma de bloqueo (``<!DOCTYPE``/``<html``).
+    """
     normalized = content_type.split(";")[0].strip().lower()
     if not normalized:
         return False
+    if normalized.endswith("+xml"):
+        return True
     return any(normalized == accepted for accepted in ACCEPTED_CONTENT_TYPES)

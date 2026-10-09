@@ -30,6 +30,7 @@ __all__ = [
     "GDELT_ENDPOINT",
     "GDELT_MAX_RECORDS",
     "HASH_PREFIX",
+    "RSS_USER_AGENT",
     "GdeltAdapter",
     "Headline",
     "NewsAdapterError",
@@ -51,6 +52,14 @@ HASH_PREFIX: Final[str] = "sha256:"
 
 #: Formato de la fecha de GDELT en la lista de artículos.
 _GDELT_DATE_FORMAT: Final[str] = "%Y%m%dT%H%M%SZ"
+
+#: User-Agent de navegador para los RSS. Varios medios —`cnbc.com`, `nasdaq.com`—
+#: devuelven «Access Denied» (403) o cortan la conexión a un cliente sin UA
+#: reconocible, aunque sirvan el mismo feed a un navegador (#142).
+RSS_USER_AGENT: Final[str] = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
 
 
 class NewsAdapterError(Exception):
@@ -198,6 +207,10 @@ class RssAdapter:
         self._client = client
 
     def fetch(self, *, feed_url: str, label: str, now: datetime) -> list[Headline]:
-        """Titulares de ese canal RSS, con la fecha de referencia ``now``."""
-        response = self._client.get(feed_url, now=now)
+        """Titulares de ese canal RSS, con la fecha de referencia ``now``.
+
+        Envía un ``User-Agent`` de navegador: sin él, varios medios contestan
+        «Access Denied» aunque sirvan el feed a un navegador (#142).
+        """
+        response = self._client.get(feed_url, now=now, headers={"User-Agent": RSS_USER_AGENT})
         return parse_rss_feed(response.response.content, feed=label)

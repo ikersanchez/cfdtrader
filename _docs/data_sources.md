@@ -308,6 +308,30 @@ instrumento y da otro veredicto; además arrastra un 4,91 % de `open` repetido e
 la ventana. La comparación completa, con su digest y la forma del artefacto, vive
 en `drift_open_source_2026-10-01.json`.
 
+## Noticias — RSS y archivo GDELT (medido 2026-10-09, #142)
+
+Medición y decisión completas en **`_docs/news_sources_2026-10-09.md`**. Resumen:
+
+- **Fuentes ejecutables desde el código** (RSS/Atom), **tras corregir `CachedHttpClient`** —aceptaba
+  XML/RSS los rechazaba y `RssAdapter` no enviaba `User-Agent`: CNBC (*Top*/*World*/*Energy*),
+  Investing.com, Seeking Alpha, BBC World, Al Jazeera, OilPrice, Nasdaq, MarketWatch, The Hill y
+  Google News (búsqueda). Ingesta real: **202 filas** en `raw.news_headlines` (11 feeds).
+- **No usables hoy:** Reuters (host muerto), Yahoo Finance (404), Politico (403), AP vía RSSHub
+  (403), EIA (timeout) y **GDELT DOC API (429)** —la fuente **primaria** declarada en
+  `tech_stack.md` §4.8—.
+- **X/Twitter:** sin opción gratuita ejecutable (API oficial 401; Nitter muerto, bloqueado o con
+  muro anti-bot 200/0 ítems; RSSHub 404).
+- **Archivo histórico:** GDELT raw (GKG 1.0 **diario** desde 2013-04-01; GKG 2.0 cada **15 min**
+  desde 2015-02-18) es libre y retrospectivo, pero su marca temporal es la **ventana de ingesta**
+  (`V2.1DATE`, idéntico en todas las filas; `PAGE_PRECISEPUBLISHDATE` ausente), **no** la de
+  publicación. Sirve para un backtest **conservador**; un `published_at` exacto sigue exigiendo el
+  archivo de pago (`tech_stack.md` §4.9, decisión 2).
+- **Licencia:** GDELT, uso libre; RSS, se guarda **titular + URL + `published_at` + hash**, nunca el
+  cuerpo del artículo (§12.7).
+- **Follow-ups abiertos:** (1) la identidad del almacén `(source, series_id, as_of)` colisiona con
+  noticias (dos titulares del mismo feed al mismo instante); (2) un feed bloqueado tumba el lote
+  entero; (3) GDELT DOC sigue sin plan B.
+
 ## Cómo reproducir la ingesta
 
 ```console

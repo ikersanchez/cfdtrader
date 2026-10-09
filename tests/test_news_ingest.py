@@ -307,6 +307,49 @@ def test_a9_the_rss_adapter_fetches_and_parses() -> None:
     assert [headline.title for headline in headlines] == ["Stocks rally"]
 
 
+def test_a12_the_rss_adapter_reads_a_feed_through_the_real_cached_client() -> None:
+    """#142: con el cliente **real**, un RSS (`application/rss+xml`, `<?xml`) se lee y parsea.
+
+    Antes el `LOCK_DETECTOR` trataba `<?xml` como bloqueo y **ningún** feed pasaba: la red
+    servía el RSS pero el código lo descartaba. Este test fija esa regresión.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "application/rss+xml"}, content=_RSS)
+
+    client = CachedHttpClient(
+        source="news",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        backoff_seconds=0.0,
+    )
+
+    headlines = RssAdapter(client).fetch(
+        feed_url="https://example.invalid/feed.xml", label="cnbc", now=NOW
+    )
+
+    assert [headline.title for headline in headlines] == ["Stocks rally"]
+    assert headlines[0].url == "https://x/1"
+
+
+def test_a13_the_rss_adapter_sends_a_browser_user_agent() -> None:
+    """#142: varios medios dan «Access Denied» sin UA: el adaptador envía uno de navegador."""
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["ua"] = request.headers.get("user-agent", "")
+        return httpx.Response(200, headers={"content-type": "application/rss+xml"}, content=_RSS)
+
+    client = CachedHttpClient(
+        source="news",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        backoff_seconds=0.0,
+    )
+
+    RssAdapter(client).fetch(feed_url="https://example.invalid/feed.xml", label="cnbc", now=NOW)
+
+    assert "Mozilla" in seen["ua"]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # A10 · El CLI rechaza un `--as-of` inválido y un `--feed` mal formado
 # ─────────────────────────────────────────────────────────────────────────────

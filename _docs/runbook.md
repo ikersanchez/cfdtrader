@@ -43,12 +43,23 @@ ts=$(date -u +%Y-%m-%dT%H:%M:%S+00:00)
 uv run python -m cfdtrader.data.market   --data-root data --now "$ts"
 uv run python -m cfdtrader.data.macro    --data-root data --now "$ts"
 uv run python -m cfdtrader.data.earnings --data-root data --now "$ts"          # lxml declarado en #134
-uv run python -m cfdtrader.data.news     --data-root data --now "$ts" --query 'S&P 500'   # (o --feed <url>)
+uv run python -m cfdtrader.data.news     --data-root data --as-of "$ts" \
+  --feed 'cnbc-top=https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114' \
+  --feed 'cnbc-energy=https://www.cnbc.com/id/19836768/device/rss/rss.html' \
+  --feed 'oilprice=https://oilprice.com/rss/main' \
+  --feed 'google-news=https://news.google.com/rss/search?q=stock+market&hl=en-US&gl=US&ceid=US:en'
 ```
 
 > `news` exige al menos un `--query` (GDELT) o un `--feed` (RSS): sin ninguno sale `rc=2` (llamada
-> incompleta, no defecto). La ingesta de noticias solo alimenta el **overlay** del LLM, que es
+> incompleta, no defecto). El flag es `--as-of`, **no** `--now` (como el resto de ingestas).
+> La ingesta de noticias solo alimenta el **overlay** del LLM, que es
 > opcional por diseño: sin titulares el camino diario sigue produciendo su recomendación.
+>
+> **Aviso medido el 2026-10-09 (#142):** la API de **GDELT** (`--query`) responde **429**, así que
+> hoy se ingiere por **RSS** (`--feed`). Fuentes ejecutables, licencia y límites en
+> [`data_sources.md`](data_sources.md) §«Noticias» y en
+> [`news_sources_2026-10-09.md`](news_sources_2026-10-09.md). **No** mezcles `google-news` con otros
+> feeds si quieres que el lote no aborte por colisión de identidad (defecto abierto de #142).
 
 ## 2. Regeneración en orden (`_docs/process.md`, regla 2)
 

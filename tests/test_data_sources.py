@@ -292,6 +292,47 @@ def test_js_challenge_is_blocked_with_evidence() -> None:
     assert "DOCTYPE" in message
 
 
+def test_an_xml_feed_is_data_and_not_a_block() -> None:
+    """#142: un RSS/Atom (`<?xml`, `text/xml`) es dato válido; el cliente no lo bloquea."""
+    body = b'<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel/></rss>'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, headers={"content-type": "text/xml; charset=utf-8"}, content=body
+        )
+
+    client = _client(handler)
+    response = client.get("https://example.invalid/feed.xml")
+
+    assert response.response.content == body
+
+
+def test_a_bare_rss_xml_content_type_is_accepted() -> None:
+    """#142: algún medio sirve el feed como `rss+xml`, sin el prefijo `application/`."""
+    body = b'<?xml version="1.0"?><rss version="2.0"><channel/></rss>'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "rss+xml; charset=utf-8"}, content=body)
+
+    client = _client(handler)
+
+    assert client.get("https://example.invalid/feed.xml").response.content == body
+
+
+def test_an_html_error_page_wrapped_in_xml_is_still_blocked() -> None:
+    """La contraparte: quitar `<?xml` de las firmas no deja pasar una página HTML de error."""
+    body = b'<?xml version="1.0"?><!DOCTYPE html><html><body>Blocked</body></html>'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "application/xml"}, content=body)
+
+    client = _client(handler)
+    with pytest.raises(SourceBlockedError) as failure:
+        client.get("https://example.invalid/feed.xml")
+
+    assert "DOCTYPE" in str(failure.value)
+
+
 def test_cache_avoids_the_second_request(tmp_path: Path) -> None:
     """A5: con la caché vigente no se repite la petición."""
     calls = 0
