@@ -95,7 +95,7 @@ def _prices_doubled(frame: pl.DataFrame, *, session: date, factor: float) -> pl.
 
 
 def _shock(frame: pl.DataFrame, *, session: date, factor: float) -> pl.DataFrame:
-    """Multiplica y desplaza **las 52 columnas** de esa sesion del frame de features."""
+    """Multiplica y desplaza **las 57 columnas** de esa sesion del frame de features."""
     return frame.with_columns(
         [
             pl.when(pl.col("session") == session)
@@ -367,11 +367,11 @@ def test_a_series_without_history_is_declared_not_invented(tmp_path: Path) -> No
     missing = set(matrix.missing_series)
     assert set(feature_store.CONTEXT_SECTOR_SERIES) <= missing
     assert set(feature_store.MACRO_SERIES) <= missing
-    assert len(matrix.missing_series) == 23
+    assert len(matrix.missing_series) == 26
     assert matrix.n_sessions == 40
     assert matrix.frame.get_column("ust_10y_chg_5").null_count() == 40
     assert matrix.duplicated_columns == ("atr_norm",)
-    assert matrix.n_columns == 52
+    assert matrix.n_columns == 57
 
 
 def test_72_the_shared_column_is_checked_and_a_divergence_is_a_typed_error() -> None:

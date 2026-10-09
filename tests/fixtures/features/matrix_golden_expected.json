@@ -1,12 +1,13 @@
 {
   "_comment": [
-    "Golden dataset congelado de la matriz de las cinco familias (#17). Los INPUTS son los cinco",
-    "fixtures comprometidos de tests/fixtures/features: el ancla `^GSPC` es la union de",
+    "Golden dataset congelado de la matriz de las seis familias (#17, #143). Los INPUTS son los",
+    "seis fixtures comprometidos de tests/fixtures/features: el ancla `^GSPC` es la union de",
     "`golden_inputs.csv` (300 sesiones; manda donde las dos traen precio) y",
     "`regime_golden_inputs.csv` (las 500+ anteriores que necesita el GARCH de `regime_v1`);",
     "`vix_close` sale de `golden_inputs.csv`, las series de contexto y los 11 ETF sectoriales de",
-    "`context_golden_inputs.csv`, el indice dolar de `macro_golden_market.csv` y las seis series",
-    "macro de `macro_golden_series.csv`. No hay ninguna semilla y ningun reloj: el almacen es una",
+    "`context_golden_inputs.csv`, el indice dolar de `macro_golden_market.csv`, las seis series",
+    "macro de `macro_golden_series.csv` y el WTI, el oro y el EUR/USD de",
+    "`commodities_golden_inputs.csv`. No hay ninguna semilla y ningun reloj: el almacen es una",
     "funcion determinista de esos ficheros.",
     "El par (code_version, digests) esta congelado entero, asi que el test falla si el calculo se",
     "mueve sin subir FEATURE_CODE_VERSION (y tambien si sube sin actualizar este fichero). Nunca",
@@ -19,9 +20,10 @@
     "technical_v1": "sha256:712afeb4d0592bd26ccc6ac03a60fb742f10b5e4d270c87b24b0a053a98de1b7",
     "context_v1": "sha256:930998111d669b56d40655a9eb2dba32c2b5f30a1b8042474fc65e9adc6acd42",
     "macro_v1": "sha256:cf01b07c03201ceedfca83cd29ca62c8440e605d1790d603f45a48907fbbefda",
-    "regime_v1": "sha256:465dd6f1ef4a59d598cfd752c1713e348ce180a1a728b6c14cc902e90dbb5346"
+    "regime_v1": "sha256:465dd6f1ef4a59d598cfd752c1713e348ce180a1a728b6c14cc902e90dbb5346",
+    "commodities_v1": "sha256:b0bd368f2df67ff47b71cd5647bf5f235c4787441690b9cd865608cf9c3f0a39"
   },
-  "matrix_sha256": "sha256:0e015008b5405fd6e8c40ced0d08dd764d1a1215d925e29893f41c4c2e6db443",
+  "matrix_sha256": "sha256:78054e989b4a87ba02a0182a354857a78c36e6a37daff08e0f8cde206134833a",
   "feature_columns": [
     "session",
     "true_range",
@@ -75,10 +77,15 @@
     "efficiency_ratio_20",
     "day_of_week",
     "sessions_to_opex",
-    "is_es_roll_session"
+    "is_es_roll_session",
+    "oil_ret_1",
+    "oil_ret_5",
+    "oil_ret_1_z",
+    "gold_ret_1",
+    "eurusd_ret_1"
   ],
   "sessions": 813,
-  "n_columns": 52,
+  "n_columns": 57,
   "first_session": "2023-07-11",
   "last_session": "2026-09-16",
   "non_null": {
@@ -133,7 +140,12 @@
     "efficiency_ratio_20": 793,
     "day_of_week": 813,
     "sessions_to_opex": 796,
-    "is_es_roll_session": 813
+    "is_es_roll_session": 813,
+    "oil_ret_1": 438,
+    "oil_ret_5": 434,
+    "oil_ret_1_z": 189,
+    "gold_ret_1": 438,
+    "eurusd_ret_1": 438
   },
   "sources": [
     [
@@ -235,6 +247,18 @@
     [
       "raw.macro",
       "PCEPI"
+    ],
+    [
+      "raw.market_daily",
+      "CL=F"
+    ],
+    [
+      "raw.market_daily",
+      "GC=F"
+    ],
+    [
+      "raw.market_daily",
+      "EURUSD=X"
     ]
   ],
   "duplicated_columns": [

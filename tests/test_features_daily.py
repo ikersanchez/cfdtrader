@@ -4,7 +4,7 @@ Todo se mide sobre un almacen **temporal** (``tmp_path``): la fixture de sesion 
 ``tests/conftest.py`` huella el ``data/`` del repositorio y este modulo **escribe**.
 
 Criterios: A1 el cargador de ``context_v1``, A2 las cinco matrices por familia, A3 el ancla
-declarada, A4 las cinco familias persistidas, A5 la CLI no lee el reloj, A6 ``--as-of``
+declarada, A4 las seis familias persistidas, A5 la CLI no lee el reloj, A6 ``--as-of``
 obligatorio y cero ficheros, A7 no se publica el futuro, A8 procedencia por fila, A9
 ``fetched_at`` anterior al ``as_of`` es error, A10 repetir no escribe, A11 pureza.
 """
@@ -181,7 +181,7 @@ def test_a1_the_loader_needs_the_anchor_and_invents_no_series(tmp_path: Path) ->
 # ─────────────────────────────────────────────────────────────────────────────
 # A2 · Las cinco matrices **por familia**
 # ─────────────────────────────────────────────────────────────────────────────
-def test_a2_the_adapter_exposes_the_five_families_separately(tmp_path: Path) -> None:
+def test_a2_the_adapter_exposes_the_six_families_separately(tmp_path: Path) -> None:
     store = _build_store(tmp_path / "almacen")
     built = feature_frame.build_family_frames(store)
 
@@ -191,7 +191,9 @@ def test_a2_the_adapter_exposes_the_five_families_separately(tmp_path: Path) -> 
         assert set(feature_frame.COLUMNS_BY_FAMILY[family]) <= set(family_frame.columns)
         assert family_frame.height == HISTORY_DAYS
     assert built.instants.columns == ["session", "as_of"]
-    assert len(built.missing_series) == 23, "17 de contexto + 6 macro: las que no estan"
+    assert len(built.missing_series) == 26, (
+        "17 de contexto + 6 macro + 3 de commodities: las que no estan"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -203,9 +205,9 @@ def test_a3_the_anchor_series_is_declared() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# A4 · Las cinco familias quedan en el dataset y se releen
+# A4 · Las seis familias quedan en el dataset y se releen
 # ─────────────────────────────────────────────────────────────────────────────
-def test_a4_the_cli_persists_the_five_families(tmp_path: Path) -> None:
+def test_a4_the_cli_persists_the_six_families(tmp_path: Path) -> None:
     root = tmp_path / "almacen"
     store = _build_store(root)
     last_session = date(*_business_days(HISTORY_DAYS)[-1])

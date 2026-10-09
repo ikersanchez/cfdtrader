@@ -1,10 +1,10 @@
-"""Suite de integridad de la matriz de las cinco familias (#17): A1-A16.
+"""Suite de integridad de la matriz de las seis familias (#17, #143): A1-A16.
 
 Blinda los cuatro errores que invalidarian el proyecto **en silencio**:
 
 1. *no-look-ahead* **cross-familia**: un feature en `t` no puede cambiar al anadir datos de
    `t+1`, y la ventana de la normalizacion robusta es **expansiva** (A2-A5).
-2. *golden dataset* de la matriz de las 52 columnas, congelado con hash, y una **puerta por
+2. *golden dataset* de la matriz de las 57 columnas, congelado con hash, y una **puerta por
    `FEATURE_CODE_VERSION`** (A6-A8).
 3. determinismo **byte a byte** del gate y de la matriz, tambien entre procesos con
    `PYTHONHASHSEED` distinto (A9-A10).
@@ -57,6 +57,7 @@ from cfdtrader.data.store import Store
 from cfdtrader.decision import gate
 from cfdtrader.decision.gate import GateOutput, GateParameters, evaluate_gate
 from cfdtrader.features import store as feature_store
+from cfdtrader.features.commodities import commodities_spec
 from cfdtrader.features.context import context_spec
 from cfdtrader.features.macro import macro_spec
 from cfdtrader.features.regime import regime_spec
@@ -86,6 +87,13 @@ DXY: Final[str] = "DX-Y.NYB"
 #: otro origen declarado, y la identidad del almacen es `(source, series_id, as_of)`.
 CONTEXT_MARKET_FIXTURE: Final[tuple[str, ...]] = ("^GDAXI", "^FTSE", "^STOXX50E", "^N225", "^HSI")
 
+#: Las tres series de la familia de commodities (#143) y la columna del fixture que las trae.
+COMMODITIES_MARKET_FIXTURE: Final[tuple[tuple[str, str], ...]] = (
+    ("CL=F", "oil_close"),
+    ("GC=F", "gold_close"),
+    ("EURUSD=X", "eurusd_close"),
+)
+
 #: Instantes declarados: **nunca** del reloj. El cierre de sesion va a las 21:00 UTC, que en ET
 #: es la misma fecha todo el anio (16:00 EST en invierno, 17:00 EDT en verano).
 FETCHED_AT: Final[datetime] = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
@@ -98,8 +106,8 @@ SOURCE_SECTORS: Final[str] = "stooq"
 SOURCE_MACRO: Final[str] = "fred"
 SOURCE_LABELS: Final[str] = "cfdtrader.models.labels"
 
-#: El catalogo tiene 52 columnas y la matriz publica `session` + esas 52.
-N_COLUMNS: Final[int] = 52
+#: El catalogo tiene 57 columnas y la matriz publica `session` + esas 57.
+N_COLUMNS: Final[int] = 57
 
 #: Suelo de A3: por debajo de esto el fixture seria degenerado.
 MIN_SESSIONS: Final[int] = 250
@@ -126,7 +134,7 @@ GATE_CALENDAR: Final[MarketCalendar] = MarketCalendar(years=tuple(range(2020, 20
 GATE_SLIPPAGE_PCT: Final[Decimal] = Decimal("0.2")
 
 #: Claves del golden (A6), en el orden en que se publican. `n_columns` es la unica anadida a la
-#: convencion de #19-#23: deja el `n_columns == 52` de A7 escrito en el propio fixture.
+#: convencion de #19-#23: deja el `n_columns == 57` de A7 escrito en el propio fixture.
 GOLDEN_KEYS: Final[tuple[str, ...]] = (
     "_comment",
     "generator",
@@ -251,6 +259,11 @@ def _context_inputs() -> pl.DataFrame:
     )
 
 
+def _commodities_inputs() -> pl.DataFrame:
+    """`commodities_golden_inputs.csv`: los cierres sinteticos del WTI, el oro y el EUR/USD."""
+    return pl.read_csv(FIXTURES / "commodities_golden_inputs.csv", try_parse_dates=True)
+
+
 def _macro_market() -> pl.DataFrame:
     """`macro_golden_market.csv`: las barras del indice dolar, con su `as_of` declarado."""
     table = pl.read_csv(
@@ -341,6 +354,17 @@ def _records() -> dict[str, list[dict[str, object]]]:
                 "volume": 1_000.0,
             }
         )
+    commodities = _commodities_inputs()
+    for name, column in COMMODITIES_MARKET_FIXTURE:
+        for row in commodities.drop_nulls(column).iter_rows(named=True):
+            market.append(
+                _bar(
+                    series_id=name,
+                    session=cast("date", row["session"]),
+                    source=SOURCE_MARKET,
+                    prices=_flat(float(cast("float", row[column]))),
+                )
+            )
 
     sectors: list[dict[str, object]] = [
         _bar(
@@ -403,25 +427,26 @@ def build_store(root: Path, *, visible_at: datetime | None = None) -> Store:
 
 
 def substrate(root: Path, *, visible_at: datetime | None = None) -> Substrate:
-    """El almacen y su matriz de las cinco familias, sin escribir nada fuera de ``root``."""
+    """El almacen y su matriz de las seis familias, sin escribir nada fuera de ``root``."""
     return Substrate(
         root=root, matrix=build_feature_matrix(build_store(root, visible_at=visible_at))
     )
 
 
 def _specs() -> dict[str, feature_store.FeatureSpec]:
-    """Las cinco specs por defecto de las familias, en el orden de ensamblado."""
+    """Las seis specs por defecto de las familias, en el orden de ensamblado."""
     return {
         feature_store.VOLATILITY_FEATURE_SET: feature_store.FeatureSpec(),
         feature_store.TECHNICAL_FEATURE_SET: technical_spec(),
         feature_store.CONTEXT_FEATURE_SET: context_spec(),
         feature_store.MACRO_FEATURE_SET: macro_spec(),
         feature_store.REGIME_FEATURE_SET: regime_spec(),
+        feature_store.COMMODITIES_FEATURE_SET: commodities_spec(),
     }
 
 
 def _catalog_sources() -> list[list[str]]:
-    """Las fuentes de entrada de las cinco familias, sin repetir y en orden de ensamblado."""
+    """Las fuentes de entrada de las seis familias, sin repetir y en orden de ensamblado."""
     seen: dict[tuple[str, str], None] = {}
     for family in FAMILY_ORDER:
         for pair in _specs()[family].sources:
@@ -433,13 +458,14 @@ def _catalog_sources() -> list[list[str]]:
 # El golden completo (A6-A8)
 # ─────────────────────────────────────────────────────────────────────────────
 GOLDEN_COMMENT: Final[tuple[str, ...]] = (
-    "Golden dataset congelado de la matriz de las cinco familias (#17). Los INPUTS son los cinco",
-    "fixtures comprometidos de tests/fixtures/features: el ancla `^GSPC` es la union de",
+    "Golden dataset congelado de la matriz de las seis familias (#17, #143). Los INPUTS son los",
+    "seis fixtures comprometidos de tests/fixtures/features: el ancla `^GSPC` es la union de",
     "`golden_inputs.csv` (300 sesiones; manda donde las dos traen precio) y",
     "`regime_golden_inputs.csv` (las 500+ anteriores que necesita el GARCH de `regime_v1`);",
     "`vix_close` sale de `golden_inputs.csv`, las series de contexto y los 11 ETF sectoriales de",
-    "`context_golden_inputs.csv`, el indice dolar de `macro_golden_market.csv` y las seis series",
-    "macro de `macro_golden_series.csv`. No hay ninguna semilla y ningun reloj: el almacen es una",
+    "`context_golden_inputs.csv`, el indice dolar de `macro_golden_market.csv`, las seis series",
+    "macro de `macro_golden_series.csv` y el WTI, el oro y el EUR/USD de",
+    "`commodities_golden_inputs.csv`. No hay ninguna semilla y ningun reloj: el almacen es una",
     "funcion determinista de esos ficheros.",
     "El par (code_version, digests) esta congelado entero, asi que el test falla si el calculo se",
     "mueve sin subir FEATURE_CODE_VERSION (y tambien si sube sin actualizar este fichero). Nunca",
@@ -536,7 +562,7 @@ def _cell_key(value: object) -> object:
 def _assert_rows_unchanged(before: pl.DataFrame, after: pl.DataFrame, *, upto: date) -> None:
     """A2/A4: el **unico** punto de comparacion de las dos matrices.
 
-    Comprueba el conjunto **exacto** de columnas (``session`` + las 52 del catalogo) y publica el
+    Comprueba el conjunto **exacto** de columnas (``session`` + las 57 del catalogo) y publica el
     **primer** desajuste como ``(session, columna, antes, despues)``. Nada de comparar solo las
     columnas presentes: un frame al que le falta una columna del catalogo tiene que fallar.
     """
@@ -752,8 +778,8 @@ def _declared_breakdown(
 # ─────────────────────────────────────────────────────────────────────────────
 # A1 — sustrato hermetico
 # ─────────────────────────────────────────────────────────────────────────────
-def test_a1_the_synthetic_store_assembles_the_five_families(tmp_path: Path) -> None:
-    """A1: cinco familias en un almacen de `tmp_path`, desde los fixtures, sin tocar el mundo."""
+def test_a1_the_synthetic_store_assembles_the_six_families(tmp_path: Path) -> None:
+    """A1: seis familias en un almacen de `tmp_path`, desde los fixtures, sin tocar el mundo."""
     root = tmp_path / "almacen"
     built = substrate(root)
     matrix = built.matrix
@@ -797,7 +823,7 @@ def test_a1_the_synthetic_store_assembles_the_five_families(tmp_path: Path) -> N
 def test_a2_no_look_ahead_cross_family(frontier: Frontier) -> None:
     """A2: anadidas las sesiones posteriores, las filas `session <= t0` no se mueven.
 
-    Se comparan **las 53 columnas** (las 52 features del catalogo y `session`), incluidas las
+    Se comparan **las 58 columnas** (las 57 features del catalogo y `session`), incluidas las
     `*_z`: son las que romperian el test si la normalizacion robusta usara la muestra completa
     (`_docs/plan.md` §9) en vez de la ventana expansiva.
     """
@@ -982,7 +1008,7 @@ def test_a7_the_golden_matrix_recomputes(tmp_path: Path) -> None:
     assert payload["feature_columns"] == golden["feature_columns"]
     assert payload["sessions"] == golden["sessions"]
     assert payload["n_columns"] == golden["n_columns"]
-    assert payload["n_columns"] == N_COLUMNS == 52
+    assert payload["n_columns"] == N_COLUMNS == 57
     assert len(cast("list[str]", payload["feature_columns"])) == N_COLUMNS + 1
     assert payload["first_session"] == golden["first_session"]
     assert payload["last_session"] == golden["last_session"]

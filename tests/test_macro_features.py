@@ -566,8 +566,9 @@ def test_a1_an_empty_series_leaves_nulls_and_never_a_zero() -> None:
 # A2 — registro
 # ─────────────────────────────────────────────────────────────────────────────
 def test_a2_the_registry_declares_the_fourth_family() -> None:
-    """El registro expone las cinco familias y la spec macro se construye."""
+    """El registro expone las seis familias y la spec macro se construye."""
     assert sorted(store.CATALOG_BY_FEATURE_SET) == [
+        "commodities_v1",
         "context_v1",
         "macro_v1",
         "regime_v1",
@@ -582,7 +583,7 @@ def test_a2_the_registry_declares_the_fourth_family() -> None:
         store.CONTEXT_FEATURES_SOURCE,
     }
     assert set(store.SOURCE_BY_FEATURE_SET) == set(store.CATALOG_BY_FEATURE_SET)
-    assert len(set(store.SOURCE_BY_FEATURE_SET.values())) == 5
+    assert len(set(store.SOURCE_BY_FEATURE_SET.values())) == 6
 
     spec = macro_spec()
     assert spec.feature_set == store.MACRO_FEATURE_SET
@@ -678,7 +679,7 @@ def test_a3_a_poisoned_macro_column_is_caught_by_the_digest() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # A4 — nombres
 # ─────────────────────────────────────────────────────────────────────────────
-def test_a4_the_names_do_not_collide_between_the_four_families() -> None:
+def test_a4_the_names_do_not_collide_between_the_families() -> None:
     """Ninguna de las 13 macro esta en los otros **cuatro** catalogos, y no hay `dxy_ret_1`."""
     macros = set(store.MACRO_FEATURE_COLUMNS)
     assert macros & set(store.FEATURE_COLUMNS) == set()
@@ -689,12 +690,13 @@ def test_a4_the_names_do_not_collide_between_the_four_families() -> None:
     assert "dxy_ret_1" in store.CONTEXT_FEATURE_COLUMNS
     assert len(macros) == 13
 
-    # el unico repetido entre las cinco familias sigue siendo `atr_norm` (#72)
+    # el unico repetido entre las seis familias sigue siendo `atr_norm` (#72)
     union = (
         set(store.FEATURE_COLUMNS)
         | set(store.TECHNICAL_FEATURE_COLUMNS)
         | set(store.CONTEXT_FEATURE_COLUMNS)
         | set(store.REGIME_FEATURE_COLUMNS)
+        | set(store.COMMODITIES_FEATURE_COLUMNS)
         | macros
     )
     assert len(store.ALL_FEATURE_COLUMNS) == len(union)
@@ -704,6 +706,7 @@ def test_a4_the_names_do_not_collide_between_the_four_families() -> None:
         + len(store.CONTEXT_FEATURE_COLUMNS)
         + len(store.REGIME_FEATURE_COLUMNS)
         + 13
+        + 5
         - 1
     )
     assert set(store.ALL_FEATURE_COLUMNS) == union
@@ -724,6 +727,7 @@ def test_a5_the_frozen_coupling_is_resolved_with_the_macro_columns() -> None:
     si alguno de esos ficheros se hubiera "arreglado" de otra forma, aqui se ve.
     """
     assert sorted(store.CATALOG_BY_FEATURE_SET) == [
+        "commodities_v1",
         "context_v1",
         "macro_v1",
         "regime_v1",
@@ -743,6 +747,7 @@ def test_a5_the_frozen_coupling_is_resolved_with_the_macro_columns() -> None:
         | set(store.CONTEXT_FEATURE_COLUMNS)
         | set(store.MACRO_FEATURE_COLUMNS)
         | set(store.REGIME_FEATURE_COLUMNS)
+        | set(store.COMMODITIES_FEATURE_COLUMNS)
     )
     assert len(store.ALL_FEATURE_COLUMNS) == len(union)
 

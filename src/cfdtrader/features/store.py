@@ -107,15 +107,19 @@ mismo dia.
 ``technical_v1``       ``cfdtrader.features.technical``  :data:`TECHNICAL_FEATURE_CATALOG`
 ``context_v1``         ``cfdtrader.features.context``    :data:`CONTEXT_FEATURE_CATALOG`
 ``macro_v1``           ``cfdtrader.features.macro``      :data:`MACRO_FEATURE_CATALOG`
+``regime_v1``          ``cfdtrader.features.regime``     :data:`REGIME_FEATURE_CATALOG`
+``commodities_v1``     ``cfdtrader.features.commodities`` :data:`COMMODITIES_FEATURE_CATALOG`
 =====================  ================================  ======================
 
 Los valores por defecto de :class:`FeatureSpec` siguen siendo los de
-``volatility_v1``: #20 y #21 anaden features nuevas, no cambian el resultado de
-ninguna existente, asi que :data:`FEATURE_CODE_VERSION` **no** se mueve por
-anadirlas. :func:`build_matrix` sigue siendo la entrada de ``volatility_v1``
-(congelada por su *golden*); las otras dos familias tienen su propia funcion de
-calculo, ``cfdtrader.features.technical.technical_matrix`` y
-``cfdtrader.features.context.context_matrix``.
+``volatility_v1``: #20, #21, #22, #23 y #143 anaden features nuevas, no cambian el
+resultado de ninguna existente, asi que :data:`FEATURE_CODE_VERSION` **no** se mueve
+por anadirlas. :func:`build_matrix` sigue siendo la entrada de ``volatility_v1``
+(congelada por su *golden*); las otras familias tienen su propia funcion de
+calculo, ``cfdtrader.features.technical.technical_matrix``,
+``cfdtrader.features.context.context_matrix``, ``cfdtrader.features.macro.macro_matrix``,
+``cfdtrader.features.regime.regime_matrix`` y
+``cfdtrader.features.commodities.commodities_matrix``.
 
 La familia de **contexto de mercado** (#21) es la unica que recibe **muchas**
 series: su entrada es un ``Mapping`` con una entrada por serie
@@ -130,6 +134,13 @@ publicacion macro **no** cae el dia de su referencia: la alineacion es
 *point-in-time* y se resuelve con el ``published_at`` de cada observacion, no con
 el calendario. Un ``Mapping`` incompleto, con una clave de mas o con una serie
 mal formada es :class:`MacroInputError`.
+
+La familia de **commodities y FX** (#143) recibe un ``Mapping`` con cuatro claves
+(:data:`COMMODITIES_SERIES`): el ancla del calendario y las tres series admitidas
+por la decision de #143. Cada serie ajena al calendario americano cierra despues
+del S&P, asi que su fila ``t`` lee su ultima sesion ``< t``. Un ``Mapping``
+incompleto, con una clave de mas o con una serie mal formada es
+:class:`CommoditiesInputError`.
 """
 
 from __future__ import annotations
@@ -160,6 +171,15 @@ from cfdtrader.features.volatility import (
 __all__ = [
     "ALL_FEATURE_COLUMNS",
     "CATALOG_BY_FEATURE_SET",
+    "COMMODITIES_ADMITTED_SERIES",
+    "COMMODITIES_ANCHOR_SERIES",
+    "COMMODITIES_FEATURES_SOURCE",
+    "COMMODITIES_FEATURE_CATALOG",
+    "COMMODITIES_FEATURE_COLUMNS",
+    "COMMODITIES_FEATURE_SET",
+    "COMMODITIES_MIN_SESSIONS",
+    "COMMODITIES_RETURN_WINDOW",
+    "COMMODITIES_SERIES",
     "CONTEXT_CORRELATION_WINDOW",
     "CONTEXT_FEATURES_SOURCE",
     "CONTEXT_FEATURE_CATALOG",
@@ -169,6 +189,8 @@ __all__ = [
     "CONTEXT_MIN_SESSIONS",
     "CONTEXT_SECTOR_SERIES",
     "CONTEXT_SERIES",
+    "DEFAULT_COMMODITIES_SOURCES",
+    "DEFAULT_COMMODITIES_WINDOWS",
     "DEFAULT_CONTEXT_SOURCES",
     "DEFAULT_CONTEXT_WINDOWS",
     "DEFAULT_MACRO_SOURCES",
@@ -208,6 +230,7 @@ __all__ = [
     "TECHNICAL_MIN_SESSIONS",
     "VOLATILITY_FEATURE_SET",
     "CatalogEntry",
+    "CommoditiesInputError",
     "ContextInputError",
     "FeatureSpec",
     "FeatureStoreError",
@@ -327,6 +350,18 @@ class RegimeInputError(FeatureStoreError):
     OHLC. Falta una columna de las cinco que el calculo necesita: es un error de
     **entrada**, y el mensaje nombra la que falta, porque es lo unico que se
     puede arreglar desde fuera.
+    """
+
+
+class CommoditiesInputError(FeatureStoreError):
+    """El ``Mapping`` de series de la familia de commodities no cumple su contrato.
+
+    La familia ``commodities_v1`` (#143) recibe cuatro claves: el ancla
+    (``^GSPC``) y las tres series admitidas por la decision de #143. Falta una
+    serie, sobra una clave, falta ``session`` o ``close``, se repite una sesion o
+    el ``as_of`` del ancla no corresponde a su sesion: todo eso es un error de
+    **entrada**, y el mensaje nombra la serie, porque es lo unico que se puede
+    arreglar desde fuera.
     """
 
 
@@ -984,6 +1019,97 @@ DEFAULT_REGIME_SOURCES: Final[tuple[tuple[str, str], ...]] = (("raw.market_daily
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Catalogo de la familia de commodities y FX (#143)
+# ─────────────────────────────────────────────────────────────────────────────
+#: Identificador del conjunto de features de commodities y FX (#143).
+COMMODITIES_FEATURE_SET: Final[str] = "commodities_v1"
+
+#: ``source`` de las filas de commodities (mismo papel que el de las otras familias).
+COMMODITIES_FEATURES_SOURCE: Final[str] = "cfdtrader.features.commodities"
+
+#: La serie **ancla** del universo de filas: el calendario de sesiones del indice.
+COMMODITIES_ANCHOR_SERIES: Final[str] = "^GSPC"
+
+#: Las series **admitidas** por la decision de #143, en el orden declarado del documento
+#: ``_docs/commodity_fx_features_2026-10-09.md``: WTI, oro y EUR/USD. ``BZ=F`` (Brent) queda
+#: **fuera** por la regla pre-declarada del documento (redundante con el WTI: r = +0.86).
+COMMODITIES_ADMITTED_SERIES: Final[tuple[str, ...]] = ("CL=F", "GC=F", "EURUSD=X")
+
+#: Las **cuatro** series de entrada de la familia: el ancla y las tres admitidas. No es una
+#: lista descriptiva: el ``Mapping`` que recibe ``commodities_matrix`` tiene **exactamente**
+#: estas claves. ``DX-Y.NYB`` no aparece: su retorno ya es ``dxy_ret_1`` (#21).
+COMMODITIES_SERIES: Final[tuple[str, ...]] = (
+    COMMODITIES_ANCHOR_SERIES,
+    *COMMODITIES_ADMITTED_SERIES,
+)
+
+#: Sesiones del retorno acumulado de ``oil_ret_5``.
+COMMODITIES_RETURN_WINDOW: Final[int] = 5
+
+#: Sesiones minimas de la ventana **expandida** de ``oil_ret_1_z``.
+COMMODITIES_MIN_SESSIONS: Final[int] = 250
+
+#: Catalogo completo de la familia de commodities y FX (5 entradas, #143). Las formulas viven en
+#: ``cfdtrader.features.commodities``; aqui esta la **declaracion** del contrato (ventana,
+#: fuente y el cierre del que depende cada columna). Las tres series cierran **despues** del
+#: cierre del S&P (el futuro a las 17:00 ET, ``_docs/plan.md`` §8.5), asi que la fila ``t`` lee
+#: su ultima sesion ``< t``: el mismo ``required_as_of`` que ``dxy_ret_1``.
+COMMODITIES_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
+    CatalogEntry(
+        "oil_ret_1",
+        "retorno logaritmico del WTI ('CL=F') en su ultima sesion < t",
+        1,
+        "raw.market_daily",
+        "cierre de la sesion t-1",
+    ),
+    CatalogEntry(
+        "oil_ret_5",
+        f"retorno logaritmico acumulado del WTI ('CL=F') sobre las "
+        f"{COMMODITIES_RETURN_WINDOW} sesiones que terminan en su ultima sesion < t",
+        COMMODITIES_RETURN_WINDOW,
+        "raw.market_daily",
+        "cierre de la sesion t-1",
+    ),
+    CatalogEntry(
+        "oil_ret_1_z",
+        f"normalise_expanding(oil_ret_1, min_sessions={COMMODITIES_MIN_SESSIONS})",
+        COMMODITIES_MIN_SESSIONS,
+        "raw.market_daily",
+        "cierre de la sesion t-1",
+    ),
+    CatalogEntry(
+        "gold_ret_1",
+        "retorno logaritmico del oro ('GC=F') en su ultima sesion < t",
+        1,
+        "raw.market_daily",
+        "cierre de la sesion t-1",
+    ),
+    CatalogEntry(
+        "eurusd_ret_1",
+        "retorno logaritmico del EUR/USD ('EURUSD=X') en su ultima sesion < t",
+        1,
+        "raw.market_daily",
+        "cierre de la sesion t-1",
+    ),
+)
+
+#: Columnas de feature que persiste la matriz de commodities: **todas** las del catalogo.
+COMMODITIES_FEATURE_COLUMNS: Final[tuple[str, ...]] = tuple(
+    entry.name for entry in COMMODITIES_FEATURE_CATALOG
+)
+
+#: Ventanas por defecto de la spec de commodities: las del catalogo, sin excepciones.
+DEFAULT_COMMODITIES_WINDOWS: Final[dict[str, int | None]] = {
+    entry.name: entry.window for entry in COMMODITIES_FEATURE_CATALOG
+}
+
+#: Fuentes de entrada por defecto de la familia: el ancla y las tres series admitidas.
+DEFAULT_COMMODITIES_SOURCES: Final[tuple[tuple[str, str], ...]] = tuple(
+    ("raw.market_daily", series_id) for series_id in COMMODITIES_SERIES
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Registro de familias
 # ─────────────────────────────────────────────────────────────────────────────
 #: Registro de familias: el catalogo de cada ``feature_set`` declarado.
@@ -993,6 +1119,7 @@ CATALOG_BY_FEATURE_SET: Final[dict[str, tuple[CatalogEntry, ...]]] = {
     CONTEXT_FEATURE_SET: CONTEXT_FEATURE_CATALOG,
     MACRO_FEATURE_SET: MACRO_FEATURE_CATALOG,
     REGIME_FEATURE_SET: REGIME_FEATURE_CATALOG,
+    COMMODITIES_FEATURE_SET: COMMODITIES_FEATURE_CATALOG,
 }
 
 #: ``source`` con el que se persiste cada familia (el discriminador de la
@@ -1003,9 +1130,10 @@ SOURCE_BY_FEATURE_SET: Final[dict[str, str]] = {
     CONTEXT_FEATURE_SET: CONTEXT_FEATURES_SOURCE,
     MACRO_FEATURE_SET: MACRO_FEATURES_SOURCE,
     REGIME_FEATURE_SET: REGIME_FEATURES_SOURCE,
+    COMMODITIES_FEATURE_SET: COMMODITIES_FEATURES_SOURCE,
 }
 
-#: Todas las columnas de feature conocidas, de las **cinco** familias: es la lista
+#: Todas las columnas de feature conocidas, de las **seis** familias: es la lista
 #: con la que el digest de una matriz comprueba que no haya ``NaN`` ni ``inf``. Se
 #: deduplica porque ``atr_norm`` existe en dos catalogos (el solape lo declara y lo
 #: resuelve #72, no esta capa). Que las 13 columnas macro entren aqui no es
@@ -1019,6 +1147,7 @@ ALL_FEATURE_COLUMNS: Final[tuple[str, ...]] = tuple(
             *CONTEXT_FEATURE_COLUMNS,
             *MACRO_FEATURE_COLUMNS,
             *REGIME_FEATURE_COLUMNS,
+            *COMMODITIES_FEATURE_COLUMNS,
         )
     )
 )

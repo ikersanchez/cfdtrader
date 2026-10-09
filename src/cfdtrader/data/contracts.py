@@ -247,6 +247,11 @@ FEATURE_SPEC_COLUMNS: Final[tuple[ColumnSpec, ...]] = (
     ColumnSpec("day_of_week", "float"),
     ColumnSpec("sessions_to_opex", "float"),
     ColumnSpec("is_es_roll_session", "float"),
+    ColumnSpec("oil_ret_1", "float"),
+    ColumnSpec("oil_ret_5", "float"),
+    ColumnSpec("oil_ret_1_z", "float"),
+    ColumnSpec("gold_ret_1", "float"),
+    ColumnSpec("eurusd_ret_1", "float"),
 )
 
 
@@ -311,7 +316,7 @@ LAYOUTS: Final[dict[tuple[str, str], DatasetLayout]] = {
     ("derived", "features_daily"): DatasetLayout(
         layer="derived",
         dataset="features_daily",
-        layout_version=1,
+        layout_version=2,
         payload=(*FEATURE_SPEC_COLUMNS, *_FEATURE_VERSION_COLUMNS),
     ),
     ("derived", "labels"): DatasetLayout(

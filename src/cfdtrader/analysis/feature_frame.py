@@ -1,6 +1,6 @@
 """Adaptador del almacen al frame de features etiquetado, con el corrimiento de diseno (#24).
 
-Es el **unico** modulo que lee el almacen para entrenar: arma las cinco familias llamando a
+Es el **unico** modulo que lee el almacen para entrenar: arma las seis familias llamando a
 sus funciones de calculo y aplica el corrimiento temporal de una sesion que vive en
 ``models/baseline``. Lo reutilizan #25, #27, #28 y #73 (la persistencia real de
 ``derived.features_daily``).
@@ -13,7 +13,7 @@ Reglas que se respetan aqui:
 - ``session`` se deriva de ``as_of`` en ``America/New_York`` y se trunca a fecha, igual que en
   ``analysis.backtest_report`` y ``analysis.drift``: la fecha **UTC** no sirve (una sesion a
   caballo del cambio de hora se duplicaria).
-- Las cinco familias se llaman con su ``spec`` explicito (es *keyword-only* **sin** valor por
+- Las seis familias se llaman con su ``spec`` explicito (es *keyword-only* **sin** valor por
   defecto) y con **exactamente** las claves que declara ``features.store``.
 - ``atr_norm`` esta en dos familias (`volatility_v1` y `technical_v1`, #72): la duplicada se
   conserva aparte, se comprueba que las dos son iguales y solo entonces se descarta una. Si
@@ -33,6 +33,7 @@ import polars as pl
 
 from cfdtrader.data.store import Store, UnknownDatasetError
 from cfdtrader.features import store as feature_store
+from cfdtrader.features.commodities import commodities_matrix, commodities_spec
 from cfdtrader.features.context import context_matrix, context_spec
 from cfdtrader.features.macro import (
     ANCHOR_INPUT_COLUMNS,
@@ -101,6 +102,7 @@ FAMILY_ORDER: Final[tuple[str, ...]] = (
     feature_store.CONTEXT_FEATURE_SET,
     feature_store.MACRO_FEATURE_SET,
     feature_store.REGIME_FEATURE_SET,
+    feature_store.COMMODITIES_FEATURE_SET,
 )
 
 #: Columnas del catalogo por familia, en su orden.
@@ -110,13 +112,14 @@ COLUMNS_BY_FAMILY: Final[dict[str, tuple[str, ...]]] = {
     feature_store.CONTEXT_FEATURE_SET: feature_store.CONTEXT_FEATURE_COLUMNS,
     feature_store.MACRO_FEATURE_SET: feature_store.MACRO_FEATURE_COLUMNS,
     feature_store.REGIME_FEATURE_SET: feature_store.REGIME_FEATURE_COLUMNS,
+    feature_store.COMMODITIES_FEATURE_SET: feature_store.COMMODITIES_FEATURE_COLUMNS,
 }
 
 #: Limites declarados del adaptador, en prosa (viajan al informe).
 FEATURES_LIMITATIONS: Final[tuple[str, ...]] = (
     "las features **no** estan persistidas: `data/derived/features_daily` no existe todavia "
     "(lo escribe #73, y hoy nadie escribe ese dataset fuera de `tmp_path`), asi que el "
-    "adaptador lee el almacen y vuelve a llamar a las cinco familias en cada corrida",
+    "adaptador lee el almacen y vuelve a llamar a las seis familias en cada corrida",
     "`is_es_roll_session` viaja como 0/1 `float` aunque polars lo produzca `Boolean`: el motor "
     "de features publica ese 0/1, no un booleano",
     "este modulo **no** filtra por la muestra limpia de #52: eso es una restriccion de "
@@ -219,7 +222,7 @@ def _require_datasets(store: Store, *, names: Sequence[str]) -> None:
     if missing:
         raise MissingFeatureDatasetError(
             f"el almacen {store.root} no tiene {missing}: el adaptador necesita "
-            f"{list(names)} para armar las cinco familias. Construye el almacen antes (los "
+            f"{list(names)} para armar las seis familias. Construye el almacen antes (los "
             "tests que no lo necesitan no leen este modulo)"
         )
 
@@ -283,7 +286,7 @@ def missing_context_series(store: Store) -> tuple[str, ...]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Las cinco familias
+# Las seis familias
 # ─────────────────────────────────────────────────────────────────────────────
 def _volatility_frame(anchor: pl.DataFrame, vix: pl.DataFrame) -> pl.DataFrame:
     """``volatility_v1``: el OHLC del ancla mas ``vix_close`` (el cierre de ``^VIX``)."""
@@ -350,12 +353,39 @@ def _macro_frames(
     return frames, tuple(missing)
 
 
+def _commodities_frames(
+    market: Mapping[str, pl.DataFrame],
+) -> tuple[dict[str, pl.DataFrame], tuple[str, ...]]:
+    """Los 4 frames de ``commodities_v1``: el ancla (con ``as_of``) y las tres series de #143.
+
+    Las tres series admitidas son **opcionales**: si el almacen no las tiene, su frame sale
+    vacio, sus features quedan ``null`` y la serie se declara en ``missing_series``. El ancla no
+    lo es, pero :func:`_anchor_and_vix` ya lo exige antes de llegar aqui.
+    """
+    frames: dict[str, pl.DataFrame] = {}
+    missing: list[str] = []
+    schema = {"session": pl.Date(), "as_of": pl.Datetime("us", "UTC"), "close": pl.Float64()}
+    for series_id in feature_store.COMMODITIES_SERIES:
+        raw = market.get(series_id)
+        if raw is None:
+            missing.append(series_id)
+            frames[series_id] = _empty(schema)
+            continue
+        frame = _with_session(raw)
+        frames[series_id] = (
+            frame.select("session", "as_of", "close")
+            if series_id == feature_store.COMMODITIES_ANCHOR_SERIES
+            else frame.select("session", "close")
+        )
+    return frames, tuple(missing)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Ensamblado de la matriz (A1, A4)
 # ─────────────────────────────────────────────────────────────────────────────
 @dataclass(frozen=True, slots=True)
 class FeatureMatrix:
-    """La matriz de las cinco familias: una fila por sesion del diario, 52 columnas unicas.
+    """La matriz de las seis familias: una fila por sesion del diario, 57 columnas unicas.
 
     ``duplicated_columns`` son las columnas que publican **dos** familias y que se comprobaron
     identicas antes de quedarse con una sola (#72). ``missing_series`` son las series que el
@@ -403,10 +433,10 @@ def _join(
 
 @dataclass(frozen=True, slots=True)
 class FamilyFrames:
-    """Las cinco matrices **por familia**, antes de unirlas (#73).
+    """Las seis matrices **por familia**, antes de unirlas (#73).
 
     Es lo que necesita la persistencia: ``features.store.daily_records`` pide una matriz con
-    ``session``, ``as_of`` y **solo** las columnas de su familia, asi que las cinco tienen que
+    ``session``, ``as_of`` y **solo** las columnas de su familia, asi que las seis tienen que
     existir por separado. ``instants`` son el ``session`` y el ``as_of`` del ancla: la base de la
     union y el instante de cada fila persistida, para que ninguna familia pueda reordenarla.
 
@@ -460,7 +490,7 @@ def _anchor_and_vix(
 
 
 def build_family_frames(store: Store, *, series_id: str = ANCHOR_SERIES) -> FamilyFrames:
-    """Arma las **cinco** matrices por familia sobre el diario del ancla (A1, A4).
+    """Arma las **seis** matrices por familia sobre el diario del ancla (A1, A4).
 
     Es la mitad de :func:`build_feature_matrix` que no une las familias. Existe aparte porque la
     persistencia de #73 necesita una matriz **por familia** —con su catalogo y su spec— y la
@@ -471,6 +501,7 @@ def build_family_frames(store: Store, *, series_id: str = ANCHOR_SERIES) -> Fami
     anchor, vix = _anchor_and_vix(market, series_id=series_id)
     context_frames, missing_context = _context_frames(market, sectors)
     macro_frames, missing_macro = _macro_frames(market, macro_series)
+    commodities_frames, missing_commodities = _commodities_frames(market)
     bars = anchor.select("session", "open", "high", "low", "close")
     frames: dict[str, pl.DataFrame] = {
         feature_store.VOLATILITY_FEATURE_SET: _volatility_frame(anchor, vix),
@@ -478,16 +509,19 @@ def build_family_frames(store: Store, *, series_id: str = ANCHOR_SERIES) -> Fami
         feature_store.CONTEXT_FEATURE_SET: context_matrix(context_frames, spec=context_spec()),
         feature_store.MACRO_FEATURE_SET: macro_matrix(macro_frames, spec=macro_spec()),
         feature_store.REGIME_FEATURE_SET: regime_matrix(bars, spec=regime_spec()),
+        feature_store.COMMODITIES_FEATURE_SET: commodities_matrix(
+            commodities_frames, spec=commodities_spec()
+        ),
     }
     return FamilyFrames(
         frames=frames,
         instants=anchor.select("session", "as_of"),
-        missing_series=(*missing_context, *missing_macro),
+        missing_series=(*missing_context, *missing_macro, *missing_commodities),
     )
 
 
 def build_feature_matrix(store: Store, *, series_id: str = ANCHOR_SERIES) -> FeatureMatrix:
-    """Arma la matriz de las cinco familias sobre el **diario** del ancla (A1, A4).
+    """Arma la matriz de las seis familias sobre el **diario** del ancla (A1, A4).
 
     Una sola pasada por familia, con su ``spec`` explicito. La fila de la sesion `t` es el
     estado de las features **al cierre de `t`**; el corrimiento de disponibilidad lo aplica
@@ -568,7 +602,7 @@ def _first_difference(left: pl.Series, right: pl.Series) -> int:
 
 
 def _normalise_dtypes(matrix: pl.DataFrame) -> pl.DataFrame:
-    """Las cinco familias como ``Float64``, con lo no finito a ``null`` (A4).
+    """Las seis familias como ``Float64``, con lo no finito a ``null`` (A4).
 
     ``is_es_roll_session`` entra como 0/1 ``float`` aunque polars lo produzca ``Boolean``: el
     motor de features publica ese 0/1. ``nan``/``inf`` no son valores publicables: se declaran
@@ -599,8 +633,10 @@ def family_spec(family: str) -> feature_store.FeatureSpec:
         return macro_spec()
     if family == feature_store.REGIME_FEATURE_SET:
         return regime_spec()
+    if family == feature_store.COMMODITIES_FEATURE_SET:
+        return commodities_spec()
     raise FeatureFrameError(
-        f"la familia {family!r} no tiene spec: el adaptador solo conoce las cinco declaradas"
+        f"la familia {family!r} no tiene spec: el adaptador solo conoce las seis declaradas"
     )
 
 

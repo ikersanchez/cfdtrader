@@ -394,7 +394,7 @@ def test_a1_the_space_is_the_preregistered_one() -> None:
     assert audit["budget"] == BUDGET
     assert audit["n_variants"] == BUDGET
     assert audit["total_trials"] == TOTAL_TRIALS
-    assert audit["catalog_columns"] == len(feature_store.ALL_FEATURE_COLUMNS) == 52
+    assert audit["catalog_columns"] == len(feature_store.ALL_FEATURE_COLUMNS) == 57
     assert [row["variant_id"] for row in cast("list[dict[str, object]]", audit["variants"])] == [
         variant.variant_id for variant in SEARCH_SPACE
     ]

@@ -219,6 +219,7 @@ def test_a1_the_registry_declares_the_two_families() -> None:
     """El registro expone las dos familias y la spec tecnica se construye."""
     # #21 anade `context_v1`: el registro deja de ser solo el de esta familia
     assert sorted(store.CATALOG_BY_FEATURE_SET) == [
+        "commodities_v1",
         "context_v1",
         "macro_v1",
         "regime_v1",
