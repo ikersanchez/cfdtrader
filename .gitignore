@@ -66,8 +66,11 @@ artifacts/
 # Es el dato **irreversible** del sistema (plan.md §19.1): no es un artefacto de
 # build, pero tampoco se versiona (se respalda aparte, como `data/`). El camino
 # diario lo escribe con `--journal-root journal` (_docs/runbook.md).
+# ⚠️ Anclado a la raiz (`/journal/`): sin la barra inicial el patron tambien casaba
+# `src/cfdtrader/journal/` y un modulo **nuevo** del paquete habria quedado ignorado en silencio
+# (bug detectado al anadir `read_table` en #150).
 # ─────────────────────────────────────────────────────────────────────────────
-journal/
+/journal/
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Caché de respuestas del LLM
