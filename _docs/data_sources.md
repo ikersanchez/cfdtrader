@@ -6,6 +6,8 @@
 >
 > Declaración de fuentes en `config/data_sources.yaml` (series y respaldos) y en
 > `config/macro_series.yaml` (series macro). Verificación: **2026-09-17**.
+> Cierre de **#107** por el criterio (b) —el proxy declarado es la ruta
+> definitiva—: **2026-10-09**.
 
 ## Resumen
 
@@ -149,9 +151,10 @@ HTTP 400   # falta api_key: la API responde, exige clave
 `SPX500:CFD` ni de su `bid`/`ask`.** No se sustituye por `^GSPC`, `ES=F` ni
 `SPY`: son instrumentos distintos (`_docs/plan.md` §3.1) y hacerlo falsearía la
 medición del diferencial, la financiación y el *tracking difference*, que es
-justo lo que la Fase 0 tiene que medir. La adquisición del dato real se sigue en
-**#107** y la ruta elegida se declara en la sección «Decisión de la fuente de
-intradía y bid/ask (tarea #50)».
+justo lo que la Fase 0 tiene que medir. La adquisición del dato real —**#107**—
+queda **cerrada por el criterio (b) el 2026-10-09**: **no** se adquiere y el
+límite se acepta y se declara. La ruta elegida se declara en la sección
+«Decisión de la fuente de intradía y bid/ask (tarea #50)».
 
 Comprobado el **2026-09-17** con estos comandos y estos resultados:
 
@@ -194,6 +197,29 @@ muda. Es el estado de facto del código; aquí queda **decidido y escrito**.
 Esta decisión **no** cambia el estado de la Fase 1: `phase1_ready` sigue `false`
 con el bloqueo `cfd_source_missing`, porque el CFD real sigue sin fuente.
 
+### Criterio (b) de #107 — el proxy declarado es la ruta definitiva (2026-10-09)
+
+El propietario resuelve **#107** por su **criterio de cierre (b)**: **no** adquiere
+el intradía ni el `bid`/`ask` reales del `SPX500:CFD`. La ruta **3 — proxy
+declarado** deja de ser el estado de facto provisional y pasa a ser **la ruta
+definitiva**, con sus límites **aceptados y declarados** (los de «Límites del
+proxy»), no provisionalmente. Registro: `plan.md` §19.18.
+
+- **Consecuencia.** Las rutas **1 (contratar al bróker)** y **2 (exportar del
+  bróker)** quedan **descartadas por decisión**, no en espera, y no nace la tarea
+  de ingeniería que cablearía el dato (la tarea #50 la declaraba bloqueada por la
+  adquisición).
+- **Qué NO cambia.** El CFD real sigue **sin fuente**: ningún proxy se registra
+  como cotización del CFD (regla de oro), `phase1_ready` sigue `false` con el
+  bloqueo `cfd_source_missing` y los artefactos siguen declarando el proxy
+  (`models/labels.py::ENTRY_PRICE_PROXY_OF`,
+  `analysis/backtest_report.py::PRICE_PROXY_OF`).
+- **Valla de honestidad.** Esto **no** es una medición ni una afirmación de
+  *edge*: el spread real del CFD y el *tracking difference* siguen **sin medirse**
+  —ahora de forma **definitiva y aceptada**—, la mitad (b) de la puerta de Fase 0
+  sigue `not_evaluable` (*slippage* sin medir, **#62**) y `plan.md` §11.6 no se
+  toca.
+
 ### Límites del proxy
 
 - Ventana **rodante de ~60 días** para el 5 min (~7 días para el 1 min): **no hay
@@ -207,10 +233,12 @@ con el bloqueo `cfd_source_missing`, porque el CFD real sigue sin fuente.
 
 ### Pliego de adquisición (acción del usuario, #107)
 
-Las rutas **1 (contratar al bróker)** y **2 (exportar del bróker)** siguen
-abiertas: la adquisición del dato real es **acción del usuario** y se sigue en
-**#107**. Lo que se compraría es **fidelidad de ejecución**, no la economía del
-tramo `open→close` (que solo lleva el diferencial declarado).
+Las rutas **1 (contratar al bróker)** y **2 (exportar del bróker)** quedan
+**descartadas por decisión**: el propietario cerró **#107** por su criterio **(b)**
+el **2026-10-09** (ver «Criterio (b) de #107», arriba). Lo que se habría comprado
+era **fidelidad de ejecución**, no la economía del tramo `open→close` (que solo
+lleva el diferencial declarado). El pliego de abajo se conserva como **registro
+histórico** de lo que se habría pedido y por qué no se hizo.
 
 | Campo | Requisito |
 |---|---|
@@ -227,8 +255,10 @@ externo se registra como cotización del CFD.
 ### Seguimientos
 
 **#10 y #11 están cerradas** (y **#52** también): no hay trabajo abierto ahí. El
-único seguimiento abierto de la adquisición es **#107**. El proxy declarado **no**
-mide el *tracking difference* ni el spread real del CFD.
+seguimiento de la adquisición —**#107**— queda **cerrado por el criterio (b)** el
+**2026-10-09**: **no** se adquiere el dato del CFD y el proxy declarado es **la
+ruta definitiva**, no provisional. El proxy declarado **no** mide el *tracking
+difference* ni el spread real del CFD: eso queda **aceptado y declarado**.
 
 ## `open` diario de `^GSPC` — limitación conocida y decisión de la fuente de apertura
 
