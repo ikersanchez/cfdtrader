@@ -58,8 +58,14 @@ uv run python -m cfdtrader.data.news     --data-root data --as-of "$ts" \
 > **Aviso medido el 2026-10-09 (#142):** la API de **GDELT** (`--query`) responde **429**, así que
 > hoy se ingiere por **RSS** (`--feed`). Fuentes ejecutables, licencia y límites en
 > [`data_sources.md`](data_sources.md) §«Noticias» y en
-> [`news_sources_2026-10-09.md`](news_sources_2026-10-09.md). **No** mezcles `google-news` con otros
-> feeds si quieres que el lote no aborte por colisión de identidad (defecto abierto de #142).
+> [`news_sources_2026-10-09.md`](news_sources_2026-10-09.md).
+>
+> **Tolerancia por fuente y códigos de salida (#145).** Una fuente bloqueada, con `429` o caída
+> **no** tumba el lote: se declara su estado en `report.sources`
+> (`ok` | `blocked` | `rate_limited` | `unavailable` | `error`) y se sigue con las demás.
+> - `rc=0` — alguna fuente entregó, o ninguna falló de verdad (todas `unavailable`: día sin noticias).
+> - `rc=1` — **ninguna** fuente entregó y alguna falló. No se escriben filas inventadas.
+> - `rc=2` — configuración inválida (motivo por `stderr`).
 
 ## 2. Regeneración en orden (`_docs/process.md`, regla 2)
 

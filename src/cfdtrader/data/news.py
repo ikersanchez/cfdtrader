@@ -8,6 +8,9 @@ cuestión de disco).
 - **Deduplicación barata** (§4.9): hash del titular normalizado **más** similitud difusa, sin
   *embeddings* (ni coste ni proveedor extra).
 - El almacén es **inmutable**: reingestar el mismo titular es idempotente (``UNCHANGED``).
+- **Tolerancia por fuente (#145)**: :func:`collect` recoge de cada fuente por separado y
+  declara su estado (:class:`SourceOutcome`); una fuente bloqueada, con ``429`` o caída **no**
+  tumba el lote. El ``NewsReport`` publica esos estados en ``sources``.
 """
 
 from __future__ import annotations
@@ -16,7 +19,7 @@ import argparse
 import difflib
 import json
 import sys
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Final, cast
@@ -24,6 +27,13 @@ from typing import Final, cast
 from pydantic import BaseModel, ConfigDict
 
 from cfdtrader.data.settings import ConfigurationError, load_settings
+from cfdtrader.data.sources.base import (
+    SourceBlockedError,
+    SourceError,
+    SourceRateLimitedError,
+    SourceStatus,
+    SourceUnavailableError,
+)
 from cfdtrader.data.sources.http import CachedHttpClient
 from cfdtrader.data.sources.news import (
     GdeltAdapter,
@@ -40,6 +50,8 @@ __all__ = [
     "DEFAULT_WINDOW_HOURS",
     "NEWS_VERSION",
     "NewsReport",
+    "SourceOutcome",
+    "collect",
     "deduplicate",
     "existing_headlines",
     "headline_records",
@@ -61,6 +73,23 @@ DEFAULT_FUZZY_THRESHOLD: Final[float] = 0.9
 DEFAULT_WINDOW_HOURS: Final[int] = 24
 
 
+class SourceOutcome(BaseModel):
+    """Estado **declarado** de una fuente en el lote: nunca se adivina (#145).
+
+    ``ref`` es la etiqueta del feed RSS o la consulta GDELT; ``kind``, de qué adaptador
+    salió. ``status`` reutiliza :class:`SourceStatus` del contrato de fuentes: una caída
+    se declara, no se convierte en filas inventadas.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    ref: str
+    kind: str
+    status: SourceStatus
+    headlines: int = 0
+    error: str | None = None
+
+
 class NewsReport(BaseModel):
     """Resumen declarado de una ingesta: qué se recogió, qué se descartó y qué se escribió."""
 
@@ -73,6 +102,7 @@ class NewsReport(BaseModel):
     new: int
     outcome: str
     headline_hashes: tuple[str, ...] = ()
+    sources: tuple[SourceOutcome, ...] = ()
 
 
 def load_headlines(
@@ -183,10 +213,13 @@ def ingest(
     known_hashes: frozenset[str] = frozenset(),
     known_titles: Sequence[str] = (),
     threshold: float = DEFAULT_FUZZY_THRESHOLD,
+    sources: Sequence[SourceOutcome] = (),
 ) -> NewsReport:
     """Filtra lo posterior a ``now``, deduplica, escribe ``raw.news_headlines`` y resume.
 
     Lo que llega con ``published_at > now`` **nunca** se guarda: sería un dato del futuro.
+    ``sources`` son los estados por fuente que ya recogió :func:`collect`; se publican en
+    el informe tal cual (este paso **no** habla con la red ni decide estados).
     """
     if now.utcoffset() is None:
         raise ConfigurationError("now: se espera un datetime con zona (TZ-aware)")
@@ -207,7 +240,83 @@ def ingest(
         new=len(new),
         outcome=outcome,
         headline_hashes=tuple(headline_hash(headline.title) for headline in new),
+        sources=tuple(sources),
     )
+
+
+def _status_of(error: SourceError) -> SourceStatus:
+    """Estado declarado que corresponde a un error tipado de fuente (#145)."""
+    if isinstance(error, SourceRateLimitedError):
+        return SourceStatus.RATE_LIMITED
+    if isinstance(error, SourceBlockedError):
+        return SourceStatus.BLOCKED
+    if isinstance(error, SourceUnavailableError):
+        return SourceStatus.UNAVAILABLE
+    return SourceStatus.ERROR
+
+
+def _fetch_one(
+    *, kind: str, ref: str, fetch: Callable[[], list[Headline]]
+) -> tuple[list[Headline], SourceOutcome]:
+    """Recoge de **una** fuente: nunca propaga el fallo, lo declara (#145)."""
+    try:
+        headlines = fetch()
+    except SourceError as error:
+        return [], SourceOutcome(ref=ref, kind=kind, status=_status_of(error), error=str(error))
+    except Exception as error:  # una fuente rara no tumba el lote: se declara
+        return [], SourceOutcome(
+            ref=ref, kind=kind, status=SourceStatus.ERROR, error=f"{type(error).__name__}: {error}"
+        )
+    status = SourceStatus.OK if headlines else SourceStatus.UNAVAILABLE
+    return list(headlines), SourceOutcome(
+        ref=ref, kind=kind, status=status, headlines=len(headlines)
+    )
+
+
+def collect(
+    *,
+    queries: Sequence[str],
+    feeds: Sequence[tuple[str, str]],
+    now: datetime,
+    gdelt: GdeltAdapter,
+    rss: RssAdapter,
+) -> tuple[list[Headline], tuple[SourceOutcome, ...]]:
+    """Recoge de cada fuente **tolerando el fallo por fuente** (#145).
+
+    Una fuente bloqueada, con ``429`` o caída no tumba el lote: se declara su estado y se
+    sigue con las demás. El orden de los estados es el declarado —consultas GDELT y luego
+    feeds RSS—, para que el informe sea determinista.
+    """
+    headlines: list[Headline] = []
+    outcomes: list[SourceOutcome] = []
+    for query in queries:
+        fetched, outcome = _fetch_one(
+            kind="gdelt", ref=query, fetch=lambda query=query: gdelt.fetch(query=query, now=now)
+        )
+        headlines.extend(fetched)
+        outcomes.append(outcome)
+    for label, url in feeds:
+        fetched, outcome = _fetch_one(
+            kind="rss",
+            ref=label,
+            fetch=lambda label=label, url=url: rss.fetch(feed_url=url, label=label, now=now),
+        )
+        headlines.extend(fetched)
+        outcomes.append(outcome)
+    return headlines, tuple(outcomes)
+
+
+def _exit_code(outcomes: Sequence[SourceOutcome]) -> int:
+    """Código de salida declarado para un lote (#145).
+
+    ``0`` si alguna fuente entregó —o si ninguna falló de verdad (todas ``unavailable``:
+    un día sin noticias no es un fallo)—. ``1`` si **ninguna** entregó y alguna falló.
+    """
+    if any(outcome.status is SourceStatus.OK for outcome in outcomes):
+        return 0
+    if all(outcome.status is SourceStatus.UNAVAILABLE for outcome in outcomes):
+        return 0
+    return 1 if outcomes else 0
 
 
 def _parse_as_of(value: str | None) -> datetime:
@@ -234,8 +343,12 @@ def _parse_feed(spec: str) -> tuple[str, str]:
 def main(argv: Sequence[str] | None = None) -> int:
     """Ingesta manual: recoge GDELT + RSS, deduplica y escribe; imprime el informe (JSON).
 
-    Códigos: ``0`` = ingesta emitida; ``2`` = falta ``--as-of``, no hay fuentes declaradas o la
-    configuración es inválida (con el motivo por ``stderr``).
+    Una fuente que falla **no** tumba el lote: se declara en ``sources`` y se sigue con las
+    demás (#145).
+
+    Códigos: ``0`` = la ingesta se emitió (alguna fuente entregó, o ninguna falló de verdad);
+    ``1`` = **ninguna** fuente entregó y alguna falló (no se inventan filas); ``2`` = falta
+    ``--as-of``, no hay fuentes declaradas o la configuración es inválida (motivo por stderr).
     """
     parser = argparse.ArgumentParser(
         prog="cfdtrader.data.news",
@@ -270,13 +383,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     data_root = Path(args.data_root) if args.data_root is not None else Path(settings.data.root)
     store = Store(data_root)
     with CachedHttpClient(source="news", cache_root=data_root / "cache") as client:
-        gdelt = GdeltAdapter(client)
-        rss = RssAdapter(client)
-        headlines: list[Headline] = []
-        for query in queries:
-            headlines.extend(gdelt.fetch(query=query, now=moment))
-        for label, url in feeds:
-            headlines.extend(rss.fetch(feed_url=url, label=label, now=moment))
+        headlines, outcomes = collect(
+            queries=queries,
+            feeds=feeds,
+            now=moment,
+            gdelt=GdeltAdapter(client),
+            rss=RssAdapter(client),
+        )
 
     known_hashes, known_titles = existing_headlines(store)
     report = ingest(
@@ -285,9 +398,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         now=moment,
         known_hashes=known_hashes,
         known_titles=known_titles,
+        sources=outcomes,
     )
     print(json.dumps(report.model_dump(), ensure_ascii=False, sort_keys=True))
-    return 0
+    return _exit_code(outcomes)
 
 
 if __name__ == "__main__":  # pragma: no cover - entrada de proceso
