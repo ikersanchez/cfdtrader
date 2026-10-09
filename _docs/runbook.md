@@ -160,14 +160,31 @@ subsección anterior **no** basta por sí sola cuando ya corrió el barrido: hay
 
 ## 3. Camino diario — la pista, o el estado «sin recomendación»
 
+Antes del camino, captura el pre-mercado del futuro ES (#141): es un **dato declarado** de la
+decisión, no una feature del modelo. Se toma a las **08:45 ET** (el snapshot de `plan.md` §13).
+
+```bash
+uv run python -m cfdtrader.analysis.premarket_gap \
+    --as-of "$(date -u +%Y-%m-%d)T13:00:00+00:00" \
+    --reports-dir data/derived/reports \
+    --capture-bars "journal/ops/$(date -u +%Y-%m-%d)/premarket_bars.json"
+```
+
+> Necesita red (descarga `ES=F` con horas extendidas). Si la fuente falla o no hay pre-mercado, el
+> informe sale con su estado `unavailable` y **no** tumba nada; el camino diario sigue sin ese bloque.
+
 ```bash
 uv run python -m cfdtrader.delivery.run_daily \
     --as-of "$(date -u +%Y-%m-%d)T13:00:00+00:00" \
     --variant-id lightgbm_gbdt_v1 \
     --journal-root journal \
     --runs-root runs \
-    --git-commit "$(git rev-parse HEAD)"
+    --git-commit "$(git rev-parse HEAD)" \
+    --premarket-bars "journal/ops/$(date -u +%Y-%m-%d)/premarket_bars.json"
 ```
+
+> `--premarket-bars` es **opcional**: sin él, el informe simplemente no trae el bloque del ES. El
+> camino diario **no** descarga datos; solo lee las barras que capturó el paso anterior (#141).
 
 Salida `0`: informe emitido (`recommendation`, o `no_recommendation_stale_data`/`_data_quality`; un
 día de mercado cerrado es `recommendation` con `NOTHING` justificado). Salida `2`: falta un argumento

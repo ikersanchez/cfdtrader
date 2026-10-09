@@ -123,6 +123,7 @@ from cfdtrader.agents.event_calendar import (
     calendar_signal,
 )
 from cfdtrader.agents.news import PROMPT_TEMPLATE_NAME, NewsAgent, NewsAgentError
+from cfdtrader.analysis import premarket_gap
 from cfdtrader.analysis.backtest_report import NOTIONAL_USD
 from cfdtrader.analysis.experiment_log import (
     ExperimentLogError,
@@ -588,6 +589,22 @@ def _earnings_blockers(earnings: Sequence[EarningsEvent]) -> tuple[str, ...]:
     return tuple(f"earnings_confirmado:{event.symbol}" for event in earnings if event.blocking)
 
 
+def _captured_fetcher(
+    bars: Sequence[premarket_gap.PremarketBar],
+) -> premarket_gap.BarsFetcher:
+    """Un *fetcher* que devuelve las barras capturadas del ES (#141), sin red.
+
+    El camino diario **no** descarga datos (lee el almacen): la captura de las 08:45 la hace el CLI
+    ``cfdtrader.analysis.premarket_gap`` y aqui solo se leen sus barras.
+    """
+
+    def fetch(_series_id: str, *, as_of: datetime) -> Sequence[premarket_gap.PremarketBar]:
+        del as_of
+        return bars
+
+    return fetch
+
+
 def _report_facts(
     output: GateOutput,
     *,
@@ -691,6 +708,7 @@ def render(
     publications: Sequence[MacroPublication] = (),
     earnings: Sequence[EarningsEvent] = (),
     report: report_agent.ReportDraft | None = None,
+    premarket: Mapping[str, object] | None = None,
     notes: Sequence[str] = (),
 ) -> str:
     """El informe del dia: cabecera, pista (si la hay), bloqueos, motivo y valla (#109, #40).
@@ -714,6 +732,8 @@ def render(
         lines.extend(_calendar_lines(calendar_events))
     lines.extend(_publication_lines(publications))
     lines.extend(_earnings_lines(earnings))
+    if premarket is not None:
+        lines.extend(_premarket_lines(premarket))
     if report is not None:
         lines.extend(_report_lines(report))
     lines.extend(f"nota: {note}" for note in notes)
@@ -800,6 +820,26 @@ def _earnings_lines(earnings: Sequence[EarningsEvent]) -> list[str]:
         f"momento: {event.moment.value} | certeza: {event.certainty.value} | "
         f"bloquea: {'si' if event.blocking else 'no'}"
         for event in earnings
+    ]
+
+
+def _premarket_lines(payload: Mapping[str, object]) -> list[str]:
+    """El gap de pre-mercado del ES (#141): **dato declarado** de la decision, no una feature.
+
+    Los tres numeros van juntos y **nunca se suman**: el movimiento del futuro, el gap frente al
+    indice (que incluye el *basis*) y el *basis* mismo.
+    """
+
+    def _show(name: str) -> str:
+        value = payload[name]
+        return "null" if value is None else f"{value} %"
+
+    return [
+        f"premarket_es: {payload['state']} — {payload['reason']}",
+        f"  overnight_move_pct: {_show('overnight_move_pct')}",
+        f"  gap_vs_index_pct: {_show('gap_vs_index_pct')}",
+        f"  basis_pct: {_show('basis_pct')}",
+        f"  nota: {payload['not_a_model_feature']}",
     ]
 
 
@@ -1249,6 +1289,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="raiz de la traza estructurada (run_log/manifest); por defecto `<journal-root>/ops`",
     )
+    parser.add_argument(
+        "--premarket-bars",
+        type=Path,
+        default=None,
+        help="barras capturadas del pre-mercado del ES (#141): sin ellas, la seccion no aparece",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -1319,6 +1365,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             calendar_path=cast("Path | None", args.calendar),
             data_root_arg=cast("Path | None", args.data_root),
             runs_root=Path(args.runs_root),
+            premarket_bars=cast("Path | None", args.premarket_bars),
         )
 
 
@@ -1335,6 +1382,7 @@ def _deliver(
     calendar_path: Path | None,
     data_root_arg: Path | None,
     runs_root: Path,
+    premarket_bars: Path | None = None,
 ) -> int:
     """Ejecuta el pipeline de una sesion y devuelve su codigo de salida (ver ``main``).
 
@@ -1419,6 +1467,21 @@ def _deliver(
             publications = _day_publications(store, session, moment)
             earnings = _day_earnings(store, session, moment)
         earnings_blockers = _earnings_blockers(earnings)
+        # El gap de pre-mercado del ES (#141): un dato **declarado** de la decision, nunca una
+        # feature. El camino diario **no** descarga: lee las barras que capturo el CLI de
+        # `premarket_gap` a las 08:45 (`--premarket-bars`). Sin el fichero, la seccion no aparece.
+        premarket: Mapping[str, object] | None = None
+        if premarket_bars is not None:
+            with observer.stage("premarket"):
+                try:
+                    captured = premarket_gap.load_bars(premarket_bars)
+                    premarket = premarket_gap.analyse(
+                        store=store,
+                        as_of=moment,
+                        fetcher=_captured_fetcher(captured),
+                    ).payload()
+                except premarket_gap.PremarketGapError as error:
+                    print(f"no se puede medir el gap de pre-mercado: {error}", file=sys.stderr)
         if guard.blocks and guard.verdict is not GuardVerdict.MARKET_CLOSED:
             # Aqui solo llegan los dos "no se" de frescura. La clausura (#113, MARKET_CLOSED) **no**
             # para el camino: el gate la convierte en un `NOTHING` justificado (regla 19) que si se
@@ -1432,6 +1495,7 @@ def _deliver(
                 message=_guard_message(guard),
                 publications=publications,
                 earnings=earnings,
+                premarket=premarket,
             )
             with observer.stage("journal"):
                 failure = _record_or_report(
@@ -1461,6 +1525,7 @@ def _deliver(
                 message=f"calidad de datos (tech_stack.md §8.4): {problem}; no se emite pista",
                 publications=publications,
                 earnings=earnings,
+                premarket=premarket,
             )
             with observer.stage("journal"):
                 failure = _record_or_report(
@@ -1596,6 +1661,7 @@ def _deliver(
         publications=publications,
         earnings=earnings,
         report=report,
+        premarket=premarket,
         notes=() if fomc_declared else (fomc_note,),
     )
     with observer.stage("journal"):

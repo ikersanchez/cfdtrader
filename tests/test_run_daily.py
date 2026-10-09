@@ -3235,3 +3235,64 @@ def test_37_without_a_redaction_the_report_is_still_emitted(
     assert "redaccion:" not in captured.out
     assert "estado: recommendation" in captured.out
     assert "no hay edge demostrado" in captured.out
+
+
+def test_the_premarket_gap_is_declared_not_a_feature() -> None:
+    """#141: el gap del ES viaja como dato declarado; sin el, la seccion no aparece."""
+    payload = {
+        "state": "measured",
+        "reason": "medido con 26 barras de 5m con horas extendidas",
+        "overnight_move_pct": 1.0,
+        "gap_vs_index_pct": 2.01,
+        "basis_pct": 1.0,
+        "not_a_model_feature": "es un **dato declarado de la decision**, no una feature",
+    }
+    text = run_daily.render(
+        status=GateStatus.NO_RECOMMENDATION_STALE_DATA,
+        session=NEXT_SESSION,
+        as_of=datetime(2026, 9, 17, 12, 0, tzinfo=UTC),
+        snapshot_session=SNAPSHOT_SESSION,
+        model_source="runs/model.json",
+        message="sin pista",
+        premarket=payload,
+    )
+    assert "premarket_es: measured" in text
+    assert "overnight_move_pct: 1.0 %" in text
+    assert "gap_vs_index_pct: 2.01 %" in text
+    assert "basis_pct: 1.0 %" in text
+    assert "no una feature" in text
+
+    without = run_daily.render(
+        status=GateStatus.NO_RECOMMENDATION_STALE_DATA,
+        session=NEXT_SESSION,
+        as_of=datetime(2026, 9, 17, 12, 0, tzinfo=UTC),
+        snapshot_session=SNAPSHOT_SESSION,
+        model_source="runs/model.json",
+        message="sin pista",
+    )
+    assert "premarket_es" not in without
+
+
+def test_the_premarket_gap_shows_null_when_it_is_unavailable() -> None:
+    """#141: sin dato, los tres numeros salen `null`, nunca `0`."""
+    payload = {
+        "state": "unavailable",
+        "reason": "la fuente no devolvio ninguna barra",
+        "overnight_move_pct": None,
+        "gap_vs_index_pct": None,
+        "basis_pct": None,
+        "not_a_model_feature": "no es una feature",
+    }
+    text = run_daily.render(
+        status=GateStatus.NO_RECOMMENDATION_STALE_DATA,
+        session=NEXT_SESSION,
+        as_of=datetime(2026, 9, 17, 12, 0, tzinfo=UTC),
+        snapshot_session=SNAPSHOT_SESSION,
+        model_source="runs/model.json",
+        message="sin pista",
+        premarket=payload,
+    )
+    assert "premarket_es: unavailable" in text
+    assert "overnight_move_pct: null" in text
+    assert "gap_vs_index_pct: null" in text
+    assert "basis_pct: null" in text
