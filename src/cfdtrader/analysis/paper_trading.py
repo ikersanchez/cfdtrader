@@ -22,6 +22,13 @@ La puerta se aplica **al pie de la letra** (§16, pre-registrada en #130, no se 
 - **Coste**: el **declarado** de §3.3 (tarea #11), el mismo que el gate cobro en la decision; **no**
   se define un segundo coste.
 
+**Comparacion «con / sin overlay» (#150, §19.9).** La serie que la puerta mide es la **publicada**,
+que bajo §19.19 se emite **sin** overlay. El informe publica **aparte** la variante **«con
+overlay»** —leida de `journal.agent_signals` (`agent = "news"`, la escribe `run_daily`)—: las
+**mismas** sesiones, con la direccion que el gate habria dado con el veto (regla 20 ⇒ `nothing`) y
+el ajuste ±10 pp del `NewsAgent`, mas las sesiones donde discrepan. Es **informativa**: no es una
+segunda puerta.
+
 **Valla de honestidad** (viaja en el informe): esto **no** es una afirmacion de *edge*; la Fase 2
 sigue `not_evaluable`/`fail` con `phase2_ready = false`, el carril B sigue bloqueado, la ejecucion
 es manual y `§11.6` **no** se altera.
@@ -92,6 +99,11 @@ EXIT_CLOSE: Final[str] = "close"
 STATE_DIVERGES: Final[str] = "diverges"
 STATE_IN_RANGE: Final[str] = "in_range"
 STATE_NOT_EVALUABLE: Final[str] = "not_evaluable"
+
+#: Agente del overlay de noticias en `journal.agent_signals` (§12.5). Lo escribe el camino diario
+#: (`run_daily.NEWS_OVERLAY_AGENT`) como la variante «con overlay» (§19.19, #149); aqui se **lee**
+#: para comparar «con / sin overlay» (§19.9, #150).
+NEWS_AGENT: Final[str] = "news"
 
 
 class PaperTradingError(Exception):
@@ -203,6 +215,27 @@ def _recommendations(
         else:
             counts["nothing"] += 1
     return emitted, counts
+
+
+def _overlay_directions(journal_root: Path | str) -> dict[date, str]:
+    """La direccion de la variante «con overlay» por sesion (#150), leida de `agent_signals`.
+
+    El camino diario escribe una fila con ``agent = NEWS_AGENT`` (§19.19, #149): la direccion que el
+    gate habria dado **con** overlay viaja en ``evidence`` (``nothing`` si veto). Una fila sin
+    ``evidence`` o sin direccion se **ignora**: no se inventa una variante que no se registro.
+    """
+    directions: dict[date, str] = {}
+    for row in Journal(Path(journal_root)).read_table("agent_signals"):
+        if str(row.get("agent")) != NEWS_AGENT:
+            continue
+        trade_date = _as_date(row.get("trade_date"))
+        evidence = row.get("evidence")
+        if trade_date is None or not isinstance(evidence, Mapping):
+            continue
+        direction = cast("Mapping[str, object]", evidence).get("direction")
+        if isinstance(direction, str):
+            directions[trade_date] = direction
+    return directions
 
 
 def _daily_by_session(store: Store) -> dict[date, dict[str, float]]:
@@ -439,6 +472,7 @@ def _payload(
     missing: int,
     mean_paper_pct: float | None,
     verdict: Mapping[str, object],
+    with_overlay: Mapping[str, object],
 ) -> dict[str, object]:
     """El payload publicable (sin `report_sha256`; lo anade `analyse`)."""
     return {
@@ -474,6 +508,14 @@ def _payload(
         },
         "sessions": list(sessions),
         "metrics": {"mean_net_return_pct": mean_paper_pct, "verdict": dict(verdict)},
+        "series_published": {
+            "basis": "sin_overlay",
+            "note": (
+                "la recomendacion **publicada** se emite **sin** overlay (§19.19); la puerta de "
+                "§16 decide sobre esta serie"
+            ),
+        },
+        "with_overlay": dict(with_overlay),
         "honesty": {
             "edge": "no demostrado",
             "phase2": "`not_evaluable`/`fail`; `phase2_ready = false`",
@@ -532,6 +574,44 @@ def analyse(
     ]
     missing = len(emitted) - len(outcomes)
     mean_paper = _mean([item.net_return_pct for item in outcomes]) if outcomes else None
+    # #150: la variante «con overlay» (§19.9). Se recomputa con la **misma** maquina que la serie
+    # publicada, cambiando solo la direccion por la que el gate habria dado **con** overlay.
+    directions = _overlay_directions(journal_root)
+    overlay_rows: list[Mapping[str, object]] = []
+    overrides: list[dict[str, object]] = []
+    for row in emitted:
+        session = _as_date(row.get("trade_date"))
+        if session is None:
+            continue
+        published = str(row.get("direction", ""))
+        # Sin senal del overlay (p. ej. `disabled_*`) la variante **coincide** con la publicada: asi
+        # las dos series cubren las mismas sesiones y son comparables (§19.9).
+        variant = directions.get(session, published)
+        overlay_rows.append({**row, "direction": variant})
+        if variant != published:
+            overrides.append(
+                {"trade_date": session.isoformat(), "published": published, "with_overlay": variant}
+            )
+    overlay_outcomes = [
+        outcome
+        for outcome in (_outcome(row, daily=daily, intraday=intraday) for row in overlay_rows)
+        if outcome is not None
+    ]
+    mean_overlay = (
+        _mean([item.net_return_pct for item in overlay_outcomes]) if overlay_outcomes else None
+    )
+    with_overlay: dict[str, object] = {
+        "series": "con_overlay",
+        "n_sessions": len(overlay_outcomes),
+        "mean_net_return_pct": mean_overlay,
+        "sessions": [_outcome_payload(item) for item in overlay_outcomes],
+        "overrides": overrides,
+        "note": (
+            "variante «con overlay» (§19.9): el **veto** (regla 20 ⇒ `nothing`) y el ajuste "
+            "±10 pp del `NewsAgent`. Es **informativa**: la puerta de §16 decide sobre la serie "
+            "publicada, que es la **sin overlay** (§19.19)"
+        ),
+    }
     reference = _reference_block(Path(reference_artifact))
     verdict = _verdict(n_sessions=len(outcomes), mean_paper_pct=mean_paper, reference=reference)
     body = _payload(
@@ -542,6 +622,7 @@ def analyse(
         missing=missing,
         mean_paper_pct=mean_paper,
         verdict=verdict,
+        with_overlay=with_overlay,
     )
     report_sha256 = SHA256_PREFIX + hashlib.sha256(canonical_text(body).encode("utf-8")).hexdigest()
     payload = {**body, "report_sha256": report_sha256}
@@ -635,6 +716,27 @@ def render_markdown(report: PaperTradingReport) -> str:
         lines += [
             "_Sin recomendaciones direccionales todavia: el reloj de observacion no ha empezado a "
             "producir muestra._",
+            "",
+        ]
+    overlay_block = cast("Mapping[str, object]", payload["with_overlay"])
+    overrides = cast("list[dict[str, object]]", overlay_block["overrides"])
+    lines += [
+        "## Serie «con overlay» (§19.9, #150)",
+        "",
+        f"- **Sesiones direccionales con overlay:** {overlay_block['n_sessions']} · "
+        f"**media:** {_fmt(overlay_block['mean_net_return_pct'])} % por sesion",
+        f"- **Sesiones donde el overlay cambia la direccion publicada:** {len(overrides)}",
+        f"- {overlay_block['note']}",
+        "",
+    ]
+    if overrides:
+        lines += [
+            "| trade_date | publicada (sin overlay) | con overlay |",
+            "|---|---|---|",
+            *(
+                f"| {item['trade_date']} | {item['published']} | {item['with_overlay']} |"
+                for item in overrides
+            ),
             "",
         ]
     lines += [

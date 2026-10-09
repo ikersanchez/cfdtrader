@@ -85,6 +85,7 @@ __all__ = [
     "read_decision",
     "read_decisions",
     "read_record",
+    "read_table",
     "write_record",
 ]
 
@@ -468,6 +469,10 @@ class Journal:
         """Una decision por su ``trade_date``."""
         return read_decision(self, trade_date)
 
+    def read_table(self, table: str) -> list[dict[str, object]]:
+        """Todas las filas de una tabla con identidad compuesta (``agent_signals``, #150)."""
+        return read_table(self, table)
+
     def counts_by_status(self) -> dict[str, int]:
         """Recuento de decisiones por estado (los cuatro, con ceros si no hay filas)."""
         return counts_by_status(self)
@@ -541,15 +546,33 @@ def read_record(journal: Journal, table: str, identity: object) -> dict[str, obj
     return _payload_from_document(document, path)
 
 
-def read_decisions(journal: Journal | Path | str) -> list[dict[str, object]]:
-    """Todas las decisiones del diario, **ordenadas por ``trade_date``**."""
+def read_table(journal: Journal | Path | str, table: str) -> list[dict[str, object]]:
+    """Todas las filas de una tabla de identidad **compuesta** (``agent_signals``, #150).
+
+    :func:`read_decisions` recompone la identidad desde el nombre del fichero, lo que solo vale
+    para las tablas de **una** columna. Aqui la identidad puede tener varias
+    (``(trade_date, agent)``), asi que se lee cada documento del directorio y se **verifica** su
+    ``doc_sha256`` con :func:`_payload_from_document`, sin recomponer la identidad. El orden es el
+    de los nombres de fichero; un directorio ausente es ``[]``.
+    """
     root = _coerce_journal(journal)
-    directory = root.directory("decisions")
+    _require_table(table)
+    directory = root.directory(table)
     if not directory.exists():
         return []
-    records = [
-        read_record(root, "decisions", path.stem) for path in sorted(directory.glob("*.json"))
-    ]
+    records: list[dict[str, object]] = []
+    for path in sorted(directory.glob("*.json")):
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            raise JournalIntegrityError(f"{path}: JSON invalido ({error})") from error
+        records.append(_payload_from_document(document, path))
+    return records
+
+
+def read_decisions(journal: Journal | Path | str) -> list[dict[str, object]]:
+    """Todas las decisiones del diario, **ordenadas por ``trade_date``**."""
+    records = read_table(journal, "decisions")
     records.sort(key=lambda record: str(record.get("trade_date", "")))
     return records
 

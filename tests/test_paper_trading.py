@@ -321,3 +321,90 @@ def test_45_the_cli_is_byte_identical_across_processes(tmp_path: Path) -> None:
         assert result.returncode == 0, result.stderr
         seen.add(hashlib.sha256((out / name).read_bytes()).hexdigest())
     assert len(seen) == 1, "el informe no es determinista entre procesos"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #150 · La variante «con overlay» (§19.9): serie informativa junto a la publicada
+# ─────────────────────────────────────────────────────────────────────────────
+def test_150_the_overlay_directions_come_from_agent_signals(tmp_path: Path) -> None:
+    """La direccion «con overlay» se lee de `agent_signals` (`agent = "news"`), no se inventa."""
+    journal = Journal(tmp_path)
+    write_record(
+        journal,
+        "agent_signals",
+        {
+            "trade_date": "2026-09-17",
+            "agent": "news",
+            "prob_up": 0.41,
+            "confidence": None,
+            "veto": True,
+            "veto_reason": "geopolitics/high: una frase",
+            "evidence": {"direction": "nothing", "state": "veto"},
+        },
+    )
+    # Otro agente el mismo dia no aporta la variante del overlay.
+    write_record(
+        journal,
+        "agent_signals",
+        {
+            "trade_date": "2026-09-17",
+            "agent": "technical",
+            "prob_up": 0.5,
+            "confidence": 0.6,
+            "veto": False,
+            "veto_reason": None,
+            "evidence": {"direction": "long"},
+        },
+    )
+
+    directions = paper_trading._overlay_directions(tmp_path)  # pyright: ignore[reportPrivateUsage]
+    assert directions == {date(2026, 9, 17): "nothing"}
+    assert paper_trading._overlay_directions(tmp_path / "no-existe") == {}  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.skipif(not REFERENCE.is_file(), reason="sin el artefacto de referencia de #28")
+def test_150_the_report_publishes_the_with_overlay_series(tmp_path: Path) -> None:
+    """El informe declara la serie publicada (sin overlay) y publica la variante «con overlay»."""
+    journal_root = tmp_path / "journal"
+    journal = Journal(journal_root)
+    sessions = _real_sessions(2)
+    for day in sessions:
+        write_record(journal, "decisions", _decision(day, direction="long"))
+    # El overlay veta la primera sesion: la variante «con overlay» la deja en `nothing`.
+    write_record(
+        journal,
+        "agent_signals",
+        {
+            "trade_date": sessions[0].isoformat(),
+            "agent": "news",
+            "prob_up": 0.41,
+            "confidence": None,
+            "veto": True,
+            "veto_reason": "geopolitics/high: una frase",
+            "evidence": {"direction": "nothing", "state": "veto"},
+        },
+    )
+
+    report = analyse(
+        store=paper_trading.Store(REAL_DATA),
+        journal_root=journal_root,
+        reference_artifact=REFERENCE,
+        as_of=AS_OF,
+        write=False,
+    )
+    payload = report.payload
+    published = cast("Mapping[str, object]", payload["series_published"])
+    assert published["basis"] == "sin_overlay"
+    sample = cast("Mapping[str, object]", payload["sample"])
+    assert sample["n_sessions"] == len(sessions)
+    overlay = cast("Mapping[str, object]", payload["with_overlay"])
+    assert overlay["n_sessions"] == len(sessions) - 1, (
+        "el veto saca esa sesion de la serie con overlay"
+    )
+    overrides = cast("list[dict[str, object]]", overlay["overrides"])
+    assert overrides == [
+        {"trade_date": sessions[0].isoformat(), "published": "long", "with_overlay": "nothing"}
+    ]
+    markdown = render_markdown(report)
+    assert "## Serie «con overlay» (§19.9, #150)" in markdown
+    assert f"| {sessions[0].isoformat()} | long | nothing |" in markdown
