@@ -53,6 +53,7 @@ __all__ = [
     "BudgetCaps",
     "BudgetDecision",
     "BudgetGuard",
+    "CallSequence",
     "Caps",
     "LLMCall",
     "MeteredLLMClient",
@@ -550,6 +551,32 @@ def prepare_headlines(
 # ─────────────────────────────────────────────────────────────────────────────
 # La capa metrada
 # ─────────────────────────────────────────────────────────────────────────────
+class CallSequence:
+    """Contador de llamadas **compartible** por los clientes de una misma ejecucion.
+
+    El ``call_id`` de ``ops.llm_calls`` es ``<as_of>-<secuencia>`` (lo compone
+    :meth:`MeteredLLMClient._call_id`) y su **identidad** en el diario es el propio ``call_id``. El
+    camino diario usa dos clientes metrados con el **mismo** instante —la extraccion de noticias
+    (#35) y la redaccion (#37)—, asi que si cada uno numerase desde uno producirian la misma
+    identidad en la misma corrida: el diario, que es inmutable por identidad, rechazaria la segunda
+    fila (``JournalRewriteError``) y **se perderia una llamada**. Compartir este contador da a cada
+    llamada de la ejecucion un numero distinto, sin tocar el formato del identificador.
+
+    Es un objeto **mutable** a proposito: lo que guarda es el avance de la ejecucion, no un valor.
+    MeteredLLMClient acepta una instancia en ``sequence``; sin ella, cada cliente crea la suya.
+    """
+
+    __slots__ = ("_value",)
+
+    def __init__(self) -> None:
+        self._value = 0
+
+    def take(self) -> int:
+        """El siguiente numero de la secuencia (``1, 2, ...``), sin huecos ni repeticiones."""
+        self._value += 1
+        return self._value
+
+
 class MeteredLLMClient:
     """Capa metrada sobre un proveedor: cache, topes y registro.
 
@@ -575,6 +602,7 @@ class MeteredLLMClient:
         prices: dict[str, tuple[float, float]] | None = None,
         warning_sink: Callable[[str], None] | None = None,
         clock: Callable[[], float] | None = None,
+        sequence: CallSequence | None = None,
     ) -> None:
         self._client = client
         self._cache = cache
@@ -586,7 +614,10 @@ class MeteredLLMClient:
         self._prices = prices
         self._warning_sink = warning_sink
         self._clock = time.monotonic if clock is None else clock
-        self._sequence = 0
+        # El contador puede ser **compartido** entre los clientes de una misma ejecucion (#147):
+        # sin el, dos clientes del mismo instante repetirian el `call_id` y el diario perdería una
+        # fila. Con `sequence=None` (el default) cada cliente numera por su cuenta, como siempre.
+        self._sequence = CallSequence() if sequence is None else sequence
         self._decision = BudgetDecision(OverlayState.APPLIED)
         self._last_cache_hit = False
         self.rows_written = 0
@@ -614,8 +645,7 @@ class MeteredLLMClient:
             self._warn(decision.warnings)
             return None
 
-        self._sequence += 1
-        call_id = self._call_id(self._sequence)
+        call_id = self._call_id(self._sequence.take())
         started = self._clock()
         key = request_key(request)
 

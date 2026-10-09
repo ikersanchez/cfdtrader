@@ -15,6 +15,7 @@ integra el overlay en el gate; aquí se prueba la capa que #33 posee.
 from __future__ import annotations
 
 import ast
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Final
@@ -41,6 +42,7 @@ from cfdtrader.llm.budget import (
     BatchCounts,
     BudgetCaps,
     BudgetGuard,
+    CallSequence,
     Caps,
     LLMCall,
     MeteredLLMClient,
@@ -177,6 +179,51 @@ def test_b7_the_metered_client_builds_a_unique_id_per_call(tmp_path: Path) -> No
 
     rows = sorted(path.name for path in (tmp_path / "llm_calls").glob("*.json"))
     assert rows == ["20261003T124500Z-0001.json", "20261003T124500Z-0002.json"]
+
+
+def test_b7_two_clients_can_share_one_call_sequence(tmp_path: Path) -> None:
+    """#147: dos clientes del **mismo** instante comparten contador y no colisionan de identidad.
+
+    Es el caso del camino diario: la extraccion de noticias (#35) y la redaccion (#37) usan el
+    mismo ``as_of``. Con contadores independientes, la primera llamada de cada uno pediria
+    ``…-0001`` y el diario —inmutable por identidad— rechazaria la segunda fila. Compartir el
+    contador da a cada llamada de la ejecucion un numero distinto y conserva el proposito.
+    """
+    sequence = CallSequence()
+    with (
+        ResponseCache(tmp_path / "cache-extract") as cache_extract,
+        ResponseCache(tmp_path / "cache-report") as cache_report,
+    ):
+        extract = MeteredLLMClient(
+            _CountingClient(_response()),
+            cache=cache_extract,
+            guard=BudgetGuard(),
+            as_of=NOW,
+            provider="deepseek",
+            purpose="extract",
+            journal=tmp_path,
+            sequence=sequence,
+        )
+        report = MeteredLLMClient(
+            _CountingClient(_response('{"narrative": "informe"}')),
+            cache=cache_report,
+            guard=BudgetGuard(),
+            as_of=NOW,
+            provider="deepseek",
+            purpose="report",
+            journal=tmp_path,
+            sequence=sequence,
+        )
+        extract.call(_request(inputs="lote de titulares"))
+        report.call(_request(inputs="hechos del dia"))
+
+    files = sorted((tmp_path / "llm_calls").glob("*.json"))
+    assert [path.name for path in files] == [
+        "20261003T124500Z-0001.json",
+        "20261003T124500Z-0002.json",
+    ]
+    purposes = {json.loads(path.read_text(encoding="utf-8"))["purpose"] for path in files}
+    assert purposes == {"extract", "report"}, "cada llamada conserva su proposito"
 
 
 def test_b7_a_cache_hit_row_declares_no_tokens(tmp_path: Path) -> None:

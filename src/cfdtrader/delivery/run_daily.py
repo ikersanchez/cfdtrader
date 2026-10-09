@@ -171,6 +171,7 @@ from cfdtrader.llm.budget import (
     BatchCounts,
     BudgetCaps,
     BudgetGuard,
+    CallSequence,
     MeteredLLMClient,
     OverlayClient,
     prepare_batch,
@@ -606,6 +607,7 @@ def _compose_report(
     publications: Sequence[MacroPublication],
     earnings: Sequence[EarningsEvent],
     calendar_events: EventCalendarSignal | None,
+    sequence: CallSequence,
 ) -> tuple[report_agent.ReportDraft | None, Mapping[str, object]]:
     """El informe redactado por el modelo de mayor calidad, o ``None`` si no se puede (#37).
 
@@ -639,6 +641,7 @@ def _compose_report(
             provider=settings.provider,
             purpose="report",
             journal=ops_root,
+            sequence=sequence,
         )
         if metered.state != OverlayState.APPLIED:
             return None, {}
@@ -860,6 +863,8 @@ def _compute_overlay(
     data_root: Path,
     ops_root: Path,
     moment: datetime,
+    *,
+    sequence: CallSequence,
 ) -> tuple[OverlayDecision, Mapping[str, object], dict[str, int]]:
     """El overlay del dia: titulares del almacen -> `NewsAgent` -> `OverlayDecision`.
 
@@ -902,6 +907,7 @@ def _compute_overlay(
             provider=settings.provider,
             purpose="extract",
             journal=ops_root,
+            sequence=sequence,
         )
         if not prepared:
             return (
@@ -1327,6 +1333,11 @@ def _deliver(
     # El `model_version` del diario: el `run_sha256` resuelto, o el selector declarado verbatim
     # mientras la resolucion contra el registro no lo haya devuelto (nunca un digest inventado).
     model_version = cast("str", declared_run if declared_run is not None else declared_variant)
+    # El contador de llamadas del LLM es **uno** para toda la ejecucion: la extraccion de noticias
+    # (#35) y la redaccion (#37) comparten el mismo instante, y con contadores independientes
+    # producirian el mismo `call_id` —identidad del diario, que es inmutable— y se perderia la
+    # segunda fila con `JournalRewriteError` (#147).
+    sequence = CallSequence()
 
     try:
         if declared_variant is not None:
@@ -1441,7 +1452,7 @@ def _deliver(
             observer.add_hash("calendar_sha256", calendar_events.signal_sha256)
         with observer.stage("overlay"):
             overlay, prompt_hashes, headline_counters = _compute_overlay(
-                data_root, observability_root, moment
+                data_root, observability_root, moment, sequence=sequence
             )
         # El conteo del lote (#129) va al *manifest* de la sesion: es lo unico que permite publicar
         # el coste por titular y lo que la deduplicacion evito (#117, §6.3.5).
@@ -1505,6 +1516,7 @@ def _deliver(
             publications=publications,
             earnings=earnings,
             calendar_events=calendar_events,
+            sequence=sequence,
         )
     if report is not None:
         observer.add_hash("report_prompt_sha256", report.prompt_hash)

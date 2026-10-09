@@ -75,6 +75,7 @@ from cfdtrader.features import store as feature_store
 from cfdtrader.features.store import FEATURE_VERSION_PREFIX
 from cfdtrader.journal.decision_log import Journal, build_decision, read_decision
 from cfdtrader.llm.base import LLMRequest, LLMResponse
+from cfdtrader.llm.budget import CallSequence
 from cfdtrader.models.baseline import BASELINE_FEATURES
 
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[1]
@@ -979,6 +980,11 @@ def _no_llm_report(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(run_daily, "_compose_report", _no_report)
 
 
+#: El `_compose_report` **real**, capturado al importar y **antes** de que el fixture autouse lo
+#: sustituya por el no-op; lo usan las pruebas que necesitan la redaccion real (p. ej. #147).
+_REAL_COMPOSE_REPORT = run_daily._compose_report
+
+
 def test_a7_the_journal_records_what_the_overlay_did(
     store_root: Path,
     runs_root: Path,
@@ -1197,6 +1203,115 @@ def test_the_whole_chain_runs_when_there_are_headlines(
     assert row["llm_overlay"] == "applied"
     hashes = cast("Mapping[str, object]", row["prompt_hashes"])
     assert list(hashes) == [PROMPT_TEMPLATE_NAME], "el hash del prompt queda registrado"
+
+
+def test_146_the_overlay_and_the_report_share_one_call_sequence(
+    store_root: Path,
+    runs_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """#147: `_deliver` pasa **el mismo** contador de llamadas a extraccion y redaccion.
+
+    Antes de esta correccion cada capa creaba su contador: con titulares y proveedor real, la
+    extraccion (#35) y la redaccion (#37) pedian ambas `…-0001` y la segunda fila se perdia con
+    `JournalRewriteError` (el diario es inmutable por identidad).
+    """
+    seen: list[object] = []
+
+    def _overlay(
+        *args: object, **kwargs: object
+    ) -> tuple[OverlayDecision, Mapping[str, object], dict[str, int]]:
+        seen.append(kwargs.get("sequence"))
+        return OverlayDecision(state=OverlayState.APPLIED), {}, {}
+
+    def _report(*args: object, **kwargs: object) -> tuple[None, dict[str, str]]:
+        seen.append(kwargs.get("sequence"))
+        return (None, {})
+
+    monkeypatch.setattr(run_daily, "_compute_overlay", _overlay)
+    monkeypatch.setattr(run_daily, "_compose_report", _report)
+    journal_root = tmp_path / "journal"
+
+    assert _daily_run(store_root, runs_root, journal_root) == 0
+    capsys.readouterr()
+
+    assert len(seen) == 2, "cada capa del LLM se invoca una vez"
+    assert isinstance(seen[0], CallSequence), "el contador es el de `llm.budget`"
+    assert seen[0] is seen[1], "extraccion y redaccion comparten el mismo contador"
+
+
+def test_146_the_whole_chain_writes_one_row_per_real_call(
+    store_root: Path,
+    runs_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """#147: con extraccion y redaccion reales, `ops.llm_calls` guarda dos filas sin colision."""
+    data_root = tmp_path / "store"
+    shutil.copytree(store_root, data_root)
+    moment = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
+    ingest_news(
+        store=Store(data_root),
+        headlines=(
+            Headline(
+                source="rss",
+                feed="qa",
+                title="La Fed mantiene los tipos sin cambios",
+                url="https://example.invalid/fed",
+                published_at=moment,
+            ),
+        ),
+        now=moment,
+    )
+
+    class _FakeProvider:
+        """Sirve las dos capas: el extractor pide `events`; el redactor, la narrativa."""
+
+        def __init__(self) -> None:
+            self.models: list[str] = []
+
+        def complete(self, request: LLMRequest) -> LLMResponse:
+            self.models.append(request.model)
+            if request.model == "extract-falso":
+                content = '{"events": []}'
+            else:
+                content = json.dumps(
+                    {
+                        "narrative": "informe redactado sin edge demostrado",
+                        "bull_case": ["el soporte aguanta"],
+                        "bear_case": ["la subasta falla"],
+                    }
+                )
+            return LLMResponse(content=content, model=request.model, system_fingerprint="fp-qa")
+
+    provider = _FakeProvider()
+    monkeypatch.setenv("LLM_API_KEY", "clave-solo-para-esta-prueba")
+    monkeypatch.setenv("LLM_MODEL_EXTRACT", "extract-falso")
+    monkeypatch.setenv("LLM_MODEL_REPORT", "report-falso")
+
+    def _fake_build(settings: object) -> _FakeProvider:
+        return provider
+
+    monkeypatch.setattr(run_daily, "build_client", _fake_build)
+    # El fixture autouse sustituye `_compose_report`: aqui se restaura el real (la redaccion).
+    monkeypatch.setattr(run_daily, "_compose_report", _REAL_COMPOSE_REPORT)
+
+    journal_root = tmp_path / "journal"
+    assert _daily_run(data_root, runs_root, journal_root) == 0
+    captured = capsys.readouterr()
+    assert "redaccion: informe redactado" in captured.out
+
+    files = sorted((journal_root / "ops" / "llm_calls").glob("*.json"))
+    assert [path.name for path in files] == [
+        "20260917T120000Z-0001.json",
+        "20260917T120000Z-0002.json",
+    ], "dos llamadas del mismo instante: dos identidades distintas"
+    purposes = {json.loads(path.read_text(encoding="utf-8"))["purpose"] for path in files}
+    assert purposes == {"extract", "report"}
+    assert provider.models == ["extract-falso", "report-falso"], "extraccion antes que redaccion"
 
 
 def test_a12_the_cost_layer_still_does_not_touch_the_decision_layer() -> None:
