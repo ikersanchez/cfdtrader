@@ -122,13 +122,24 @@ RUN_ID: Final[str] = "1" * 64
 GIT_COMMIT: Final[str] = "5" * 40
 
 #: Guarda de diff (criterio 12): forma sancionada SUBSET + DISJOINT.
-BASE_COMMIT: Final[str] = "388ac87"
+BASE_COMMIT: Final[str] = "be5449d"
 WRITTEN: Final[frozenset[str]] = frozenset(
     {
         "src/cfdtrader/delivery/run_daily.py",
         "src/cfdtrader/delivery/staleness.py",
         "tests/test_run_daily.py",
         "tests/test_staleness.py",
+        # #83 retira de este conjunto el guardian de que la valla de cartera *existe*: la
+        # contabilidad del *kill switch* vive en `analysis/portfolio_rules` (con su propio
+        # `tests/test_portfolio_rules.py`) y el camino diario la consume; su cableado toca
+        # `decision/gate.py` —las notas de las reglas 3, 4 y 5 pasan a citar el modulo— y la prosa
+        # de `analysis/pipeline_report.py` y `analysis/gate_sweep.py` que declaraba el hueco, el
+        # mismo criterio que #113/#124/#131/#136/#73/#139 aplicaron a los suyos.
+        "src/cfdtrader/analysis/portfolio_rules.py",
+        "tests/test_portfolio_rules.py",
+        "src/cfdtrader/decision/gate.py",
+        "src/cfdtrader/analysis/pipeline_report.py",
+        "src/cfdtrader/analysis/gate_sweep.py",
     }
 )
 FROZEN: Final[frozenset[str]] = frozenset(
@@ -3296,3 +3307,75 @@ def test_the_premarket_gap_shows_null_when_it_is_unavailable() -> None:
     assert "overnight_move_pct: null" in text
     assert "gap_vs_index_pct: null" in text
     assert "basis_pct: null" in text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #83 · La valla de cartera del camino diario (§12 reglas 3, 4 y 5)
+# ─────────────────────────────────────────────────────────────────────────────
+def _closed_trade(day: date, *, pnl_pct: float, notional: float = 10000.0) -> dict[str, object]:
+    """Una fila de ``journal.trades``: la operacion **real** que escribe #47."""
+    return {
+        "trade_date": day.isoformat(),
+        "entry_price": 5000.0,
+        "exit_price": 4850.0,
+        "entry_time": f"{day.isoformat()}T13:30:00+00:00",
+        "exit_time": f"{day.isoformat()}T20:00:00+00:00",
+        "notional": notional,
+        "pnl_pct": pnl_pct,
+        "costs_pct": 0.0042,
+        "exit_reason": "stop",
+        "closed_by_close": True,
+    }
+
+
+def _manifest_counters(journal_root: Path) -> Mapping[str, int]:
+    manifest = json.loads(
+        (journal_root / "ops" / NEXT_SESSION.isoformat() / "manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    return cast("Mapping[str, int]", manifest["counters"])
+
+
+def test_83_without_closed_trades_the_gate_still_receives_none(
+    store_root: Path, runs_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """En observacion `journal.trades` esta vacio (no es un olvido, §19.11) y nada cambia."""
+    journal_root = tmp_path / "journal"
+    assert _daily_run(store_root, runs_root, journal_root) == 0
+    captured = capsys.readouterr()
+    assert "estado: recommendation" in captured.out
+    assert "valla de cartera" not in captured.err
+    assert _manifest_counters(journal_root)["portfolio_closed_trades"] == 0
+
+
+def test_83_a_weekly_loss_blocks_the_session_and_is_declared(
+    store_root: Path, runs_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Dos cierres de -3 % en la misma semana ISO superan el -5 %: la regla 4 para la sesion."""
+    journal_root = tmp_path / "journal"
+    journal = Journal(journal_root)
+    for day in (date(2026, 9, 15), date(2026, 9, 16)):
+        journal.write("trades", _closed_trade(day, pnl_pct=-3.0))
+    assert _daily_run(store_root, runs_root, journal_root) == 0
+    captured = capsys.readouterr()
+    # El bloqueo lo aplica el **gate** (regla 4) y su motivo viaja en el informe.
+    assert "bloqueo: 4:perdida_semanal" in captured.out
+    assert "estado: recommendation" in captured.out
+    assert "direccion: NOTHING" in captured.out
+    # La cifra sale de `journal.trades` y se publica como contexto de la decision.
+    assert "valla de cartera: 2 operaciones cerradas" in captured.err
+    assert "semana: -6.00" in captured.err
+    assert _manifest_counters(journal_root)["portfolio_closed_trades"] == 2
+
+
+def test_83_a_closed_trade_after_the_session_is_not_used(
+    store_root: Path, runs_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Punto en el tiempo: el cierre de la **propia** sesion no puede bloquearla."""
+    journal_root = tmp_path / "journal"
+    Journal(journal_root).write("trades", _closed_trade(NEXT_SESSION, pnl_pct=-9.0))
+    assert _daily_run(store_root, runs_root, journal_root) == 0
+    captured = capsys.readouterr()
+    assert "bloqueo: 4:" not in captured.out
+    assert "bloqueo: 3:" not in captured.out

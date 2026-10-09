@@ -123,7 +123,7 @@ from cfdtrader.agents.event_calendar import (
     calendar_signal,
 )
 from cfdtrader.agents.news import PROMPT_TEMPLATE_NAME, NewsAgent, NewsAgentError
-from cfdtrader.analysis import premarket_gap
+from cfdtrader.analysis import portfolio_rules, premarket_gap
 from cfdtrader.analysis.backtest_report import NOTIONAL_USD
 from cfdtrader.analysis.experiment_log import (
     ExperimentLogError,
@@ -1578,6 +1578,26 @@ def _deliver(
         for name, value in headline_counters.items():
             observer.add_counter(name, value)
 
+        # #83: la valla de cartera de §12 reglas 3, 4 y 5. Las tres cifras se **recomputan** de
+        # `journal.trades` (la operacion real, #47), que en observacion esta **vacio** (§19.11): sin
+        # operaciones cerradas van las tres a `None` y el gate no cambia de comportamiento. Con
+        # operaciones reales, una perdida semanal o mensual acumulada bloquea la sesion aqui.
+        with observer.stage("portfolio"):
+            try:
+                ledger = portfolio_rules.closed_trades_from_journal(journal_root)
+            except DecisionLogError as error:
+                raise DeliveryError(f"no se puede leer la valla de cartera: {error}") from error
+            portfolio = portfolio_rules.accumulate(ledger.trades, session=session)
+        observer.add_counter("portfolio_closed_trades", portfolio.history_trades)
+        daily_pnl_pct, weekly_pnl_pct, monthly_pnl_pct = portfolio.for_gate()
+        if portfolio.history_trades:
+            print(
+                f"valla de cartera: {portfolio.history_trades} operaciones cerradas — "
+                f"dia: {portfolio.daily_pnl_pct}, semana: {portfolio.weekly_pnl_pct}, "
+                f"mes: {portfolio.monthly_pnl_pct}",
+                file=sys.stderr,
+            )
+
         def _run_gate(declared_overlay: OverlayDecision | None) -> GateOutput:
             """El gate con ese overlay declarado; ``None`` = la recomendacion **sin** overlay."""
             return evaluate_gate(
@@ -1596,9 +1616,9 @@ def _deliver(
                 fomc_dates=fomc_dates,
                 params=params,
                 trades_today=0,
-                daily_pnl_pct=None,
-                weekly_pnl_pct=None,
-                monthly_pnl_pct=None,
+                daily_pnl_pct=daily_pnl_pct,
+                weekly_pnl_pct=weekly_pnl_pct,
+                monthly_pnl_pct=monthly_pnl_pct,
                 observation_sessions_remaining=guard.observation_sessions_remaining,
                 overlay=declared_overlay,
             )

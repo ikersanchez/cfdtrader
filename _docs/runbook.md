@@ -191,6 +191,33 @@ día de mercado cerrado es `recommendation` con `NOTHING` justificado). Salida `
 o el pipeline falló, con el motivo por `stderr`. **Cada ejecución escribe su fila** en
 `journal/decisions/` y deja `journal/ops/<sesión>/run_log.jsonl` + `manifest.json`.
 
+### La valla de cartera del *kill switch* (§12 reglas 3, 4 y 5) — #83
+
+El camino diario **ya** pasa al gate las tres cifras de pérdida realizada (`daily_pnl_pct`,
+`weekly_pnl_pct`, `monthly_pnl_pct`), recomputadas de `journal/trades/` (la operación **real**, #47).
+Mientras ese directorio esté vacío —la situación de la **observación**, que no es un olvido,
+`plan.md` §19.11— las tres van a `None` y el gate no cambia de comportamiento. En cuanto haya
+operaciones cerradas, una pérdida acumulada que alcance el **−5 % semanal** o el **−10 % mensual**
+bloquea la sesión en el gate (`bloqueo: 4:perdida_semanal` / `5:perdida_mensual`) y el conteo sale en
+el `manifest` de la sesión (`portfolio_closed_trades`).
+
+Para **ver el estado de la valla** antes de decidir (qué pérdida lleva el día, la semana ISO y el mes,
+y contra qué umbral), el módulo publica su propio informe:
+
+```bash
+uv run python -m cfdtrader.analysis.portfolio_rules \
+    --journal-root journal \
+    --session "$(date -u +%Y-%m-%d)" \
+    --as-of "$(date -u +%Y-%m-%d)T12:00:00+00:00" \
+    --reports-dir data/derived/reports
+```
+
+> `--source trades` (por defecto) lee `journal.trades`; `--source recomputed` recomputa el resultado
+> con la máquina de #45 desde `journal.decisions` más el almacén y exige `--data-root`. Las tres
+> cifras **nunca se suman**: son % del **capital**, ya convertidas desde % del nocional con el
+> apalancamiento de cada operación (§19.20). Sin operaciones cerradas el estado es `sin_historial` y
+> las tres salen `null`, nunca `0`.
+
 ## 4. Puerta de la Fase 4 — el veredicto del *paper*
 
 ```bash

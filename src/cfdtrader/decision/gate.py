@@ -89,9 +89,9 @@ Regla        Enunciado                                           Quien la aplica
 ===========  ==================================================  ==============================
 1            Maximo 1 operacion por sesion                       gate: input ``trades_today``
 2            Riesgo por operacion <= 1 %                         gate por operacion; cartera #28
-3            Perdida diaria -2 % ⇒ *kill switch*                 gate: input + umbral #60
-4            Perdida semanal -5 % ⇒ parada                       gate: input; acumular #83
-5            Perdida mensual -10 % ⇒ parada total                gate: input; acumular #83
+3            Perdida diaria -2 % ⇒ *kill switch*                 gate: input + umbral #60 (+#83)
+4            Perdida semanal -5 % ⇒ parada                       gate: input + umbral #60 (+#83)
+5            Perdida mensual -10 % ⇒ parada total                gate: input + umbral #60 (+#83)
 6            Sin *overnight*                                     gate: ``nights = 0`` siempre
 7            Stop obligatorio                                    gate: ``GateInputError`` sin stop
 8            Objetivo >= 2x el coste de ida y vuelta             gate, con el coste declarado
@@ -136,7 +136,8 @@ Que **no** hace este modulo (fronteras declaradas, con su issue)
 - **No** es #39/#40: no persiste nada en el diario, no implementa la guardia completa de
   obsolescencia ni el contador del modo observacion.
 - **No** es #62: no mide el *slippage*; consume el estado que #11 le entrega.
-- **No** es #83: no acumula el P&L diario, semanal ni mensual; lo recibe ya acumulado.
+- **No** es #83: no acumula el P&L diario, semanal ni mensual; lo recibe ya acumulado (la
+  contabilidad vive en ``analysis/portfolio_rules``, #83).
 - **No** es #84: no coloca la orden *bracket* en el broker.
 - **No** decide los parametros de politica: son del propietario (``PARAMETER_ISSUES``), con
   ``None`` = sin decidir.
@@ -281,21 +282,30 @@ RULES: Final[tuple[dict[str, str], ...]] = (
         "title": "Perdida diaria -2 % => kill switch",
         "owner": "gate",
         "issue": "#83",
-        "note": "input daily_pnl_pct contra el umbral de #60; acumular el dia es #83",
+        "note": (
+            "input daily_pnl_pct contra el umbral de #60; el acumulado lo sirve "
+            "`analysis/portfolio_rules` (#83)"
+        ),
     },
     {
         "rule": "4",
         "title": "Perdida semanal -5 % => parada",
         "owner": "gate",
         "issue": "#83",
-        "note": "input weekly_pnl_pct contra el umbral de #60; acumular la semana es #83",
+        "note": (
+            "input weekly_pnl_pct contra el umbral de #60; el acumulado lo sirve "
+            "`analysis/portfolio_rules` (#83)"
+        ),
     },
     {
         "rule": "5",
         "title": "Perdida mensual -10 % => parada total",
         "owner": "gate",
         "issue": "#83",
-        "note": "input monthly_pnl_pct contra el umbral de #60; acumular el mes es #83",
+        "note": (
+            "input monthly_pnl_pct contra el umbral de #60; el acumulado lo sirve "
+            "`analysis/portfolio_rules` (#83)"
+        ),
     },
     {
         "rule": "6",
@@ -457,7 +467,11 @@ LIMITATIONS: Final[tuple[dict[str, str], ...]] = (
     {
         "id": "reglas_3_5_cartera",
         "issue": "#83",
-        "statement": "el P&L diario, semanal y mensual llegan ya acumulados: acumularlos es #83",
+        "statement": (
+            "el P&L diario, semanal y mensual llegan ya acumulados: la contabilidad vive en "
+            "`analysis/portfolio_rules` (#83), que **recomputa** la ventana del diario; el motor "
+            "de cartera que la anade al bucle de sesiones del backtest es #28"
+        ),
     },
     {
         "id": "reglas_13_15_persistencia",

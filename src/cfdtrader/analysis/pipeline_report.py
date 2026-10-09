@@ -390,8 +390,9 @@ DOES_NOT_DO: Final[tuple[dict[str, str], ...]] = (
         "id": "portfolio_rules",
         "issue": "#83",
         "statement": (
-            "las reglas 3, 4 y 5 llegan con `None`: la contabilidad de cartera del *kill switch* "
-            "es #83"
+            "las reglas 3, 4 y 5 llegan con `None`: la contabilidad de cartera **existe** desde "
+            "#83 (`analysis/portfolio_rules`) y el camino diario ya la cablea, pero **este** "
+            "informe todavia no la recorre sesion a sesion (eso es #28)"
         ),
     },
 )

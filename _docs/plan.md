@@ -2,7 +2,7 @@
 
 | Campo | Valor |
 |---|---|
-| **Versión** | **2.23** |
+| **Versión** | **2.24** |
 | **Fecha** | 2026-10-09 |
 | **Estado** | Diseño — pendiente de ejecutar Fase 0 |
 | **Instrumento** | **SPX500:CFD**, cotizando en el horario de la sesión regular estadounidense; las horas se calculan en `America/New_York` y se presentan en `Europe/Madrid` |
@@ -1434,6 +1434,57 @@ reproducirse** en cuanto la ingesta añadió la sesión `2026-09-17` (ventana de
 }
 ```
 
+### 19.20 La contabilidad de cartera del *kill switch* (§12 reglas 3, 4 y 5) — #83 (2026-10-09)
+
+✅ **Ejecutado (2026-10-09, tarea #83).** Las reglas 3, 4 y 5 de §12 —pérdida máxima **−2 % diaria**,
+**−5 % semanal** y **−10 % mensual**— se evaluaban en el gate, que es una función **pura**: comparaba
+el acumulado contra su umbral, pero **nadie acumulaba**. El camino diario llamaba al gate con
+`daily_pnl_pct = weekly_pnl_pct = monthly_pnl_pct = None` y `analysis/gate_sweep.py` lo publicaba como
+parámetro inerte: el *kill switch* era una valla que **no podía dispararse**. La contabilidad vive
+ahora en `analysis/portfolio_rules.py`.
+
+- **Dónde vive el estado.** En el **diario** (`journal.trades`, §12.5), append-only e inmutable
+  (§19.1): la acumulación se **recomputa** de él. **No** hay contador en memoria ni fichero de estado
+  propio —un segundo sitio con la misma cifra sería una segunda fuente de verdad que puede
+  divergir—; el estado persistido **es** la tabla de operaciones cerradas.
+- **Dos vías, declaradas.** `journal.trades` para la operación **real** (#47) —que en observación
+  está **vacía** y eso es lo correcto (§19.11)— y la **recomputación** desde `journal.decisions` más
+  el almacén con la **misma** máquina de #45 (`analysis/paper_trading.py`, reutilizada **por
+  import**: una segunda aritmética de coste sería un segundo coste, §19.14). La segunda vía es la del
+  *backtest* (#28), que recibe además la función pura `walk` para recorrer sus sesiones.
+- **Convención de ventana (declarada antes de usarla, §19.11).** Cubos de **calendario** sobre la
+  **fecha de cierre** de cada operación: **día natural ET** (`America/New_York`), **semana ISO-8601**
+  (lunes→domingo) y **mes natural**. El **rearme** va en cada ventana: al empezar el día natural ET
+  siguiente, la semana ISO siguiente y el mes natural siguiente. Y el criterio point-in-time: solo
+  entran las operaciones con `trade_date` **estrictamente anterior** a la sesión que se decide.
+- **Consecuencia que se publica en vez de esconderse.** Con la regla 1 (una operación por sesión) y
+  la regla 16 (cierre a las 16:00 ET), el cubo **diario** va **vacío por construcción** en una
+  decisión de las 08:45 ET: su cifra es `0` **con su recuento**, y protege el caso de la regla 12
+  (nunca ampliar una perdedora) y cualquier re-evaluación intradía, no una decisión al alza. La
+  primera ventana que puede dispararse de verdad en una decisión es la **semanal**.
+- **La trampa de unidades (la de #80, otra vez): `%` del nocional frente a `%` del capital.** El
+  límite de §12 es **% del capital**, pero el retorno de una operación se publica **% del nocional**.
+  Como el nocional sale del riesgo (`notional = capital x riesgo / stop`, #27 A5), una salida en el
+  stop pierde `stop_pct` % del nocional, que son **1 % del capital** (regla 2). La conversión es
+  **explícita** (`capital_pct = notional_pct x apalancamiento`, con el apalancamiento que el gate ya
+  publica en `leverage_implied`) y **sin asumir que vale 1**, que solo es cierto si `stop_pct = 1 %`.
+  Sin ella, una pérdida de 1 % del capital se leería como 0,55 % y la valla sería decorativa.
+- **Verificado, no confiado.** Los tres umbrales se **copian** de la decisión de #60 (§19.12) y un
+  test los coteja con los que el escenario S1 sirve al gate (`scenario_parameters`); la suma se hace
+  en `Decimal` exacto y **no se redondea** —ni al publicarla ni al pasarla al gate—, porque redondear
+  una cifra que decide podría esconder un incumplimiento de 0,0001.
+- **Hasta que haya operaciones reales, nada cambia.** Sin operaciones cerradas el estado es
+  `sin_historial` y el gate recibe los tres `None` (nunca un `0`): el camino diario sólo empieza a
+  bloquear cuando #47 escriba la primera operación. Con operaciones, una pérdida semanal o mensual
+  acumulada **bloquea la sesión en el gate** con su `perdida_semanal`/`perdida_mensual`, y el
+  *manifest* de la sesión declara el conteo `portfolio_closed_trades`.
+- **Valla de honestidad (se mantiene).** Esto **no** es una afirmación de *edge*: hace **verificables**
+  tres reglas de §12 que hasta hoy no lo eran. `§11.6` **no** se altera, el carril B sigue bloqueado
+  (`phase2_ready = false`) y la ejecución sigue siendo **manual**. La lectura de cartera del *backtest*
+  sesión a sesión sigue siendo de **#28**, que ahora tiene la pieza que le faltaba.
+
+---
+
 ## Apéndice B · Versionado de features
 
 - `features_version = sha256(código de cálculo + parámetros + ventanas + fuente + as_of)`
@@ -1487,3 +1538,4 @@ reproducirse** en cuanto la ingesta añadió la sesión `2026-09-17` (ventana de
 | 2026-10-08 | **2.21** | 🧊 **§19.17 (T26b): el barrido de la familia LightGBM se pre-registra, con presupuesto cerrado (#82).** #26 fijó los hiperparámetros **a priori** y las **10** features de `BASELINE_FEATURES`; el barrido quedaba fuera y se abre como #82. Se declara **antes de ver resultados**: el **espacio** —6 variantes de hiperparámetros moviendo **un** eje cada una, y 4 subconjuntos de features sobre las 52 de #73, con las 10 de control— y el **presupuesto** (`BUDGET = 10` variantes nuevas ⇒ **14** `n_trials` contando las 4 ya registradas, que **no** se re-registran). Un **intento** fallido cuenta como trial. Se publica con el `n_trials` y el `sr_variance` **del registro** y con el PBO por CSCV contra `PBO_MAX = 0,20`: el mejor número del barrido **nunca** sale sin su número deflactado. Ampliar el espacio exige **§19.18**, no una bandera. Se declaran las vallas: el defecto de **#80** lo hereda cualquier ganadora por Sharpe, y si el barrido cambia la familia ganadora el informe lo dice y abre seguimiento a **#27/#28**. Cabecera a 2.21 | #82 era un seguimiento **sin** presupuesto declarado, y un barrido sin presupuesto no es interpretable: `n_trials` sale del registro, así que buscar sin registrar infla el Sharpe esperado y el informe miente sin decirlo |
 | 2026-10-09 | **2.22** | 🚫 **§19.18 (#107): el `SPX500:CFD` no se adquiere — el proxy declarado es la ruta definitiva.** El propietario resuelve **#107** (seguimiento de #50) por su criterio de cierre **(b)**: **no** se adquiere el intradía ni el `bid`/`ask` reales del CFD y el límite queda **aceptado y declarado**. La **ruta 3 — proxy declarado** (`^GSPC` 5 min + `open` diario, `_docs/data_sources.md`) pasa de **provisional** a **definitiva**; el **pliego de adquisición** se descarta (no en espera) y no nace la tarea de ingeniería que cablearía el dato. **No** cambia `phase1_ready` (`false`, `cfd_source_missing`), **no** se registra ningún proxy como cotización del CFD y **§11.6 no se altera** (carril B bloqueado, `phase2_ready = false`). No decide §11 bis **3** (#57), **#62** ni **#51**. Cabecera a 2.22 | Cerrar una decisión abierta del propietario por su criterio (b), **declarando** el límite en vez de dejarlo provisional: el único cambio de veredicto que quedaba (mitad (a), apertura real del CFD) se **renuncia** de forma explícita |
 | 2026-10-09 | **2.23** | 🧾 **§19.19 (#148): el overlay no cambia la recomendación.** Se implementa la consecuencia que la puerta de Fase 3 declaró de antemano (§16/§19.8/§19.9): la recomendación que se **publica y registra** es la del **modelo** (`evaluate_gate(overlay=None)`) y el overlay se registra **aparte** como la variante «con overlay» (`journal.agent_signals`, `agent = "news"`). Antes el camino diario aplicaba el **veto** (regla 20) y el ajuste ±10 pp a la recomendación publicada. **§11.6, la puerta de Fase 3 (§19.9), la regla de Fase 4 y el backtest no cambian.** Implementación en **#149**; comparación pareada en **#150**. Cabecera a 2.23 | Alinear el camino diario con la consecuencia pre-registrada de §19.9, sin reabrir ninguna decisión ni tocar §11.6 |
+| 2026-10-09 | **2.24** | 🛡️ **§19.20 (#83): la contabilidad de cartera del *kill switch* (reglas 3, 4 y 5).** Se cierra el hueco que `gate_sweep` publicaba como parámetro inerte: el acumulado de P&L realizado vive en **`journal.trades`** (recomputado, no un contador aparte) y lo sirve `analysis/portfolio_rules.py`. Se declaran las **ventanas de calendario** (día natural ET, semana ISO-8601, mes natural), su **rearme**, el criterio **point-in-time** (`trade_date` estrictamente anterior a la sesión) y la **conversión explícita** de `%` del nocional a `%` del capital vía apalancamiento (la trampa de #80: sin ella la valla sería decorativa). El camino diario pasa ya las tres cifras al gate, con `None` mientras el diario no tenga operaciones cerradas (en observación `journal.trades` está vacío, §19.11). **No** cambia `§11.6`, ni el carril B (`phase2_ready = false`), ni el carril A: hace **verificables** tres reglas de §12. La lectura de cartera del backtest sesión a sesión sigue siendo #28. Cabecera a 2.24 | Las reglas 3, 4 y 5 se evaluaban contra un `None`: la valla de pérdida máxima diaria, semanal y mensual no podía dispararse, y el sistema iba a operar dinero real sin ella |

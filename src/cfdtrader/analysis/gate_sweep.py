@@ -207,21 +207,27 @@ INERT_PARAMETERS: Final[tuple[dict[str, str], ...]] = (
         "field": "max_daily_loss_pct",
         "reason": (
             "el pipeline llama al gate con `daily_pnl_pct = None`: la regla 3 no tiene cifra de "
-            "cartera que comparar y no puede bloquear (la contabilidad es #83)"
+            "cartera que comparar y no puede bloquear (la contabilidad existe desde #83, "
+            "`analysis/portfolio_rules`, pero **este** pipeline todavia no la recorre sesion a "
+            "sesion: es #28)"
         ),
     },
     {
         "field": "max_weekly_loss_pct",
         "reason": (
             "el pipeline llama al gate con `weekly_pnl_pct = None`: la regla 4 no tiene cifra de "
-            "cartera que comparar y no puede bloquear (la contabilidad es #83)"
+            "cartera que comparar y no puede bloquear (la contabilidad existe desde #83, "
+            "`analysis/portfolio_rules`, pero **este** pipeline todavia no la recorre sesion a "
+            "sesion: es #28)"
         ),
     },
     {
         "field": "max_monthly_loss_pct",
         "reason": (
             "el pipeline llama al gate con `monthly_pnl_pct = None`: la regla 5 no tiene cifra de "
-            "cartera que comparar y no puede bloquear (la contabilidad es #83)"
+            "cartera que comparar y no puede bloquear (la contabilidad existe desde #83, "
+            "`analysis/portfolio_rules`, pero **este** pipeline todavia no la recorre sesion a "
+            "sesion: es #28)"
         ),
     },
     {
