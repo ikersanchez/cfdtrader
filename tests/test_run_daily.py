@@ -126,9 +126,11 @@ BASE_COMMIT: Final[str] = "be5449d"
 WRITTEN: Final[frozenset[str]] = frozenset(
     {
         "src/cfdtrader/delivery/run_daily.py",
-        "src/cfdtrader/delivery/staleness.py",
+        # `delivery/staleness.py` y `tests/test_staleness.py` **no** van en este conjunto: los
+        # escribio la entrega **original** de esta guardia y su `BASE_COMMIT` ya los deja fuera del
+        # diff. Declararlos aqui hacia fallar la asercion (`WRITTEN <= changed`) sin que nadie
+        # hubiera tocado nada, que es justo lo que `_docs/process.md` prohibe.
         "tests/test_run_daily.py",
-        "tests/test_staleness.py",
         # #83 retira de este conjunto el guardian de que la valla de cartera *existe*: la
         # contabilidad del *kill switch* vive en `analysis/portfolio_rules` (con su propio
         # `tests/test_portfolio_rules.py`) y el camino diario la consume; su cableado toca

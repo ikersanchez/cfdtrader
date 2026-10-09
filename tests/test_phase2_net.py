@@ -112,6 +112,11 @@ RETIRED_BY_LATER_DELIVERIES: Final[frozenset[str]] = frozenset(
     {
         "src/cfdtrader/delivery/run_daily.py",
         "src/cfdtrader/decision/gate.py",
+        # #84 y #47 retiran los dos modulos de esa entrega: el *bracket* de la regla 16 y la
+        # puesta en produccion con tamano minimo son entregas **posteriores** al informe de Fase 2,
+        # el mismo criterio que #113/#124/#131/#134 aplicaron a los suyos.
+        "src/cfdtrader/delivery/bracket.py",
+        "src/cfdtrader/delivery/production.py",
     }
 )
 
