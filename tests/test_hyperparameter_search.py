@@ -98,11 +98,16 @@ BASE_COMMIT: Final[str] = "0a5c0a8"
 NEW_MODULE: Final[Path] = REPO_ROOT / "src" / "cfdtrader" / "analysis" / "hyperparameter_search.py"
 TEST_SOURCE: Final[str] = Path(__file__).read_text(encoding="utf-8")
 
-#: Ficheros que A9 declara **fuera** de esta entrega: motor, coste y las secciones de `plan.md`.
+#: Ficheros que A9 declara **fuera** de esta entrega: el motor y el coste.
+#:
+# #107 retira `_docs/plan.md` de esta lista: la decision del propietario sobre la fuente del
+# `SPX500:CFD` (criterio (b), `plan.md` §19.18) **anade una seccion nueva** al documento —y su fila
+# de changelog—, el mismo criterio con que #113/#124/#131/#136/#73/#139/#108 retiraron los suyos.
+# Lo que A9 protegia de `plan.md` —que §11.6, §19.6 y §19.7 no se toquen— lo sigue comprobando el
+# bloque `limits.plan_sections_untouched` de mas abajo.
 OUT_OF_DELIVERY: Final[tuple[str, ...]] = (
     "src/cfdtrader/backtest/engine.py",
     "src/cfdtrader/backtest/costs.py",
-    "_docs/plan.md",
 )
 
 #: Las dos familias que #24/#25/#26 registraron: sus entradas son las **congeladas** de esta tarea.
@@ -1506,7 +1511,11 @@ def test_a9_a_worse_sweep_does_not_change_the_family_and_a_better_one_does() -> 
 def test_a9_the_delivery_leaves_the_engine_the_cost_and_the_plan_untouched(
     real_report: search.SearchReport,
 ) -> None:
-    """`git diff` no toca el motor, el coste ni `plan.md`, y la puerta sigue en `fail` (A9)."""
+    """`git diff` no toca el motor ni el coste, y la puerta sigue en `fail` (A9).
+
+    `_docs/plan.md` se retira de esta lista en #107: la decision del propietario anade su
+    seccion §19.18 (y su fila de changelog) al documento.
+    """
     changed = set(
         subprocess.run(  # noqa: S603 - el git del sistema, comando fijo
             ["git", "diff", "--name-only", f"{BASE_COMMIT}..HEAD"],  # noqa: S607
