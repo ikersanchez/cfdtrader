@@ -30,10 +30,10 @@ una clave, falta ``session`` o ``close`` o se repite una sesion:
 Alineacion entre mercados
 -------------------------
 
-El ``as_of`` del almacen es el **sello del cierre de la sesion americana** en
-**todas** las series, extranjeras incluidas: no dice cuando cerro un mercado
-ajeno. La alineacion sale, por tanto, del **orden de los cierres** y se declara
-en :data:`CONTEXT_MARKET_LAG`:
+El ``as_of`` del almacen es el **cierre del mercado de cada serie** (#151): una
+barra diaria de Tokio lleva el cierre de Tokio, no el de Nueva York. La
+alineacion no sale de esa hora, sin embargo, sino del **orden de los cierres**
+relativo a la sesion del S&P, y se declara en :data:`CONTEXT_MARKET_LAG`:
 
 - **0 sesiones** (``^N225``, ``^HSI``): Tokio y Hong Kong cierran **antes** de la
   apertura americana, asi que su sesion ``t`` ya esta publicada cuando el S&P

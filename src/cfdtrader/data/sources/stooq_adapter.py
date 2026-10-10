@@ -31,7 +31,7 @@ from cfdtrader.data.sources.base import (
     SourceStatus,
     SourceUnavailableError,
 )
-from cfdtrader.data.sources.frames import empty_canonical_frame, session_close_utc
+from cfdtrader.data.sources.frames import empty_canonical_frame, market_close_utc
 from cfdtrader.data.sources.http import CachedHttpClient
 
 __all__ = ["STOOQ_DAILY_URL", "StooqAdapter", "stooq_symbols"]
@@ -160,7 +160,10 @@ def _parse_csv(text: str, *, spec: SeriesSpec) -> pl.DataFrame:
     if not days:
         return empty_canonical_frame()
 
-    as_of = [session_close_utc(day) for day in days]
+    as_of = [
+        market_close_utc(day, at_local=spec.close_local, timezone=spec.close_timezone)
+        for day in days
+    ]
     return pl.DataFrame(
         {
             "as_of": as_of,

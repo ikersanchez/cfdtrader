@@ -154,6 +154,8 @@ series:
     fallbacks: []
     min_start: 2005-01-01
     volume_expected: false
+    close_local: "17:30"
+    close_timezone: "Europe/Berlin"
   - series_id: "^FTSE"
     dataset: market_daily
     asset_class: index
@@ -163,6 +165,8 @@ series:
     fallbacks: []
     min_start: 2005-01-01
     volume_expected: false
+    close_local: "16:30"
+    close_timezone: "Europe/London"
   - series_id: "^STOXX50E"
     dataset: market_daily
     asset_class: index
@@ -172,6 +176,8 @@ series:
     fallbacks: []
     min_start: 2005-01-01
     volume_expected: false
+    close_local: "17:30"
+    close_timezone: "Europe/Berlin"
   - series_id: "^N225"
     dataset: market_daily
     asset_class: index
@@ -181,6 +187,8 @@ series:
     fallbacks: []
     min_start: 2005-01-01
     volume_expected: false
+    close_local: "15:00"
+    close_timezone: "Asia/Tokyo"
   - series_id: "^HSI"
     dataset: market_daily
     asset_class: index
@@ -190,6 +198,8 @@ series:
     fallbacks: []
     min_start: 2005-01-01
     volume_expected: false
+    close_local: "16:00"
+    close_timezone: "Asia/Hong_Kong"
   - series_id: "DX-Y.NYB"
     dataset: market_daily
     asset_class: fx

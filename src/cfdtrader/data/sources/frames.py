@@ -24,6 +24,7 @@ __all__ = [
     "EASTERN",
     "MADRID",
     "empty_canonical_frame",
+    "market_close_utc",
     "session_close_utc",
     "session_open_utc",
     "to_utc",
@@ -87,6 +88,11 @@ def session_close_utc(day: date) -> datetime:
     ``2024-03-15`` (EDT) es ``2024-03-15 20:00 UTC`` y el ``2024-01-15`` (EST)
     es ``2024-01-15 21:00 UTC``.
 
+    Es el ancla de **EE. UU.** Desde #151 una barra diaria de un mercado ajeno se
+    ancla a **su** cierre con :func:`market_close_utc`; esta función queda para lo
+    que es de la sesión americana (el ancla ``^GSPC``, las medias sesiones que
+    conoce el calendario de la tarea #4, etc.).
+
     Las medias sesiones (cierre a las 13:00 ET) las conoce el calendario de la
     tarea #4; #3 no las adivina, y una sesión que aún no ha cerrado se descarta
     en lugar de escribirse a medias (A11).
@@ -97,3 +103,25 @@ def session_close_utc(day: date) -> datetime:
 def session_open_utc(day: date) -> datetime:
     """Apertura de la subasta de ``day`` en UTC (09:30 ET)."""
     return datetime.combine(day, SESSION_OPEN_ET, tzinfo=EASTERN).astimezone(UTC)
+
+
+def market_close_utc(day: date, *, at_local: time, timezone: str) -> datetime:
+    """Cierre del **mercado** de una serie en UTC (#151).
+
+    Cada mercado cierra en su hora **local** (Tokio 15:00, Hong Kong 16:00, Europa
+    17:30, EE. UU. 16:00) y su zona viaja como IANA, nunca como un *offset* fijo:
+    el cierre en UTC del ``2026-07-01`` y del ``2026-01-01`` difiere si la zona
+    observa DST. Anclar la barra diaria al cierre de **su** mercado —y no al de
+    EE. UU.— es lo que hace que el cierre asiático de la sesión ``t`` exista en
+    el almacén a las 08:45 ET del día ``t`` (ya cerró de madrugada) en vez de
+    descartarse por ``as_of > now``.
+
+    La **fecha ET** del cierre local no cambia respecto al ancla americana: el
+    cierre local de todos los mercados declarados cae el mismo día natural en
+    Nueva York, así que ``session`` (la fecha ET del ``as_of``) sigue siendo
+    ``day`` y la alineación de ``features.context`` no se mueve.
+
+    Un mercado que **no** cierre ese día (festivo ajeno) no se adivina aquí: la
+    fuente no publica esa barra y el frame no la trae.
+    """
+    return datetime.combine(day, at_local, tzinfo=ZoneInfo(timezone)).astimezone(UTC)

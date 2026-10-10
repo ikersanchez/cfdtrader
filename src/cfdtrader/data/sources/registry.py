@@ -15,6 +15,7 @@ from collections.abc import Mapping, Sequence
 from datetime import date
 from pathlib import Path
 from typing import Any, cast
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -114,6 +115,23 @@ def _check_registry(registry: SeriesRegistry, *, target: Path) -> None:
                 f"{target}: {spec.series_id!r} está marcada como CFD. El CFD del proyecto no "
                 "tiene fuente: no se sustituye por el índice ni por el futuro"
             )
+        _check_market_close(spec, target=target)
+
+
+def _check_market_close(spec: SeriesSpec, *, target: Path) -> None:
+    """La zona de cierre del mercado tiene que ser IANA válida (#151).
+
+    El `close_timezone` decide el `as_of` de cada barra diaria; una zona que no
+    exista (o un offset con signo que Pydantic aceptaría como ``time``) haría que
+    el anclaje temporal fuera silenciosamente el de EE. UU.
+    """
+    try:
+        ZoneInfo(spec.close_timezone)
+    except (ZoneInfoNotFoundError, ValueError) as error:
+        raise ConfigurationError(
+            f"{target}: {spec.series_id!r} declara la zona de cierre {spec.close_timezone!r}, "
+            "que no es una zona IANA válida"
+        ) from error
 
 
 def series_for_source(registry: SeriesRegistry, source: str) -> list[SeriesSpec]:

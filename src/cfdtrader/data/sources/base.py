@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time
 from enum import StrEnum
 
 import polars as pl
@@ -164,6 +164,16 @@ class SeriesSpec:
     history_window_limit_days: int | None = None
     supports_bid_ask: bool = False
     volume_expected: bool = True
+    #: Hora **local** de cierre del mercado de la serie y su zona IANA (#151). Por
+    #: defecto, EE. UU. (16:00 ``America/New_York``). Un mercado que cierra antes
+    #: del snapshot de las 08:45 ET —Tokio (15:00), Hong Kong (16:00)— declara
+    #: aquí su cierre para que su barra diaria esté disponible el mismo día; uno
+    #: que cierra después —Europa (17:30)— conserva su `as_of` posterior al
+    #: snapshot y se sigue leyendo con su rezago de mercado (``context``). La
+    #: fecha ET del cierre **no** cambia: el `session` derivado sigue siendo el
+    #: día de la barra.
+    close_local: time = time(16, 0)
+    close_timezone: str = "America/New_York"
 
     @property
     def sources(self) -> tuple[str, ...]:

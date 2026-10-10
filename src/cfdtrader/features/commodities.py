@@ -36,9 +36,10 @@ mensaje.
 Alineacion entre mercados
 -------------------------
 
-El ``as_of`` del almacen es el **sello del cierre de la sesion americana** en
-**todas** las series, asi que no dice cuando cerro un mercado ajeno; lo unico que
-queda es el **orden de los cierres**. Las tres series admitidas cierran **despues**
+El ``as_of`` del almacen es el **cierre del mercado de cada serie** (#151), asi
+que una barra del WTI o del oro lleva el cierre de su mercado, no el de Nueva
+York; lo que decide el rezago, con todo, es el **orden de los cierres**. Las tres
+series admitidas cierran **despues**
 del cierre del S&P —el futuro del WTI y el del oro a las 17:00 ET
 (``_docs/plan.md`` §8.5) y el EUR/USD con el cierre de Nueva York—, de modo que su
 ultima sesion **cerrada** cuando la sesion ``t`` del indice acaba es la ``< t``.

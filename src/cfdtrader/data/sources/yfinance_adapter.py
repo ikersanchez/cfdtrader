@@ -37,7 +37,11 @@ from cfdtrader.data.sources.base import (
     SourceStatus,
     SourceUnavailableError,
 )
-from cfdtrader.data.sources.frames import empty_canonical_frame, session_close_utc, to_utc
+from cfdtrader.data.sources.frames import (
+    empty_canonical_frame,
+    market_close_utc,
+    to_utc,
+)
 
 __all__ = ["YFinanceAdapter", "YFinanceEarningsAdapter"]
 
@@ -281,7 +285,7 @@ def _normalize(raw: object, *, spec: SeriesSpec) -> pl.DataFrame:
     data: dict[str, list[object]] = {name: [] for name in (*payload, "as_of", "bid", "ask")}
 
     for position, timestamp in enumerate(timestamps):
-        as_of = _as_of(timestamp, daily=is_daily)
+        as_of = _as_of(timestamp, daily=is_daily, spec=spec)
         if as_of is None:
             continue
         row = _as_mapping(records[position])
@@ -298,11 +302,19 @@ def _normalize(raw: object, *, spec: SeriesSpec) -> pl.DataFrame:
     return _frame(data, interval=None if is_daily else spec.interval)
 
 
-def _as_of(value: object, *, daily: bool) -> datetime | None:
-    """Instante del dato: cierre de sesión si es diaria, cierre de barra si no."""
+def _as_of(value: object, *, daily: bool, spec: SeriesSpec) -> datetime | None:
+    """Instante del dato: cierre **del mercado de la serie** si es diaria (#151).
+
+    Una barra diaria se ancla al cierre de **su** mercado (``spec.close_local`` en
+    ``spec.close_timezone``), no al de EE. UU.: así el cierre asiático de la sesión
+    ``t`` está en el almacén a las 08:45 ET de ``t``. Una barra intradía se ancla al
+    cierre de su barra.
+    """
     if daily:
         day = _day_of(value)
-        return None if day is None else session_close_utc(day)
+        if day is None:
+            return None
+        return market_close_utc(day, at_local=spec.close_local, timezone=spec.close_timezone)
     return to_utc(value)
 
 
