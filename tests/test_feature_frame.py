@@ -146,11 +146,8 @@ def test_a2_the_design_row_of_t_reads_every_column_where_its_availability_says(
     lookup = matrix.select(pl.col("session").alias("origin"), *BASELINE_FEATURES)
     for name in BASELINE_FEATURES:
         source = DESIGN_SESSION_COLUMN if lags[name] == DESIGN_LAG_SESSIONS else "session"
-        expected = (
-            design.select("session", source)
-            .join(lookup, left_on=source, right_on="origin", how="left")
-            .get_column(name)
-        )
+        picked = design.select(pl.col("session"), pl.col(source).alias("origin"))
+        expected = picked.join(lookup, on="origin", how="left").get_column(name)
         assert expected.equals(design.get_column(name)), (
             f"la columna '{name}' del diseno no es la de su sesion declarada "
             f"(design_lag={lags[name]}): la regla de disponibilidad de #147 esta rota"
