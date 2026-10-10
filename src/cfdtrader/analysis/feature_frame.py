@@ -691,16 +691,30 @@ class FeatureFrame:
         return int(self.labels.get_column("is_half_day").sum())
 
 
-def build_feature_frame(store: Store, *, series_id: str = "^GSPC") -> FeatureFrame:
+def build_feature_frame(
+    store: Store,
+    *,
+    series_id: str = "^GSPC",
+    features: Sequence[str] | None = None,
+) -> FeatureFrame:
     """Arma la matriz, las etiquetas y el frame de diseno con el corrimiento de una sesion.
 
     El corrimiento **no** pierde ninguna sesion etiquetada: la anterior a 2016-01-07
     (2016-01-06) esta en el diario y su fila de features existe. ``design.n_shifted_rows`` lo
     publica medido, sin afirmarlo.
+
+    ``features`` declara **que** columnas entran en la matriz de diseno y en que orden; por
+    defecto, las 10 de :data:`BASELINE_FEATURES` (el contrato de #24). Un subconjunto del
+    catalogo de #73 cambia las columnas del diseno y **nada mas**: la matriz completa (las 57
+    columnas de las seis familias) se construye una sola vez y es la misma para todas las
+    listas. Es el gancho **opt-in** que consume el presupuesto de features de #146: la
+    constante de produccion no se toca, la lista elegida viaja en
+    :attr:`FeatureFrame.feature_columns` y en ``design.features``.
     """
+    selected = tuple(BASELINE_FEATURES if features is None else features)
     matrix = build_feature_matrix(store, series_id=series_id)
     labels = load_labels(store, series_id=series_id)
-    design = design_frame(matrix.frame, labels=labels)
+    design = design_frame(matrix.frame, labels=labels, selected=selected)
     if design.n_sessions == 0:
         raise FeatureFrameError(
             "la matriz de diseno sale vacia: ninguna sesion etiquetada tiene fila de features de "
@@ -712,5 +726,5 @@ def build_feature_frame(store: Store, *, series_id: str = "^GSPC") -> FeatureFra
         labels=labels,
         design=design,
         design_lag_sessions=design.design_lag_sessions,
-        feature_columns=BASELINE_FEATURES,
+        feature_columns=selected,
     )
