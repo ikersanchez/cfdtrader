@@ -2087,7 +2087,12 @@ def _registered_hyperparameters(*, calibrated: bool) -> dict[str, object]:
 
 
 def _configuration(*, frame: FeatureFrame, plan: SplitPlan, calibrated: bool) -> ExperimentConfig:
-    """La configuracion registrada de una variante LightGBM: identidad del experimento (A9)."""
+    """La configuracion registrada de una variante LightGBM: identidad del experimento (A9).
+
+    ``design_lag_by_feature`` (#147) entra en la ventana: la alineacion del diseno es parte de la
+    identidad de la corrida. Sin ella, dos alineaciones distintas comparten `run_sha256` y el
+    registro rechaza el segundo resultado (mismo id, otro `result.json`) en vez de distinguirlo.
+    """
     return ExperimentConfig(
         variant_id=VARIANT_ID,
         features=BASELINE_FEATURES,
@@ -2100,6 +2105,7 @@ def _configuration(*, frame: FeatureFrame, plan: SplitPlan, calibrated: bool) ->
             "n_sessions": frame.n_design_rows,
             "n_positives": frame.n_positives,
             "design_lag_sessions": frame.design_lag_sessions,
+            "design_lag_by_feature": dict(frame.design.design_lag_by_feature),
             "plan_sha256": plan.plan_sha256,
             "matrix_sha256": frame.matrix.matrix_sha256,
             "feature_spec_sha256": dict(frame.matrix.feature_spec_sha256),

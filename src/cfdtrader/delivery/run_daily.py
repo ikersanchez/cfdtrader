@@ -10,8 +10,12 @@ Flujo de manana (§13), no evaluacion a cierre
 
 ``session`` es la **proxima sesion**: la fecha ET de ``--as-of``. Su estado de features es la
 **ultima fila** de ``analysis.feature_frame.build_feature_matrix`` (el cierre de la sesion
-anterior), que es el insumo *lag-1* de ``models.baseline.design_frame``. La sesion anterior
-declarada es ``MarketCalendar.previous_session(session)``.
+anterior) para las columnas con ``design_lag = 1`` y, para las que declaran ``design_lag = 0``
+—su mercado ya cerro en el instantaneo—, la **propia** sesion pendiente, que el ancla todavia no
+publica (#147). Las dos cosas salen de la misma declaracion
+(``features.store.DESIGN_LAG_BY_FEATURE``) que consume ``models.baseline.design_frame``: el
+vector servido es la fila de diseno de ``session``. La sesion anterior declarada es
+``MarketCalendar.previous_session(session)``.
 
 Modelo: las dos familias del registro, sin reajustar
 ----------------------------------------------------
@@ -134,6 +138,7 @@ from cfdtrader.analysis.feature_frame import (
     FeatureFrameError,
     FeatureMatrix,
     build_feature_matrix,
+    pending_session_values,
 )
 from cfdtrader.analysis.model_comparison import BASELINE_VARIANT_ID, VARIANT_ID
 from cfdtrader.analysis.pipeline_report import (
@@ -176,7 +181,11 @@ from cfdtrader.delivery.staleness import (
     execution_dates,
     session_guard,
 )
-from cfdtrader.features.store import FEATURE_VERSION_PREFIX
+from cfdtrader.features.store import (
+    DESIGN_LAG_BY_FEATURE,
+    FEATURE_VERSION_PREFIX,
+    FeatureStoreError,
+)
 from cfdtrader.journal.decision_log import DecisionLogError, Journal, build_decision
 from cfdtrader.llm.base import LLMClientConfig, LLMError, build_client
 from cfdtrader.llm.budget import (
@@ -909,6 +918,42 @@ def _last_row(matrix: FeatureMatrix) -> Mapping[str, object]:
     return cast("Mapping[str, object]", matrix.frame.tail(1).row(0, named=True))
 
 
+def _served_vector(store: Store, *, session: date, row: Mapping[str, object]) -> dict[str, object]:
+    """El vector **servido** de la sesion `t`: la regla de disponibilidad, una sola vez (#147).
+
+    La matriz esta anclada al S&P, asi que su ultima fila es la sesion anterior y a las 08:45 ET
+    del dia `t` **no** existe fila `t`: el ancla todavia no cerro. Las features del contrato de #24
+    cuya disponibilidad declarada es `0` —su mercado ya cerro en el instantaneo, hoy
+    `asia_overnight_1`— se leen de la **propia** sesion `t` con la formula de la matriz
+    (:func:`cfdtrader.analysis.feature_frame.pending_session_values`), y el resto de esa ultima
+    fila. Es la **misma** declaracion que consume :func:`models.baseline.design_frame`
+    (:data:`cfdtrader.features.store.DESIGN_LAG_BY_FEATURE`), de modo que el vector servido y la
+    fila de diseno de `t` no pueden divergir: sin *train/serve skew*.
+
+    Un valor pendiente que no se pueda calcular sale ``None`` y la guardia de calidad de fila
+    (§8.4) rechaza la sesion: no se rellena con el de otra sesion.
+    """
+    undeclared = [name for name in BASELINE_FEATURES if name not in DESIGN_LAG_BY_FEATURE]
+    if undeclared:
+        raise DeliveryError(
+            f"el catalogo de features no declara la disponibilidad de {undeclared}: sin ella no "
+            "se puede decidir de que sesion viene cada columna (A2 de #147)"
+        )
+    pending = tuple(name for name in BASELINE_FEATURES if DESIGN_LAG_BY_FEATURE[name] == 0)
+    values: dict[str, object] = {
+        name: row[name] for name in BASELINE_FEATURES if DESIGN_LAG_BY_FEATURE[name] != 0
+    }
+    if not pending:
+        return values
+    try:
+        values.update(pending_session_values(store, session=session, columns=pending))
+    except FeatureStoreError as error:
+        raise DeliveryError(
+            f"no se puede leer la sesion pendiente {session.isoformat()}: {error}"
+        ) from error
+    return values
+
+
 def _expected_move_pct(row: Mapping[str, object]) -> Decimal:
     """``sqrt(garch_forecast) * 100`` de la fila evaluada (``GARCH_COLUMN``, §13)."""
     variance = float(cast("float", row[GARCH_COLUMN]))
@@ -1514,7 +1559,12 @@ def _deliver(
             print(text)
             return 0
         row = _last_row(matrix)
-        problem = _row_problem(row)
+        # #147: el vector servido sale de la **misma** regla de disponibilidad que el diseno. Las
+        # columnas cuyo mercado ya cerro en el instantaneo (`design_lag = 0`) se leen de la propia
+        # sesion `t`, que no tiene fila en la matriz porque el ancla todavia no cerro; el resto, de
+        # la ultima fila. `evaluated` es la fila con la que se comprueba la calidad y se predice.
+        evaluated: dict[str, object] = {**row, **_served_vector(store, session=session, row=row)}
+        problem = _row_problem(evaluated)
         if problem is not None:
             text = render(
                 status=GateStatus.NO_RECOMMENDATION_DATA_QUALITY,
@@ -1543,7 +1593,7 @@ def _deliver(
                 return failure
             print(text)
             return 0
-        features = {name: float(cast("float", row[name])) for name in BASELINE_FEATURES}
+        features = {name: float(cast("float", evaluated[name])) for name in BASELINE_FEATURES}
         with observer.stage("predict"):
             prob_up_raw, probability = _predictions(model_path, features)
         move = _expected_move_pct(row)

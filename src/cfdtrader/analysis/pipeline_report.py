@@ -293,8 +293,10 @@ TEMPORAL_MAPPING: Final[dict[str, str]] = {
         "de su `open`; lo declara S1 y el gate no lo deriva"
     ),
     "features": (
-        "las 10 features de diseno de la sesion `t` son la fila `t-1` del diario "
-        "(`DESIGN_LAG_SESSIONS` = 1, #24)"
+        "las 10 features de diseno de la sesion `t` salen de su **disponibilidad declarada** "
+        "(`design_lag` por columna, #147): `asia_overnight_1` lee la propia sesion `t` "
+        "—Tokio y Hong Kong cerraron a las 06:00 UTC, antes del instantaneo de las 08:45 ET— y "
+        "las otras 9 leen la fila `t-1` del diario (`DESIGN_LAG_SESSIONS` = 1, #24)"
     ),
     "clock": "ninguna ruta de este modulo consulta el reloj: `as_of` es un parametro",
 }
@@ -1868,6 +1870,9 @@ def _model_payload(
         "features": list(BASELINE_FEATURES),
         "seed": model.seed,
         "design_lag_sessions": DESIGN_LAG_SESSIONS,
+        # C11 de #147: el rezago **efectivo** de cada columna, para que "usa el dato mas reciente"
+        # sea auditable y no una promesa. Es la auditoria que viaja en el diseno (por columna).
+        "design_lag_by_feature": dict(features.design.design_lag_by_feature),
         "decision_threshold": GATE_DECISION_THRESHOLD,
         "n_folds": len(model.folds),
         "calibration_method_counts": method_counts(methods),

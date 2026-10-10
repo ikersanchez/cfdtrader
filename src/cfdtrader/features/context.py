@@ -69,6 +69,23 @@ Sin *look-ahead*
 - El modulo **no** aplica el corte de muestra limpia de ``analysis.drift``: es
   una restriccion de *estudio*, no del almacen (`_docs/plan.md` §9).
 
+La sesion pendiente (#147)
+--------------------------
+
+La matriz publica **una fila por sesion del S&P**: la fila `t` describe el estado
+al cierre de `t` y la escribe cuando ese cierre ya ocurrio. El camino diario, en
+cambio, decide `t` a las 08:45 ET **antes** de que el ancla cierre, asi que no
+tiene fila `t` de la que leer. Las columnas cuyo input ya cerro a esa hora
+—:data:`PENDING_COLUMNS`, hoy solo ``asia_overnight_1``— si son legibles, y
+:func:`pending_context_values` las calcula para la sesion pendiente con la
+**misma** formula que la matriz: es el gemelo en codigo del ``design_lag = 0`` que
+el catalogo declara, y evita que el vector servido y la fila de diseno de la
+misma sesion puedan divergir.
+
+El techo sigue siendo el mismo: "su ultima sesion ``<= t``". Una barra posterior
+a `t` no puede entrar, y una columna que no este en :data:`PENDING_COLUMNS` no se
+sirve.
+
 Lo no computable se publica ``null``
 ------------------------------------
 
@@ -90,7 +107,7 @@ from __future__ import annotations
 import math
 import statistics
 from bisect import bisect_left, bisect_right
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Final, cast
@@ -115,8 +132,10 @@ from cfdtrader.features.store import (
 __all__ = [
     "CONTEXT_INPUT_COLUMNS",
     "CONTEXT_MARKET_LAG",
+    "PENDING_COLUMNS",
     "context_matrix",
     "context_spec",
+    "pending_context_values",
 ]
 
 #: Columnas que se leen de **cada** frame de entrada. ``session`` es el ancla
@@ -173,6 +192,14 @@ _DISPERSION_Z: Final[str] = "sector_dispersion_1_z"
 _BASE_COLUMNS: Final[tuple[str, ...]] = tuple(
     name for name in CONTEXT_FEATURE_COLUMNS if name != _DISPERSION_Z
 )
+
+#: **Columnas pendientes** (#147): las que la fila de la sesion `t` ya puede leer **antes** de que
+#: el ancla publique su barra, porque el mercado de su input cerro antes del snapshot. Hoy solo el
+#: overnight asiatico: Tokio y Hong Kong cierran a las 06:00 UTC y el instantaneo es a las 08:45 ET
+#: (12:45 UTC, `_docs/plan.md` §8.1). Cada columna declara **de que series** sale, de modo que el
+#: camino diario sabe que frames necesita. Es el gemelo en codigo del `design_lag = 0` que el
+#: catalogo declara para esas columnas (`features.store.CatalogEntry`), y un test los cruza.
+PENDING_COLUMNS: Final[dict[str, tuple[str, ...]]] = {_ASIA_OVERNIGHT: _ASIA}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -353,6 +380,16 @@ def _return_at(series: _Series, target: date, *, lag: int) -> float | None:
     if position is None:
         return None
     return series.returns[position]
+
+
+def _asia_overnight_at(series: Mapping[str, _Series], session: date) -> float | None:
+    """``asia_overnight_1`` de esa sesion: media de los retornos **de la ultima sesion <= t**.
+
+    Es la **unica** formula del overnight asiatico: la llaman la matriz de contexto y el lector de
+    la sesion pendiente del camino diario (#147), de modo que no hay dos implementaciones que
+    puedan divergir.
+    """
+    return _mean_of([_return_at(series[name], session, lag=0) for name in _ASIA])
 
 
 def _mean_of(values: list[float | None]) -> float | None:
@@ -568,9 +605,7 @@ def context_matrix(frames: Mapping[str, pl.DataFrame], *, spec: FeatureSpec) -> 
     for index, session in enumerate(anchor.sessions):
         for name, partner in _CORRELATIONS:
             columns[name].append(_correlation_at(anchor, index, series[partner]))
-        columns[_ASIA_OVERNIGHT].append(
-            _mean_of([_return_at(series[name], session, lag=0) for name in _ASIA])
-        )
+        columns[_ASIA_OVERNIGHT].append(_asia_overnight_at(series, session))
         columns[_EUROPE_PREVIOUS].append(
             _mean_of([_return_at(series[name], session, lag=1) for name in _EUROPE])
         )
@@ -588,3 +623,64 @@ def context_matrix(frames: Mapping[str, pl.DataFrame], *, spec: FeatureSpec) -> 
     frame = normalise_expanding(frame, _DISPERSION, min_sessions=CONTEXT_MIN_SESSIONS)
     frame = _finite_or_null(frame, columns=CONTEXT_FEATURE_COLUMNS)
     return frame.select(["session", AS_OF_COLUMN, *CONTEXT_FEATURE_COLUMNS]).sort("session")
+
+
+#: La formula de cada columna pendiente: nombre -> calculo, con su **misma** funcion que la
+#: matriz. Anadir una columna a :data:`PENDING_COLUMNS` sin anadirla aqui es un error tipado, y
+#: el test que las cruza lo detecta antes.
+_PENDING_FORMULAS: Final[dict[str, Callable[[Mapping[str, _Series], date], float | None]]] = {
+    _ASIA_OVERNIGHT: _asia_overnight_at
+}
+
+
+def pending_context_values(
+    frames: Mapping[str, pl.DataFrame], *, session: date, columns: Sequence[str]
+) -> dict[str, float | None]:
+    """Los valores que la fila de `session` publica para esas columnas **pendientes** (#147).
+
+    El camino diario decide la sesion `t` **antes** de que el ancla publique su barra, asi que la
+    matriz de features no tiene fila para `t`: no puede leerla de ahi. Las columnas cuyo mercado
+    ya cerro en el instantaneo (:data:`PENDING_COLUMNS`) si tienen dato, y se calculan aqui con
+    la **misma** formula que :func:`context_matrix` —`_asia_overnight_at`—, de modo que el vector
+    servido y la fila de diseno de la misma sesion coinciden por construccion.
+
+    Parameters
+    ----------
+    frames:
+        Un frame por serie **necesaria**: solo las que declara :data:`PENDING_COLUMNS` para las
+        columnas pedidas (``^N225`` y ``^HSI`` para ``asia_overnight_1``). De cada uno se leen
+        ``session`` y ``close``, igual que en :func:`context_matrix`.
+    session:
+        La sesion **pendiente** `t`. Nunca una posterior: la busqueda es "su ultima sesion
+        ``<= t``", asi que una barra futura no puede entrar (A9 de #147).
+    columns:
+        Las columnas pendientes que se piden. Una que no este en :data:`PENDING_COLUMNS` es
+        :class:`ContextInputError`: lo que no es legible al instantaneo no se sirve.
+
+    Returns
+    -------
+    dict[str, float | None]
+        Una entrada por columna pedida, en ese orden; ``None`` cuando no es computable (falta la
+        serie, no hay historia o falta un componente de la media), nunca un cero.
+    """
+    requested = tuple(columns)
+    if not requested:
+        raise ContextInputError(
+            "no se pide ninguna columna pendiente: el camino diario solo lee aqui lo que declara "
+            "PENDING_COLUMNS y una lista vacia no es una lectura"
+        )
+    unknown = sorted(set(requested) - set(PENDING_COLUMNS))
+    if unknown:
+        raise ContextInputError(
+            f"esas columnas no son legibles en el instantaneo de decision: {unknown}; las "
+            f"pendientes declaradas son {sorted(PENDING_COLUMNS)}"
+        )
+    needed = tuple(dict.fromkeys(name for column in requested for name in PENDING_COLUMNS[column]))
+    missing = sorted(set(needed) - set(frames))
+    if missing:
+        raise ContextInputError(
+            f"faltan las series {missing}: las columnas pedidas ({list(requested)}) no se pueden "
+            "calcular, y no se rellenan con el valor de otra sesion"
+        )
+    series = {name: _series_of(frames[name], series_id=name) for name in needed}
+    return {column: _PENDING_FORMULAS[column](series, session) for column in requested}

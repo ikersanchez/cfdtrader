@@ -9,11 +9,15 @@ capa de informe. No importa ``cfdtrader.data``, ``cfdtrader.analysis``, ``cfdtra
 traducido a **posiciones** (:class:`SplitAssignment`), el canonicamente hasheable de #13 y el
 registro de #16 viven fuera, y el ``model_sha256`` lo calcula quien puede importarlos.
 
-Disponibilidad temporal (A2): la fila de diseno de `t` es la fila **completa** de features de
-`t-1` (:data:`DESIGN_LAG_SESSIONS`), la sesion anterior **del diario**. Una sola regla, sin
-excepciones y **sin** filtrar columnas por ``required_as_of``: ``atr_norm`` declara «cierre de
-la sesion `t`» en ``volatility_v1`` y «cierre de la sesion `t-1`» en ``technical_v1`` (#72), asi
-que filtrar por ``required_as_of`` no tendria respuesta unica.
+Disponibilidad temporal (A2, #147): la fila de diseno de `t` lee **cada** columna en la sesion
+que declara su disponibilidad, y esa declaracion entra por ``availability``: `0` = la **propia**
+sesion `t` (`asia_overnight_1`: Tokio y Hong Kong cierran a las 06:00 UTC, antes del snapshot de
+las 08:45 ET, #151) y `1` = la fila de `t-1` (el resto: la declaracion conservadora vigente, cuya
+auditoria es #150). Este modulo es puro (A1) y **no** importa el catalogo: el mapa lo declara
+quien lo conoce —``cfdtrader.features.store.DESIGN_LAG_BY_FEATURE`` en produccion— y un feature
+seleccionado **sin** declaracion es :class:`UndeclaredAvailabilityError`, nunca un rezago por
+defecto. :data:`DESIGN_LAG_SESSIONS` sigue publicandose como la **referencia** declarada de #24
+(el maximo de hoy), no como la regla.
 
 Calibracion (A6, A7, #25): cada fold parte su *train* en `fit` (80 %) y `calibration` (20 %,
 cola purgada con §11.1) y ajusta con esa cola un calibrador
@@ -58,6 +62,7 @@ __all__ = [
     "FoldFit",
     "InvalidDesignFrameError",
     "SplitAssignment",
+    "UndeclaredAvailabilityError",
     "UnknownFeatureError",
     "calibrated_probabilities",
     "design_frame",
@@ -71,14 +76,19 @@ __all__ = [
 #: Semilla declarada a priori: una sola, sin barridos (A7).
 SEED: Final[int] = 20260920
 
-#: Corrimiento de diseno en **sesiones del diario** (A2): la fila de `t` es la de `t-1`.
+#: Corrimiento de diseno de **referencia** en sesiones del diario (A2): el maximo de la
+#: disponibilidad declarada por columna (#147). Se sigue publicando como la referencia de #24,
+#: pero **no** es la regla: la regla es `availability`, columna a columna.
 DESIGN_LAG_SESSIONS: Final[int] = 1
 
 #: Umbral de decision declarado a priori (A11): `p >= 0,5` ⇒ largo. El umbral economico de
 #: §4.4 y el *sizing* son #27 y #60, **no** esto.
 DECISION_THRESHOLD: Final[float] = 0.5
 
-#: Columna de auditoria del corrimiento: de que sesion viene la fila de diseno.
+#: Columna de auditoria del corrimiento: la sesion de la fila que leen las columnas con el rezago
+#: de **referencia** (:data:`DESIGN_LAG_SESSIONS`). El rezago **efectivo** de cada columna viaja
+#: en :attr:`DesignFrame.design_lag_by_feature` (#147): con disponibilidad por feature, una sola
+#: columna de auditoria no puede describir a todas.
 DESIGN_SESSION_COLUMN: Final[str] = "design_feature_session"
 
 #: Las **10** features, fijadas **a priori** (A4): sin seleccion guiada por datos, luego sin
@@ -186,12 +196,20 @@ class UnknownFeatureError(BaselineError):
     """Se pidio una feature que no esta entre las 10 declaradas (A4)."""
 
 
+class UndeclaredAvailabilityError(BaselineError):
+    """Una feature seleccionada no declara su disponibilidad (#147).
+
+    No hay rezago por defecto: adivinar de que sesion viene una columna que el
+    catalogo no declara es exactamente el look-ahead que #147 prohibe.
+    """
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # El frame de diseno (A2, A3): corrimiento de una sesion + la etiqueta
 # ─────────────────────────────────────────────────────────────────────────────
 @dataclass(frozen=True, slots=True)
 class DesignFrame:
-    """La matriz de diseno: una fila por sesion etiquetada, features de `t-1` y `y` de `t`.
+    """La matriz de diseno: una fila por sesion etiquetada, features de su sesion y `y` de `t`.
 
     ``n_shifted_rows`` son las sesiones etiquetadas que el corrimiento **pierde** (la primera
     sesion del diario no tiene anterior): se publican, nunca se rellenan. ``n_nulls_in_features``
@@ -199,6 +217,12 @@ class DesignFrame:
     entrenar, no se imputa. ``features`` es la lista **que este frame declara**, en su orden: la
     consumen :func:`_matrix` y los modelos, de modo que un frame construido con un subconjunto
     del catalogo (el barrido de #82) no necesita que nadie le repita la lista.
+
+    ``design_lag_by_feature`` es la **auditoria por columna** (#147): el par ``(nombre, sesiones
+    de retraso)`` de cada columna declarada, en el orden de ``features``. Es lo que permite
+    publicar la latencia efectiva de cada feature (C11 de #147) sin volver a consultar el
+    catalogo en la capa de informe. ``design_lag_sessions`` es la **referencia** de #24 (el maximo
+    de esos rezagos), no la regla.
     """
 
     frame: pl.DataFrame
@@ -208,6 +232,7 @@ class DesignFrame:
     n_nulls_in_features: int
     design_lag_sessions: int
     features: tuple[str, ...] = BASELINE_FEATURES
+    design_lag_by_feature: tuple[tuple[str, int], ...] = ()
 
     @property
     def sessions(self) -> tuple[date, ...]:
@@ -250,22 +275,69 @@ def _require_columns(frame: pl.DataFrame, *, columns: Sequence[str], what: str) 
         )
 
 
+def _declared_lag(name: str, value: object) -> int:
+    """El rezago declarado de esa columna, normalizado a ``int``, o error tipado (#147).
+
+    Recibe ``object`` a proposito (el mapa entra de fuera): comprobar el tipo de un argumento **ya
+    anotado** es lo que marca ``reportUnnecessaryIsInstance``, y aqui la comprobacion si aporta.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise InvalidDesignFrameError(
+            f"la disponibilidad declarada de '{name}' ({value!r}) tiene que ser un entero de "
+            f"sesiones, no {type(value).__name__}"
+        )
+    if value < 0:
+        raise InvalidDesignFrameError(
+            f"la disponibilidad declarada de '{name}' es {value}: un rezago negativo leeria una "
+            "sesion futura"
+        )
+    return value
+
+
+def _require_availability(
+    columns: Sequence[str], availability: Mapping[str, int]
+) -> dict[str, int]:
+    """La disponibilidad declarada de esas columnas, o error tipado (#147).
+
+    Un feature seleccionado **sin** declaracion es :class:`UndeclaredAvailabilityError`: no hay
+    rezago por defecto.
+    """
+    _require_instance(availability, Mapping, field="availability")
+    declared: dict[str, int] = {}
+    for name in columns:
+        if name not in availability:
+            raise UndeclaredAvailabilityError(
+                f"'{name}' no declara su disponibilidad: el catalogo de la familia tiene que "
+                "publicar su 'design_lag' y nadie lo puede suplir con un rezago por defecto (A2)"
+            )
+        declared[name] = _declared_lag(name, availability[name])
+    return declared
+
+
 def design_frame(
     features: pl.DataFrame,
     *,
     labels: pl.DataFrame,
     selected: Sequence[str] = BASELINE_FEATURES,
+    availability: Mapping[str, int],
 ) -> DesignFrame:
     """Construye la matriz de diseno desde el frame de features y las etiquetas (A2, A3).
 
-    La fila de diseno de la sesion `t` es la fila de features de la **sesion anterior del
-    diario** (:data:`DESIGN_LAG_SESSIONS` = 1): una sola regla, aplicada a **todas** las columnas
-    que entran, sin filtrar por ``required_as_of``. La sesion de origen viaja en
-    :data:`DESIGN_SESSION_COLUMN` para poder auditarla.
+    La fila de diseno de la sesion `t` lee **cada** columna en la sesion que declara
+    ``availability`` (#147): `0` = la **propia** sesion `t` (``asia_overnight_1``: Tokio y Hong
+    Kong cierran a las 06:00 UTC, antes del snapshot de las 08:45 ET) y `1` = la fila de `t-1`
+    (el resto, la declaracion conservadora vigente de #147; su auditoria es #150). El mapa lo
+    declara quien conoce el catalogo (``cfdtrader.features.store.DESIGN_LAG_BY_FEATURE``): este
+    modulo **no** lo importa (A1) y una columna sin declaracion es
+    :class:`UndeclaredAvailabilityError`, nunca un rezago por defecto.
+
+    La sesion de la fila que leen las columnas con el rezago de **referencia** (el maximo
+    declarado) viaja en :data:`DESIGN_SESSION_COLUMN` para poder auditarla; el rezago **efectivo**
+    de cada columna viaja en :attr:`DesignFrame.design_lag_by_feature`.
 
     ``selected`` declara **que** columnas entran y en que orden; por defecto, las 10 de
     :data:`BASELINE_FEATURES` (el contrato de #24). Un subconjunto del catalogo de #73 cambia las
-    columnas y **nada mas**: la regla de corrimiento, el conteo de nulos y el de sesiones valen
+    columnas y **nada mas**: la regla de disponibilidad, el conteo de nulos y el de sesiones valen
     igual para las 10 y para las 52, y la lista elegida viaja en :attr:`DesignFrame.features`
     (el barrido de #82 la consume desde ahi). Un nombre que el frame no traiga es
     :class:`UnknownFeatureError`, nunca una columna de ceros.
@@ -284,13 +356,15 @@ def design_frame(
         )
     _require_columns(feature_frame, columns=("session", *columns), what="features")
     _require_columns(label_frame, columns=("session", "ret_long"), what="labels")
+    lags = _require_availability(columns, availability)
+    reference = max(lags.values()) if lags else DESIGN_LAG_SESSIONS
 
     ordered = feature_frame.sort("session")
     shifted = ordered.select(
         [
             pl.col("session"),
-            pl.col("session").shift(DESIGN_LAG_SESSIONS).alias(DESIGN_SESSION_COLUMN),
-            *[pl.col(name).shift(DESIGN_LAG_SESSIONS) for name in columns],
+            pl.col("session").shift(reference).alias(DESIGN_SESSION_COLUMN),
+            *[pl.col(name).shift(lags[name]) for name in columns],
         ]
     )
     joined = shifted.join(
@@ -307,8 +381,9 @@ def design_frame(
         n_labels=label_frame.height,
         n_shifted_rows=label_frame.height - joined.height,
         n_nulls_in_features=nulls,
-        design_lag_sessions=DESIGN_LAG_SESSIONS,
+        design_lag_sessions=reference,
         features=columns,
+        design_lag_by_feature=tuple((name, lags[name]) for name in columns),
     )
 
 

@@ -861,13 +861,19 @@ class SweepRow:
 def design_for(
     variant: SearchVariant, *, features: pl.DataFrame, labels: pl.DataFrame
 ) -> DesignFrame:
-    """La matriz de diseno de #24 para ese subconjunto, con la **misma** regla de lag (A2).
+    """La matriz de diseno de #24 para ese subconjunto, con la **misma** regla de disponibilidad.
 
-    Se llama al constructor de ``models.baseline`` con la lista de columnas de la variante: el
-    corrimiento de una sesion, el conteo de nulos y el de sesiones son el **mismo** codigo que
-    construye la matriz de #26, asi que el control sale identico por construccion.
+    Se llama al constructor de ``models.baseline`` con la lista de columnas de la variante y la
+    disponibilidad **declarada por el catalogo** (#147): la regla de alineacion, el conteo de
+    nulos y el de sesiones son el **mismo** codigo que construye la matriz de #26, asi que el
+    control sale identico por construccion.
     """
-    return design_frame(features, labels=labels, selected=require_known_features(variant.features))
+    return design_frame(
+        features,
+        labels=labels,
+        selected=require_known_features(variant.features),
+        availability=feature_store.DESIGN_LAG_BY_FEATURE,
+    )
 
 
 def fit_search_variant(
@@ -1102,6 +1108,11 @@ def variant_config(
             "n_sessions": frame.n_design_rows,
             "n_positives": frame.n_positives,
             "design_lag_sessions": frame.design_lag_sessions,
+            # #147: la disponibilidad **por columna** entra en la identidad de la corrida. El
+            # rezago de `asia_overnight_1` cambio de 1 a 0, y eso es un diseno nuevo: sin esta
+            # clave, dos disenos distintos compartirian `run_sha256` y el registro no podria
+            # distinguir el modelo re-entrenado del anterior.
+            "design_lag_by_feature": dict(frame.design.design_lag_by_feature),
             "plan_sha256": plan.plan_sha256,
             "matrix_sha256": frame.matrix.matrix_sha256,
             "feature_spec_sha256": dict(frame.matrix.feature_spec_sha256),

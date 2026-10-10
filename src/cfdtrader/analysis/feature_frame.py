@@ -34,7 +34,12 @@ import polars as pl
 from cfdtrader.data.store import Store, UnknownDatasetError
 from cfdtrader.features import store as feature_store
 from cfdtrader.features.commodities import commodities_matrix, commodities_spec
-from cfdtrader.features.context import context_matrix, context_spec
+from cfdtrader.features.context import (
+    PENDING_COLUMNS,
+    context_matrix,
+    context_spec,
+    pending_context_values,
+)
 from cfdtrader.features.macro import (
     ANCHOR_INPUT_COLUMNS,
     DXY_INPUT_COLUMNS,
@@ -67,6 +72,7 @@ __all__ = [
     "load_context_inputs",
     "load_labels",
     "missing_context_series",
+    "pending_session_values",
 ]
 
 #: La serie **ancla** del estudio y el `series_id` que se **persiste** en
@@ -214,6 +220,13 @@ MACRO_SCHEMA: Final[dict[str, pl.DataType]] = {
     "value": pl.Float64(),
 }
 
+#: Esquema del frame **vacio** que sustituye a una serie de contexto ausente al leer la sesion
+#: pendiente (#147): solo ``session`` y ``close``, lo que lee esa lectura.
+CONTEXT_MARKET_SCHEMA: Final[dict[str, pl.DataType]] = {
+    "session": pl.Date(),
+    "close": pl.Float64(),
+}
+
 
 def _require_datasets(store: Store, *, names: Sequence[str]) -> None:
     """Los tres datasets que el adaptador necesita, con su error tipado si falta alguno."""
@@ -283,6 +296,38 @@ def missing_context_series(store: Store) -> tuple[str, ...]:
     """Las series de ``context_v1`` que el almacen **no** tiene, en el orden declarado (#73)."""
     present = load_context_inputs(store)
     return tuple(name for name in feature_store.CONTEXT_SERIES if name not in present)
+
+
+def pending_session_values(
+    store: Store, *, session: date, columns: Sequence[str]
+) -> dict[str, float | None]:
+    """Los valores de las columnas **pendientes** de la sesion `t`, leidos del almacen (#147).
+
+    El camino diario decide `t` a las 08:45 ET, **antes** de que el ancla publique su barra: la
+    matriz de features no tiene fila para `t` y no se puede leer de ahi. Las columnas cuyo mercado
+    ya cerro en el instantaneo (``design_lag = 0`` y declaradas en
+    :data:`cfdtrader.features.context.PENDING_COLUMNS`) si son legibles, y se calculan con la
+    **misma** formula que la matriz
+    (:func:`cfdtrader.features.context.pending_context_values`), de modo que el vector servido y
+    la fila de diseno de la misma sesion no pueden divergir.
+
+    Una serie que falte **no** se sustituye por el valor de otra sesion: entra como frame vacio, el
+    valor sale ``null`` y el camino diario lo rechaza con la guardia de calidad de fila (§8.4).
+
+    Parameters
+    ----------
+    store:
+        El almacen; se lee con ``store.sql()`` (que datos hay), igual que la matriz.
+    session:
+        La sesion pendiente `t`.
+    columns:
+        Las columnas pendientes pedidas. Una que no este declarada es
+        :class:`cfdtrader.features.store.ContextInputError`, desde el modulo que la conoce.
+    """
+    available = load_context_inputs(store)
+    needed = tuple(dict.fromkeys(name for column in columns for name in PENDING_COLUMNS[column]))
+    frames = {name: available.get(name, _empty(CONTEXT_MARKET_SCHEMA)) for name in needed}
+    return pending_context_values(frames, session=session, columns=columns)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -714,7 +759,12 @@ def build_feature_frame(
     selected = tuple(BASELINE_FEATURES if features is None else features)
     matrix = build_feature_matrix(store, series_id=series_id)
     labels = load_labels(store, series_id=series_id)
-    design = design_frame(matrix.frame, labels=labels, selected=selected)
+    design = design_frame(
+        matrix.frame,
+        labels=labels,
+        selected=selected,
+        availability=feature_store.DESIGN_LAG_BY_FEATURE,
+    )
     if design.n_sessions == 0:
         raise FeatureFrameError(
             "la matriz de diseno sale vacia: ninguna sesion etiquetada tiene fila de features de "

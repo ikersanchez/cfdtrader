@@ -86,6 +86,18 @@ Sin *look-ahead*
 - El modulo **no** filtra sesiones ni aplica el corte de muestra limpia de
   ``analysis.drift``: eso es una restriccion de *estudio*, no del almacen.
 
+Disponibilidad declarada (#147)
+-------------------------------
+
+Cada entrada del catalogo declara, ademas de ``required_as_of`` (la prosa), el
+``design_lag`` legible por maquina: las sesiones que la fila de **diseno** de `t`
+retrocede para leer esa columna. :data:`DESIGN_LAG_BY_FEATURE` es el mapa que
+publica el registro entero, y es la **unica** declaracion: la consumen
+``models.baseline.design_frame`` y el camino diario, de modo que no puede haber
+*train/serve skew*. La disponibilidad es del **catalogo** —como
+``required_as_of``— y **no** del contrato de calculo: anadirla no mueve
+:func:`feature_spec_sha256`, porque el calculo y sus valores no cambian.
+
 Familias de features
 --------------------
 
@@ -197,6 +209,7 @@ __all__ = [
     "DEFAULT_MACRO_WINDOWS",
     "DEFAULT_TECHNICAL_SOURCES",
     "DEFAULT_TECHNICAL_WINDOWS",
+    "DESIGN_LAG_BY_FEATURE",
     "FEATURES_DATASET",
     "FEATURES_LAYER",
     "FEATURES_SOURCE",
@@ -385,6 +398,11 @@ class CatalogEntry:
         De donde sale el dato de entrada (``raw.market_daily``).
     required_as_of:
         Cierre de sesion a partir del cual la feature esta completamente definida.
+    design_lag:
+        Sesiones que la fila de **diseno** de `t` retrocede para leer esta columna
+        (#147): `0` = el dato de la **propia** sesion `t`, ya publicado en el
+        instantaneo de decision (Tokio y Hong Kong cierran a las 06:00 UTC, antes
+        del snapshot de las 08:45 ET, #151); `1` = la fila de `t-1`.
     """
 
     name: str
@@ -392,6 +410,7 @@ class CatalogEntry:
     window: int | None
     source: str
     required_as_of: str
+    design_lag: int
 
 
 #: Catalogo completo de la familia de volatilidad (#7). Toda columna persistida
@@ -404,6 +423,7 @@ FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         1,
         "raw.market_daily",
         "cierre de la sesion t",
+        1,
     ),
     CatalogEntry(
         "atr_norm",
@@ -411,6 +431,7 @@ FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         ATR_WINDOW,
         "raw.market_daily",
         "cierre de la sesion t",
+        1,
     ),
     CatalogEntry(
         "parkinson_rv",
@@ -418,6 +439,7 @@ FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         1,
         "raw.market_daily",
         "cierre de la sesion t",
+        1,
     ),
     CatalogEntry(
         "ret_log",
@@ -425,6 +447,7 @@ FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         1,
         "raw.market_daily",
         "cierre de la sesion t",
+        1,
     ),
     CatalogEntry(
         "ret_sq",
@@ -432,6 +455,7 @@ FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         1,
         "raw.market_daily",
         "cierre de la sesion t",
+        1,
     ),
     CatalogEntry(
         "har_lag1",
@@ -439,6 +463,7 @@ FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         1,
         "raw.market_daily",
         "cierre de la sesion t-1",
+        1,
     ),
     CatalogEntry(
         "har_lag4",
@@ -446,6 +471,7 @@ FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         HAR_LAG_WEEKLY,
         "raw.market_daily",
         "cierre de la sesion t-1",
+        1,
     ),
     CatalogEntry(
         "har_lag17",
@@ -453,6 +479,7 @@ FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         HAR_LAG_MONTHLY,
         "raw.market_daily",
         "cierre de la sesion t-1",
+        1,
     ),
     CatalogEntry(
         "har_forecast",
@@ -460,6 +487,7 @@ FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         None,
         "raw.market_daily",
         "cierre de la sesion t-1",
+        1,
     ),
     CatalogEntry(
         "vix_level",
@@ -467,6 +495,7 @@ FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         1,
         "raw.market_daily",
         "cierre de la sesion t-1",
+        1,
     ),
     CatalogEntry(
         "vix_zscore",
@@ -475,6 +504,7 @@ FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         VIX_MIN_SESSIONS,
         "raw.market_daily",
         "cierre de la sesion t-1",
+        1,
     ),
     CatalogEntry(
         "vix_percentile",
@@ -482,6 +512,7 @@ FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         VIX_MIN_SESSIONS,
         "raw.market_daily",
         "cierre de la sesion t-1",
+        1,
     ),
 )
 
@@ -542,6 +573,7 @@ TECHNICAL_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         1,
         "raw.market_daily",
         "cierre de la sesion t",
+        1,
     ),
     CatalogEntry(
         "ret_5",
@@ -549,6 +581,7 @@ TECHNICAL_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         5,
         "raw.market_daily",
         "cierre de la sesion t",
+        1,
     ),
     CatalogEntry(
         "ret_21",
@@ -556,6 +589,7 @@ TECHNICAL_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         21,
         "raw.market_daily",
         "cierre de la sesion t",
+        1,
     ),
     CatalogEntry(
         "atr_norm",
@@ -563,6 +597,7 @@ TECHNICAL_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         ATR_WINDOW,
         "raw.market_daily",
         "cierre de la sesion t-1",
+        1,
     ),
     CatalogEntry(
         "dist_sma_20",
@@ -570,6 +605,7 @@ TECHNICAL_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         RANGE_WINDOW,
         "raw.market_daily",
         "cierre de la sesion t",
+        1,
     ),
     CatalogEntry(
         "rsi_14",
@@ -578,6 +614,7 @@ TECHNICAL_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         RSI_WINDOW,
         "raw.market_daily",
         "cierre de la sesion t",
+        1,
     ),
     CatalogEntry(
         "range_pos_20",
@@ -586,6 +623,7 @@ TECHNICAL_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         RANGE_WINDOW,
         "raw.market_daily",
         "cierre de la sesion t",
+        1,
     ),
     CatalogEntry(
         "vol_break_20",
@@ -593,6 +631,7 @@ TECHNICAL_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         RANGE_WINDOW,
         "raw.market_daily",
         "cierre de la sesion t",
+        1,
     ),
     CatalogEntry(
         "atr_norm_z",
@@ -600,6 +639,7 @@ TECHNICAL_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         TECHNICAL_MIN_SESSIONS,
         "raw.market_daily",
         "cierre de la sesion t-1",
+        1,
     ),
     CatalogEntry(
         "dist_sma_20_z",
@@ -607,6 +647,7 @@ TECHNICAL_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         TECHNICAL_MIN_SESSIONS,
         "raw.market_daily",
         "cierre de la sesion t",
+        1,
     ),
 )
 
@@ -685,6 +726,7 @@ CONTEXT_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         CONTEXT_CORRELATION_WINDOW,
         "raw.market_daily",
         "cierre de la sesion t-1",
+        1,
     ),
     CatalogEntry(
         "corr_ftse_60",
@@ -693,6 +735,7 @@ CONTEXT_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         CONTEXT_CORRELATION_WINDOW,
         "raw.market_daily",
         "cierre de la sesion t-1",
+        1,
     ),
     CatalogEntry(
         "corr_stoxx_60",
@@ -701,6 +744,7 @@ CONTEXT_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         CONTEXT_CORRELATION_WINDOW,
         "raw.market_daily",
         "cierre de la sesion t-1",
+        1,
     ),
     CatalogEntry(
         "corr_nikkei_60",
@@ -709,6 +753,7 @@ CONTEXT_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         CONTEXT_CORRELATION_WINDOW,
         "raw.market_daily",
         "cierre de la sesion t-1",
+        1,
     ),
     CatalogEntry(
         "asia_overnight_1",
@@ -716,6 +761,7 @@ CONTEXT_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         1,
         "raw.market_daily",
         "cierre asiatico de la sesion t",
+        0,
     ),
     CatalogEntry(
         "europe_prev_1",
@@ -723,6 +769,7 @@ CONTEXT_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         1,
         "raw.market_daily",
         "cierre europeo de la sesion t-1",
+        1,
     ),
     CatalogEntry(
         "beta_vix_60",
@@ -731,6 +778,7 @@ CONTEXT_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         CONTEXT_CORRELATION_WINDOW,
         "raw.market_daily",
         "cierre de la sesion t-1",
+        1,
     ),
     CatalogEntry(
         "dxy_ret_1",
@@ -738,6 +786,7 @@ CONTEXT_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         1,
         "raw.market_daily",
         "cierre de la sesion t-1",
+        1,
     ),
     CatalogEntry(
         "sector_dispersion_1",
@@ -746,6 +795,7 @@ CONTEXT_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         1,
         "raw.sectors",
         "cierre de la sesion t-1",
+        1,
     ),
     CatalogEntry(
         "sector_count",
@@ -753,6 +803,7 @@ CONTEXT_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         1,
         "raw.sectors",
         "cierre de la sesion t-1",
+        1,
     ),
     CatalogEntry(
         "sector_dispersion_1_z",
@@ -760,6 +811,7 @@ CONTEXT_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         CONTEXT_MIN_SESSIONS,
         "raw.sectors",
         "cierre de la sesion t-1",
+        1,
     ),
 )
 
@@ -819,6 +871,7 @@ MACRO_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         None,
         "raw.macro",
         "ultima publicacion anterior al cierre de la sesion t",
+        1,
     ),
     CatalogEntry(
         "fed_funds_chg_5",
@@ -826,6 +879,7 @@ MACRO_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         MACRO_CHG_WINDOW,
         "raw.macro",
         "cierre de la sesion t y de la sesion t-5",
+        1,
     ),
     CatalogEntry(
         "ust_10y",
@@ -834,6 +888,7 @@ MACRO_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         None,
         "raw.macro",
         "ultima publicacion anterior al cierre de la sesion t",
+        1,
     ),
     CatalogEntry(
         "ust_10y_chg_5",
@@ -841,6 +896,7 @@ MACRO_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         MACRO_CHG_WINDOW,
         "raw.macro",
         "cierre de la sesion t y de la sesion t-5",
+        1,
     ),
     CatalogEntry(
         "ust_2y",
@@ -849,6 +905,7 @@ MACRO_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         None,
         "raw.macro",
         "ultima publicacion anterior al cierre de la sesion t",
+        1,
     ),
     CatalogEntry(
         "ust_2y_chg_5",
@@ -856,6 +913,7 @@ MACRO_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         MACRO_CHG_WINDOW,
         "raw.macro",
         "cierre de la sesion t y de la sesion t-5",
+        1,
     ),
     CatalogEntry(
         "pendiente_2s10s",
@@ -864,6 +922,7 @@ MACRO_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         None,
         "raw.macro",
         "ultima publicacion anterior al cierre de la sesion t",
+        1,
     ),
     CatalogEntry(
         "pendiente_2s10s_chg_5",
@@ -871,6 +930,7 @@ MACRO_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         MACRO_CHG_WINDOW,
         "raw.macro",
         "cierre de la sesion t y de la sesion t-5",
+        1,
     ),
     CatalogEntry(
         "cpi_yoy",
@@ -879,6 +939,7 @@ MACRO_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         None,
         "raw.macro",
         "ultima publicacion anterior al cierre de la sesion t y su referencia de hace un ano",
+        1,
     ),
     CatalogEntry(
         "pce_yoy",
@@ -887,6 +948,7 @@ MACRO_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         None,
         "raw.macro",
         "ultima publicacion anterior al cierre de la sesion t y su referencia de hace un ano",
+        1,
     ),
     CatalogEntry(
         "dxy",
@@ -895,6 +957,7 @@ MACRO_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         None,
         "raw.market_daily",
         "cierre de la barra del DXY de la sesion t",
+        1,
     ),
     CatalogEntry(
         "ust_10y_z",
@@ -902,6 +965,7 @@ MACRO_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         MACRO_MIN_SESSIONS,
         "raw.macro",
         "cierre de la sesion t y 250 sesiones de historia previa",
+        1,
     ),
     CatalogEntry(
         "dxy_z",
@@ -909,6 +973,7 @@ MACRO_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         MACRO_MIN_SESSIONS,
         "raw.market_daily",
         "cierre de la sesion t y 250 sesiones de historia previa",
+        1,
     ),
 )
 
@@ -956,6 +1021,7 @@ REGIME_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         REGIME_MIN_SESSIONS,
         "raw.market_daily",
         "cierre de la sesion t-1",
+        1,
     ),
     CatalogEntry(
         "garch_forecast",
@@ -964,6 +1030,7 @@ REGIME_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         GARCH_MIN_TRAIN,
         "raw.market_daily",
         "cierre de la sesion t-1",
+        1,
     ),
     CatalogEntry(
         "garch_forecast_z",
@@ -971,6 +1038,7 @@ REGIME_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         REGIME_MIN_SESSIONS,
         "raw.market_daily",
         "cierre de la sesion t-1",
+        1,
     ),
     CatalogEntry(
         "efficiency_ratio_20",
@@ -979,6 +1047,7 @@ REGIME_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         REGIME_EFFICIENCY_WINDOW,
         "raw.market_daily",
         "cierre de la sesion t",
+        1,
     ),
     CatalogEntry(
         "day_of_week",
@@ -986,6 +1055,7 @@ REGIME_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         None,
         "raw.market_daily",
         "de antemano",
+        1,
     ),
     CatalogEntry(
         "sessions_to_opex",
@@ -994,6 +1064,7 @@ REGIME_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         None,
         "raw.market_daily",
         "de antemano",
+        1,
     ),
     CatalogEntry(
         "is_es_roll_session",
@@ -1001,6 +1072,7 @@ REGIME_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         None,
         "raw.market_daily",
         "de antemano",
+        1,
     ),
 )
 
@@ -1061,6 +1133,7 @@ COMMODITIES_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         1,
         "raw.market_daily",
         "cierre de la sesion t-1",
+        1,
     ),
     CatalogEntry(
         "oil_ret_5",
@@ -1069,6 +1142,7 @@ COMMODITIES_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         COMMODITIES_RETURN_WINDOW,
         "raw.market_daily",
         "cierre de la sesion t-1",
+        1,
     ),
     CatalogEntry(
         "oil_ret_1_z",
@@ -1076,6 +1150,7 @@ COMMODITIES_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         COMMODITIES_MIN_SESSIONS,
         "raw.market_daily",
         "cierre de la sesion t-1",
+        1,
     ),
     CatalogEntry(
         "gold_ret_1",
@@ -1083,6 +1158,7 @@ COMMODITIES_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         1,
         "raw.market_daily",
         "cierre de la sesion t-1",
+        1,
     ),
     CatalogEntry(
         "eurusd_ret_1",
@@ -1090,6 +1166,7 @@ COMMODITIES_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         1,
         "raw.market_daily",
         "cierre de la sesion t-1",
+        1,
     ),
 )
 
@@ -1151,6 +1228,40 @@ ALL_FEATURE_COLUMNS: Final[tuple[str, ...]] = tuple(
         )
     )
 )
+
+
+def _design_lag_by_feature() -> dict[str, int]:
+    """El ``design_lag`` declarado por el catalogo, columna a columna (#147).
+
+    Un nombre que aparezca en **dos** catalogos (``atr_norm``, #72) tiene que
+    declarar el **mismo** rezago: no hay respuesta unica y quedarse con una en
+    silencio es justo lo que #147 prohibe. La discrepancia es un error tipado.
+
+    Returns
+    -------
+    dict[str, int]
+        Una entrada por columna de :data:`ALL_FEATURE_COLUMNS`, en el orden del
+        registro de familias.
+    """
+    lags: dict[str, int] = {}
+    for feature_set, catalog in CATALOG_BY_FEATURE_SET.items():
+        for entry in catalog:
+            previous = lags.setdefault(entry.name, entry.design_lag)
+            if previous != entry.design_lag:
+                raise FeatureStoreError(
+                    f"'{entry.name}' declara design_lag {entry.design_lag} en "
+                    f"'{feature_set}' y {previous} en otra familia: el rezago de diseno no "
+                    "tiene dos respuestas"
+                )
+    return lags
+
+
+#: **Disponibilidad declarada** de las 58 columnas (#147): sesiones que la fila de
+#: diseno de `t` retrocede para leer cada una. Es la **unica** declaracion: la
+#: consume :func:`cfdtrader.models.baseline.design_frame` (via ``availability``) y
+#: el camino diario, de modo que no hay dos reglas. Solo ``asia_overnight_1``
+#: declara `0` hoy; re-declarar el resto es #150 (la misma regla, otros mercados).
+DESIGN_LAG_BY_FEATURE: Final[dict[str, int]] = _design_lag_by_feature()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

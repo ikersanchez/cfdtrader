@@ -754,7 +754,8 @@ def _restrict_design(design: DesignFrame, sessions: Sequence[date]) -> DesignFra
 
     Filtrar la matriz moveria los vecinos y el corrimiento de `t-1` dejaria de ser `t-1`. Aqui se
     parte del diseno ya construido (con el `shift` correcto) y solo se quitan filas, de modo que la
-    disponibilidad temporal sigue intacta.
+    disponibilidad temporal sigue intacta. La auditoria por columna (:attr:`design_lag_by_feature`)
+    viaja tal cual: recortar filas no cambia de que sesion viene cada columna (#147).
     """
     kept = design.frame.filter(pl.col("session").is_in(list(sessions)))
     nulls = sum(kept.get_column(name).null_count() for name in design.features)
@@ -766,6 +767,7 @@ def _restrict_design(design: DesignFrame, sessions: Sequence[date]) -> DesignFra
         n_nulls_in_features=nulls,
         design_lag_sessions=design.design_lag_sessions,
         features=design.features,
+        design_lag_by_feature=design.design_lag_by_feature,
     )
 
 
@@ -792,7 +794,12 @@ def measure(
     # Ventana **comun de casos completos**: el modelo no acepta `NaN` y las candidatas traen los
     # nulos del WTI negativo del 2020-04. Todos los conjuntos se miden en las MISMAS sesiones.
     union_columns = tuple(dict.fromkeys((*CONTROL_FEATURES, *CANDIDATE_FEATURES)))
-    union_design = design_frame(frame.matrix.frame, labels=frame.labels, selected=union_columns)
+    union_design = design_frame(
+        frame.matrix.frame,
+        labels=frame.labels,
+        selected=union_columns,
+        availability=feature_store.DESIGN_LAG_BY_FEATURE,
+    )
     keep = _complete_sessions(union_design)
     keep_set = set(keep)
     inputs = tuple(item for item in universe.inputs if item.session in keep_set)
@@ -808,7 +815,10 @@ def measure(
     for feature_set in planned:
         try:
             full_design = design_frame(
-                frame.matrix.frame, labels=frame.labels, selected=feature_set.columns
+                frame.matrix.frame,
+                labels=frame.labels,
+                selected=feature_set.columns,
+                availability=feature_store.DESIGN_LAG_BY_FEATURE,
             )
             design = _restrict_design(full_design, keep)
             model = fit_baseline(

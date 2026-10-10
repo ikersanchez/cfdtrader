@@ -1934,6 +1934,11 @@ def _configuration(
     estimador (A9): cambiarlas cambia el `run_sha256`, como cualquier otra decision declarada.
     La ruta **cruda** registra solo los 8 de #24: es la configuracion que hashea al
     `run_sha256` declarado del experimento crudo.
+
+    ``design_lag_by_feature`` (#147) entra en la ventana: la disponibilidad **por columna** es
+    parte de la identidad del experimento, no un detalle de la capa de diseno. Sin ella, dos
+    alineaciones distintas comparten `run_sha256` y el registro no puede distinguir el modelo
+    re-entrenado del anterior (su guardia lo detecta: mismo id, otro `result.json`).
     """
     return ExperimentConfig(
         variant_id=VARIANT_ID,
@@ -1949,6 +1954,7 @@ def _configuration(
             "n_sessions": frame.n_design_rows,
             "n_positives": frame.n_positives,
             "design_lag_sessions": DESIGN_LAG_SESSIONS,
+            "design_lag_by_feature": dict(frame.design.design_lag_by_feature),
             "plan_sha256": plan.plan_sha256,
             "matrix_sha256": frame.matrix.matrix_sha256,
             "feature_spec_sha256": dict(frame.matrix.feature_spec_sha256),
