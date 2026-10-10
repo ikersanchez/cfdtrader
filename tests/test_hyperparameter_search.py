@@ -679,6 +679,11 @@ def test_a3_a_variant_is_one_configuration_without_invented_fields() -> None:
         "n_sessions": 2688,
         "n_positives": 1400,
         "design_lag_sessions": 1,
+        # #147: la disponibilidad por columna viaja en la identidad del experimento.
+        "design_lag_by_feature": {
+            name: feature_store.DESIGN_LAG_BY_FEATURE[name]
+            for name in feature_store.FEATURE_COLUMNS
+        },
         "plan_sha256": "plan",
         "matrix_sha256": "matrix",
         "feature_spec_sha256": {"volatility_v1": "spec"},
@@ -694,6 +699,13 @@ def _frame_stub() -> Any:
         n_design_rows=2688,
         n_positives=1400,
         design_lag_sessions=1,
+        # #147: la `window` de #16 publica la disponibilidad por columna, luego el doble la trae.
+        design=SimpleNamespace(
+            design_lag_by_feature=tuple(
+                (name, feature_store.DESIGN_LAG_BY_FEATURE[name])
+                for name in feature_store.FEATURE_COLUMNS
+            )
+        ),
         matrix=SimpleNamespace(
             matrix_sha256="matrix",
             feature_spec_sha256={"volatility_v1": "spec"},
