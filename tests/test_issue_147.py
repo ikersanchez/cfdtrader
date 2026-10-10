@@ -8,7 +8,8 @@ Cubre los criterios de la issue:
   `t-1`, con el caso 2026-10-09 medido sobre el almacen real.
 - **C4** — sin *look-ahead*: una barra posterior a `t` no entra, y una columna no declarada como
   pendiente no se sirve.
-- **C5** — las otras 9 features de `BASELINE_FEATURES` no cambian de valor.
+- **C5** — las demas features de `BASELINE_FEATURES` no cambian de valor (las que el catalogo no
+  mueve; #150 anadio tres a la lista de las que si se mueven).
 - **C6** — una sola regla, dos sitios: el vector **servido** por `run_daily` y la fila de **diseno**
   de la misma sesion coinciden (sin *train/serve skew*).
 - **C7** — determinismo: el orden del mapa de disponibilidad no cambia el diseno y dos procesos con
@@ -60,10 +61,13 @@ REAL_DATA: Final[Path] = REPO_ROOT / "data"
 GOLDEN_SESSION: Final[date] = date(2026, 10, 9)
 GOLDEN_PREVIOUS: Final[date] = date(2026, 10, 8)
 
-#: El catalogo declara la disponibilidad de **todas** sus columnas, y hoy solo el overnight
-#: asiatico es legible en el instantaneo de decision (`design_lag = 0`). El literal es estable: es
-#: el contrato de #147, no un digest de un artefacto regenerable.
-ZERO_LAG_COLUMNS: Final[tuple[str, ...]] = ("asia_overnight_1",)
+#: Las columnas que el catalogo declara legibles en el instantaneo de decision (`design_lag = 0`).
+#: #147 dejo solo el overnight asiatico; #150 anadio las tres de mercado ajeno que ya cerraron, asi
+#: que la lista se **deriva** de la declaracion en vez de repetirla (la clasificacion congelada, con
+#: su motivo, vive en `tests/test_issue_150.py`).
+ZERO_LAG_COLUMNS: Final[tuple[str, ...]] = tuple(
+    sorted(name for name, lag in feature_store.DESIGN_LAG_BY_FEATURE.items() if lag == 0)
+)
 
 needs_store = pytest.mark.skipif(
     not (REAL_DATA / "derived" / "labels").exists(),
@@ -125,10 +129,15 @@ def test_c2_the_pending_columns_match_the_declared_zero_lag() -> None:
     (o al reves): `PENDING_COLUMNS` es la formula y `design_lag`, la declaracion.
     """
     assert tuple(sorted(context_features.PENDING_COLUMNS)) == ZERO_LAG_COLUMNS
+    declared_inputs = set(feature_store.CONTEXT_MARKET_SERIES) | set(
+        feature_store.CONTEXT_SECTOR_SERIES
+    )
     for column, series in context_features.PENDING_COLUMNS.items():
         assert column in feature_store.CONTEXT_FEATURE_COLUMNS
         assert series
-        assert all(name in feature_store.CONTEXT_MARKET_SERIES for name in series)
+        # #150: la dispersion sectorial sale de `raw.sectors`, asi que la comprobacion es "es una
+        # entrada declarada de la familia", no "es una serie de mercado".
+        assert set(series) <= declared_inputs, column
 
 
 def test_c2_a_column_without_a_declaration_is_a_typed_error() -> None:
@@ -162,40 +171,44 @@ def test_c2_a_non_mapping_availability_is_a_typed_error() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # C3 / C5 - el Asia llega de `t` y nada mas se mueve
 # ─────────────────────────────────────────────────────────────────────────────
-def test_c3_the_design_of_t_reads_the_asia_of_t_and_the_rest_of_t_minus_one() -> None:
-    """La fila de `t` lleva el overnight de `t` y las otras 9 columnas de `t-1` (C3 + C5)."""
+def test_c3_the_design_of_t_reads_the_asia_of_t_and_the_rest_where_they_say() -> None:
+    """La fila de `t` lleva el overnight de `t`; cada otra, la de su `design_lag` (C3 + C5)."""
     features, labels = _synthetic()
     design = design_frame(features, labels=labels, availability=feature_store.DESIGN_LAG_BY_FEATURE)
     days = [cast("date", value) for value in features["session"].to_list()]
     asia = BASELINE_FEATURES.index("asia_overnight_1")
+    declared = feature_store.DESIGN_LAG_BY_FEATURE
     for index in range(1, len(days)):
         row = _row(design.frame, days[index])
         assert row["asia_overnight_1"] == float(index * 10 + asia), "el Asia no es el de `t`"
         for position, name in enumerate(BASELINE_FEATURES):
-            if name == "asia_overnight_1":
-                continue
-            assert row[name] == float((index - 1) * 10 + position), f"{name} no es el de `t-1`"
+            lag = declared[name]
+            assert row[name] == float((index - lag) * 10 + position), (
+                f"{name} no es el de `t-{lag}`"
+            )
         assert row[DESIGN_SESSION_COLUMN] == days[index - 1]
 
     assert design.design_lag_by_feature == tuple(
-        (name, 0 if name == "asia_overnight_1" else 1) for name in BASELINE_FEATURES
+        (name, declared[name]) for name in BASELINE_FEATURES
     )
     assert design.design_lag_sessions == DESIGN_LAG_SESSIONS == 1
 
 
-def test_c5_the_other_nine_columns_are_byte_identical_to_the_previous_rule() -> None:
-    """Solo el Asia se mueve: las otras 9 columnas son **las mismas** que con el rezago uniforme."""
+def test_c5_the_columns_that_do_not_move_are_byte_identical_to_the_previous_rule() -> None:
+    """Las columnas que el catalogo no mueve son **las mismas** que con el rezago uniforme."""
     features, labels = _synthetic(rows=12)
     uniform = dict.fromkeys(BASELINE_FEATURES, DESIGN_LAG_SESSIONS)
     declared = dict(feature_store.DESIGN_LAG_BY_FEATURE)
     before = design_frame(features, labels=labels, availability=uniform)
     after = design_frame(features, labels=labels, availability=declared)
 
-    others = [name for name in BASELINE_FEATURES if name != "asia_overnight_1"]
-    assert after.frame.select("session", "y", *others).equals(
-        before.frame.select("session", "y", *others)
+    moved = [name for name in BASELINE_FEATURES if declared[name] == 0]
+    untouched = [name for name in BASELINE_FEATURES if declared[name] != 0]
+    assert after.frame.select("session", "y", *untouched).equals(
+        before.frame.select("session", "y", *untouched)
     )
-    assert after.frame["asia_overnight_1"].to_list() != before.frame["asia_overnight_1"].to_list()
+    for name in moved:
+        assert after.frame[name].to_list() != before.frame[name].to_list(), name
     assert after.design_lag_by_feature != before.design_lag_by_feature
 
 
@@ -341,9 +354,8 @@ def test_c7_two_processes_with_different_hash_seeds_agree() -> None:
     first = _child_design("0")
     second = _child_design("1")
     assert first == second
-    assert first["lag"] == [
-        [name, 0 if name == "asia_overnight_1" else 1] for name in BASELINE_FEATURES
-    ]
+    declared = feature_store.DESIGN_LAG_BY_FEATURE
+    assert first["lag"] == [[name, declared[name]] for name in BASELINE_FEATURES]
     assert len(cast("list[object]", first["values"])) == 39
 
 

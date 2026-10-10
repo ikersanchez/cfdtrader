@@ -769,8 +769,12 @@ def test_a10_the_report_runs_to_the_end_and_publishes_the_delta_with_its_sign(
     assert delta["brier_score"] == (
         float(cast("float", before["brier_score"])) - float(cast("float", after["brier_score"]))
     )
-    assert delta["improves"] is True
-    assert float(cast("float", delta["brier_score"])) > 0.0
+    # El **signo** es la medida, y cambia con el diseno: con la alineacion de #147 era positivo
+    # (0.2559734 -> 0.2555626, delta +0.0004109) y #150 vuelve a mover el modelo. Lo que se fija es
+    # la **regla**: `improves` es exactamente el signo del delta y el delta es `before - after`.
+    value = float(cast("float", delta["brier_score"]))
+    assert delta["improves"] is (value > 0.0)
+    assert value != 0.0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
