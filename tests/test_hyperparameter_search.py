@@ -1266,7 +1266,19 @@ def test_a8_every_row_is_measured_here_with_the_declared_basis(
     reference_winner = cast("dict[str, object]", comparison["reference_winner_26"])
     assert reference_raw["variant_id"] == BASELINE_VARIANT_ID
     assert reference_raw["calibrated"] is False
-    assert reference_winner["run_sha256"] == reference_raw["run_sha256"]
+    # #147: la ganadora de #26 sale de las **familias viejas** y es la misma que declara
+    # `reference_winner_26`. Con la alineacion anterior coincidia ademas con la cruda
+    # (`cd6a746b...`): los dos modelos son un casi-empate y el diseno nuevo movio el orden (hoy
+    # gana la calibrada de la misma familia). Lo que se fija es la **relacion** medible —todas las
+    # filas miden su delta contra esa ganadora—, nunca el digest de una corrida regenerable.
+    assert reference_winner["variant_id"] in {BASELINE_VARIANT_ID, LIGHTGBM_VARIANT_ID}
+    references = {
+        cast("str", delta["reference_run_sha256"])
+        for row in _rows(real_report)
+        for delta in (row.get("delta_vs_winner_26"),)
+        if isinstance(delta, Mapping)
+    }
+    assert references == {reference_winner["run_sha256"]}
     for row in _rows(real_report):
         assert row["basis"] == "declared_cost"
         assert row["is_validation"] is False
