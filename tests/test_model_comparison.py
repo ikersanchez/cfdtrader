@@ -959,12 +959,12 @@ def test_a12_the_unit_bug_is_fixed_and_measured(real_report: ModelComparisonRepo
     selected = cast("Mapping[str, object]", _block(real_report, "selection")["selected"])
     assert bug["observed_on"] == selected["run_sha256"]
     assert bug["n_operations"] == selected["n_traded"]
-    # #147: el bloque se mide sobre la variante **seleccionada** (regla de #26: minimo Brier) y la
-    # `comparison` usa como referencia la **cruda** de #24. Con la alineacion anterior ambas
-    # coincidian —la cruda ganaba la seleccion—, y el diseno nuevo mueve el orden: gana la
-    # calibrada de la misma familia (Brier 0.2555626 < 0.2559735, el mismo delta de #25). Se fija
-    # la **relacion** con la seleccion, que es el contrato, no la coincidencia.
-    assert bug["observed_on"] != reference["run_sha256"]
+    # #147/#150: el bloque se mide sobre la variante **seleccionada** (regla de #26: minimo Brier) y
+    # la `comparison` usa como referencia la **cruda** de #24. Que las dos coincidan es una
+    # **medida**, no un contrato: con la alineacion de #147 la seleccion recayo en la calibrada de
+    # la misma familia y con la de #150 vuelve a recaer en la cruda (mismo digests que la
+    # referencia). Lo que se fija es la relacion con `selection.selected`.
+    assert reference["variant_id"] == "baseline_logit_elasticnet_v1"
     assert "c_fraction_of_notional" in str(bug["statement"])
     assert "c_fraction_of_notional" in str(bug["resolution"])
     # A8: la guardia de `git diff` se reduce al contrato nuevo. El motor (#80) **si** entra en
