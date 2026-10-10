@@ -69,22 +69,25 @@ Sin *look-ahead*
 - El modulo **no** aplica el corte de muestra limpia de ``analysis.drift``: es
   una restriccion de *estudio*, no del almacen (`_docs/plan.md` §9).
 
-La sesion pendiente (#147)
---------------------------
+La sesion pendiente (#147, ampliada en #150)
+--------------------------------------------
 
 La matriz publica **una fila por sesion del S&P**: la fila `t` describe el estado
 al cierre de `t` y la escribe cuando ese cierre ya ocurrio. El camino diario, en
 cambio, decide `t` a las 08:45 ET **antes** de que el ancla cierre, asi que no
 tiene fila `t` de la que leer. Las columnas cuyo input ya cerro a esa hora
-—:data:`PENDING_COLUMNS`, hoy solo ``asia_overnight_1``— si son legibles, y
+—:data:`PENDING_COLUMNS`: el overnight asiatico, el cierre europeo previo, el
+dolar y la dispersion sectorial— si son legibles, y
 :func:`pending_context_values` las calcula para la sesion pendiente con la
 **misma** formula que la matriz: es el gemelo en codigo del ``design_lag = 0`` que
 el catalogo declara, y evita que el vector servido y la fila de diseno de la
 misma sesion puedan divergir.
 
-El techo sigue siendo el mismo: "su ultima sesion ``<= t``". Una barra posterior
-a `t` no puede entrar, y una columna que no este en :data:`PENDING_COLUMNS` no se
-sirve.
+El techo de cada columna es el que fija su propia formula, y nunca pasa del
+instantaneo: "su ultima sesion ``<= t``" en el overnight asiatico —que ya cerro
+**hoy**— y "su ultima sesion ``< t``" en las que cerraron **ayer**. Una barra
+posterior al snapshot no entra, y una columna que no este en
+:data:`PENDING_COLUMNS` no se sirve.
 
 Lo no computable se publica ``null``
 ------------------------------------
@@ -178,6 +181,9 @@ _ASIA: Final[tuple[str, ...]] = ("^N225", "^HSI")
 #: Los tres indices europeos cuya media es el cierre previo.
 _EUROPE: Final[tuple[str, ...]] = ("^GDAXI", "^FTSE", "^STOXX50E")
 
+#: El indice dolar, cuya ultima sesion ``< t`` es ``dxy_ret_1``.
+_DXY: Final[str] = "DX-Y.NYB"
+
 #: Nombres de las features sin ventana expandida (los del catalogo de #19).
 _ASIA_OVERNIGHT: Final[str] = "asia_overnight_1"
 _EUROPE_PREVIOUS: Final[str] = "europe_prev_1"
@@ -193,13 +199,20 @@ _BASE_COLUMNS: Final[tuple[str, ...]] = tuple(
     name for name in CONTEXT_FEATURE_COLUMNS if name != _DISPERSION_Z
 )
 
-#: **Columnas pendientes** (#147): las que la fila de la sesion `t` ya puede leer **antes** de que
-#: el ancla publique su barra, porque el mercado de su input cerro antes del snapshot. Hoy solo el
-#: overnight asiatico: Tokio y Hong Kong cierran a las 06:00 UTC y el instantaneo es a las 08:45 ET
-#: (12:45 UTC, `_docs/plan.md` §8.1). Cada columna declara **de que series** sale, de modo que el
+#: **Columnas pendientes** (#147, ampliadas en #150): las que la fila de la sesion `t` ya puede
+#: leer **antes** de que el ancla publique su barra, porque el mercado de su input cerro antes del
+#: snapshot de las 08:45 ET (12:45 UTC, `_docs/plan.md` §8.1). Son las cuatro de mercado ajeno que
+#: ya cerraron: el overnight asiatico (Tokio a las 06:00 UTC, Hong Kong a las 08:00 UTC), el cierre
+#: europeo previo y el dolar (los dos a las 11:30/17:00 ET del dia anterior) y la dispersion
+#: sectorial (16:00 ET del anterior). Cada columna declara **de que series** sale, de modo que el
 #: camino diario sabe que frames necesita. Es el gemelo en codigo del `design_lag = 0` que el
 #: catalogo declara para esas columnas (`features.store.CatalogEntry`), y un test los cruza.
-PENDING_COLUMNS: Final[dict[str, tuple[str, ...]]] = {_ASIA_OVERNIGHT: _ASIA}
+PENDING_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
+    _ASIA_OVERNIGHT: _ASIA,
+    _EUROPE_PREVIOUS: _EUROPE,
+    _DXY_RETURN: (_DXY,),
+    _DISPERSION: CONTEXT_SECTOR_SERIES,
+}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -404,6 +417,37 @@ def _mean_of(values: list[float | None]) -> float | None:
     return math.fsum(numbers) / len(numbers)
 
 
+def _europe_previous_at(series: Mapping[str, _Series], session: date) -> float | None:
+    """``europe_prev_1`` de esa sesion: media de los retornos **europeos** de la ultima sesion < t.
+
+    Europa cierra a las 11:30 ET, asi que ese cierre ya esta publicado en el snapshot del dia
+    siguiente (#150): la fila `t` usa el de `t-1`, no el de `t-2`.
+    """
+    return _mean_of([_return_at(series[name], session, lag=1) for name in _EUROPE])
+
+
+def _dxy_return_at(series: Mapping[str, _Series], session: date) -> float | None:
+    """``dxy_ret_1`` de esa sesion: el retorno del dolar en su ultima sesion ``< t``.
+
+    El DXY cierra a las 17:00 ET, tambien antes del snapshot siguiente (#150).
+    """
+    return _return_at(series[_DXY], session, lag=1)
+
+
+def _sample_stdev(returns: list[float]) -> float | None:
+    """Desviacion estandar muestral (``ddof=1``) de esos retornos, o ``None`` con menos de dos."""
+    return statistics.stdev(returns) if len(returns) >= 2 else None
+
+
+def _sector_dispersion_at(series: Mapping[str, _Series], session: date) -> float | None:
+    """``sector_dispersion_1`` de esa sesion: dispersion de los sectores en su ultima sesion < t.
+
+    Los ETF sectoriales cierran a las 16:00 ET, asi que el cierre de `t-1` ya esta publicado en el
+    snapshot de `t` (#150).
+    """
+    return _sample_stdev(_sector_returns(series, session))
+
+
 def _centred_sums(xs: list[float], ys: list[float]) -> tuple[float, float, float] | None:
     """Sumas centradas ``(suma(x*y), suma(x^2), suma(y^2))``, o ``None`` sin varianza.
 
@@ -494,7 +538,7 @@ def _beta_at(anchor: _Series, index: int, other: _Series) -> float | None:
     return _slope(*pairs)
 
 
-def _sector_returns(series: dict[str, _Series], target: date) -> list[float]:
+def _sector_returns(series: Mapping[str, _Series], target: date) -> list[float]:
     """Retornos de los ETF sectoriales **con dato** en su ultima sesion ``< t`` (A10).
 
     Un ETF que todavia no existia no aporta: no se le inventa un cero ni se anula
@@ -606,17 +650,13 @@ def context_matrix(frames: Mapping[str, pl.DataFrame], *, spec: FeatureSpec) -> 
         for name, partner in _CORRELATIONS:
             columns[name].append(_correlation_at(anchor, index, series[partner]))
         columns[_ASIA_OVERNIGHT].append(_asia_overnight_at(series, session))
-        columns[_EUROPE_PREVIOUS].append(
-            _mean_of([_return_at(series[name], session, lag=1) for name in _EUROPE])
-        )
+        columns[_EUROPE_PREVIOUS].append(_europe_previous_at(series, session))
         columns[_BETA_VIX].append(_beta_at(anchor, index, series["^VIX"]))
-        columns[_DXY_RETURN].append(_return_at(series["DX-Y.NYB"], session, lag=1))
+        columns[_DXY_RETURN].append(_dxy_return_at(series, session))
 
         sector_returns = _sector_returns(series, session)
         counts.append(len(sector_returns))
-        columns[_DISPERSION].append(
-            statistics.stdev(sector_returns) if len(sector_returns) >= 2 else None
-        )
+        columns[_DISPERSION].append(_sample_stdev(sector_returns))
 
     frame = _base_frame(anchor, instants, columns, counts)
     # La `_z` es de #19: ventana expandida con el minimo declarado, importada.
@@ -629,7 +669,10 @@ def context_matrix(frames: Mapping[str, pl.DataFrame], *, spec: FeatureSpec) -> 
 #: matriz. Anadir una columna a :data:`PENDING_COLUMNS` sin anadirla aqui es un error tipado, y
 #: el test que las cruza lo detecta antes.
 _PENDING_FORMULAS: Final[dict[str, Callable[[Mapping[str, _Series], date], float | None]]] = {
-    _ASIA_OVERNIGHT: _asia_overnight_at
+    _ASIA_OVERNIGHT: _asia_overnight_at,
+    _EUROPE_PREVIOUS: _europe_previous_at,
+    _DXY_RETURN: _dxy_return_at,
+    _DISPERSION: _sector_dispersion_at,
 }
 
 

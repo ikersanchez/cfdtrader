@@ -86,8 +86,8 @@ Sin *look-ahead*
 - El modulo **no** filtra sesiones ni aplica el corte de muestra limpia de
   ``analysis.drift``: eso es una restriccion de *estudio*, no del almacen.
 
-Disponibilidad declarada (#147)
--------------------------------
+Disponibilidad declarada (#147, ampliada en #150)
+-------------------------------------------------
 
 Cada entrada del catalogo declara, ademas de ``required_as_of`` (la prosa), el
 ``design_lag`` legible por maquina: las sesiones que la fila de **diseno** de `t`
@@ -97,6 +97,13 @@ publica el registro entero, y es la **unica** declaracion: la consumen
 *train/serve skew*. La disponibilidad es del **catalogo** —como
 ``required_as_of``— y **no** del contrato de calculo: anadirla no mueve
 :func:`feature_spec_sha256`, porque el calculo y sus valores no cambian.
+
+El criterio de `0` es **de reloj, no de gusto**: el input de esa columna tiene que
+estar publicado en el instantaneo de decision (las 08:45 ET). Hoy lo cumplen los
+mercados que cierran antes —Tokio a las 06:00 UTC, Hong Kong a las 08:00 UTC,
+Europa a las 11:30 ET del dia anterior, el dolar a las 17:00 ET del anterior y los
+sectores a las 16:00 ET del anterior—; una columna cuya fila `t` necesite la barra
+del **ancla** de `t` (que cierra a las 16:00 ET) declara `1`.
 
 Familias de features
 --------------------
@@ -769,7 +776,7 @@ CONTEXT_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         1,
         "raw.market_daily",
         "cierre europeo de la sesion t-1",
-        1,
+        0,
     ),
     CatalogEntry(
         "beta_vix_60",
@@ -786,7 +793,7 @@ CONTEXT_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         1,
         "raw.market_daily",
         "cierre de la sesion t-1",
-        1,
+        0,
     ),
     CatalogEntry(
         "sector_dispersion_1",
@@ -795,7 +802,7 @@ CONTEXT_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         1,
         "raw.sectors",
         "cierre de la sesion t-1",
-        1,
+        0,
     ),
     CatalogEntry(
         "sector_count",
@@ -1256,11 +1263,19 @@ def _design_lag_by_feature() -> dict[str, int]:
     return lags
 
 
-#: **Disponibilidad declarada** de las 58 columnas (#147): sesiones que la fila de
-#: diseno de `t` retrocede para leer cada una. Es la **unica** declaracion: la
-#: consume :func:`cfdtrader.models.baseline.design_frame` (via ``availability``) y
-#: el camino diario, de modo que no hay dos reglas. Solo ``asia_overnight_1``
-#: declara `0` hoy; re-declarar el resto es #150 (la misma regla, otros mercados).
+#: **Disponibilidad declarada** de las 57 columnas (#147, ampliada en #150): sesiones
+#: que la fila de diseno de `t` retrocede para leer cada una. Es la **unica**
+#: declaracion: la consume :func:`cfdtrader.models.baseline.design_frame` (via
+#: ``availability``) y el camino diario, de modo que no hay dos reglas.
+#:
+#: Declaran `0` —el dato de la **propia** sesion `t`, ya publicado en el
+#: instantaneo de las 08:45 ET— las cuatro columnas cuyo input es un mercado que
+#: cierra **antes** de esa hora: el overnight asiatico (`^N225` a las 06:00 UTC y
+#: `^HSI` a las 08:00 UTC, #147), el cierre europeo previo y el dolar (los dos a las
+#: 11:30/17:00 ET del dia **anterior**, #150) y la dispersion sectorial (16:00 ET del
+#: anterior, #150). El resto declara `1`: su fila `t` necesita la barra del ancla de
+#: `t`, o una publicacion posterior al instantaneo (la auditoria razonada de las 10
+#: features de #24 esta en #150).
 DESIGN_LAG_BY_FEATURE: Final[dict[str, int]] = _design_lag_by_feature()
 
 
