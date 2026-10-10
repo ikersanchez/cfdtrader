@@ -1598,12 +1598,12 @@ def test_the_real_store_reproduces_the_declared_coverage() -> None:
     coverage = _dict(result.inputs["intraday_coverage"])
     sigma = _dict(result.inputs["sigma"])
     # Recuentos del almacen **vivo**: avanzan con cada ingesta posterior al ultimo refresco
-    # declarado (#45, 2026-10-05, ver #135) y se re-baselinan aqui con la del 2026-10-09
-    # (+3 sesiones diarias, las mismas tres en la cobertura intradia).
-    assert _number(coverage["sessions"]) == 75
+    # declarado (#45, 2026-10-05, ver #135) y se re-baselinan aqui con el de **2026-10-10**
+    # (re-ingesta de #151: +1 sesion diaria e intradia con el cierre por mercado).
+    assert _number(coverage["sessions"]) == 76
     assert "2026-06-24" in str(coverage["first_bar_utc"])
     assert _number(coverage["bars_at_0845_et"]) == 0
-    assert _number(coverage["stored_daily_sessions"]) == 5476
+    assert _number(coverage["stored_daily_sessions"]) == 5477
     assert _number(_dict(_dict(result.sample["reasons"])[REASON_NO_FORECAST])["count"]) == 505
     assert _number(sigma["warmup_sessions"]) == MIN_TRAIN
     assert result.forecast_candidate == "garch"
@@ -1611,8 +1611,8 @@ def test_the_real_store_reproduces_the_declared_coverage() -> None:
     assert _number(result.sample["labelled"]) > 2600
     assert len(result.limitations) >= 7
     # Recuento del almacen **vivo**: se actualiza con el refresco de #45 (2026-10-05, ver #135)
-    # y con la ingesta del 2026-10-09 (+3 sesiones).
-    assert _number(_dict(result.inputs["clean_sample"])["clean_sessions"]) == 3208
+    # y con la re-ingesta del 2026-10-10 de #151 (+1 sesion).
+    assert _number(_dict(result.inputs["clean_sample"])["clean_sessions"]) == 3209
     # A6/A7 sobre el almacen real: el `open` diario **es** el *print* de la subasta.
     auction = _dict(_dict(report_payload(result)["entry_price"])["auction_verification"])
     assert auction["status"] == "ok"
