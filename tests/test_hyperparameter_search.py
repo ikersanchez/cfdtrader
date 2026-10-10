@@ -505,7 +505,11 @@ def test_a2_the_control_matrix_is_identical_to_the_one_of_26(
     frame = real_report.features
     control = next(variant for variant in SEARCH_SPACE if variant.feature_set == "control")
     ours = search.design_for(control, features=frame.matrix.frame, labels=frame.labels)
-    reference = design_frame(frame.matrix.frame, labels=frame.labels)
+    reference = design_frame(
+        frame.matrix.frame,
+        labels=frame.labels,
+        availability=feature_store.DESIGN_LAG_BY_FEATURE,
+    )
     assert ours.features == reference.features == BASELINE_FEATURES
     assert ours.sessions == reference.sessions
     assert ours.n_sessions == reference.n_sessions
@@ -514,6 +518,7 @@ def test_a2_the_control_matrix_is_identical_to_the_one_of_26(
     assert ours.n_nulls_in_features == reference.n_nulls_in_features == 0
     assert ours.frame.equals(reference.frame)
     assert ours.design_lag_sessions == reference.design_lag_sessions == 1
+    assert ours.design_lag_by_feature == reference.design_lag_by_feature
     for variant in SEARCH_SPACE:
         design = search.design_for(variant, features=frame.matrix.frame, labels=frame.labels)
         assert design.features == variant.features
@@ -579,11 +584,16 @@ def test_a3_each_variant_has_its_own_run_sha256(real_report: search.SearchReport
             "n_sessions",
             "n_positives",
             "design_lag_sessions",
+            # #147: la disponibilidad por columna entra en la identidad de la corrida.
+            "design_lag_by_feature",
             "plan_sha256",
             "matrix_sha256",
             "feature_spec_sha256",
             "feature_code_version",
         }
+        assert window["design_lag_by_feature"] == dict(
+            real_report.features.design.design_lag_by_feature
+        )
         assert window["plan_sha256"] == real_report.split_plan.plan_sha256
     new_entries = cast("list[dict[str, object]]", _block(real_report, "registry")["new_entries"])
     assert [entry["variant_id"] for entry in new_entries] == [

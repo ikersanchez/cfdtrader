@@ -122,12 +122,15 @@ def _design_values(frame: pl.DataFrame, session: date) -> dict[str, float]:
 # A2 - disponibilidad temporal y no-look-ahead
 # ─────────────────────────────────────────────────────────────────────────────
 @needs_store
-def test_a2_the_design_row_of_t_is_the_feature_row_of_t_minus_one(real_frame: FeatureFrame) -> None:
-    """A2: una sola regla, sin filtrar columnas, y el corrimiento no pierde sesiones.
+def test_a2_the_design_row_of_t_reads_every_column_where_its_availability_says(
+    real_frame: FeatureFrame,
+) -> None:
+    """A2 (#147): cada columna del diseno sale de la sesion que declara su `design_lag`.
 
-    Se comprueba sobre las **2.687** filas, columna a columna: la fila de diseno de cada sesion
-    del universo es la fila de features de la sesion anterior del diario, y
-    ``n_shifted_rows == 0`` porque la anterior a 2016-01-07 esta en el diario.
+    Se comprueba sobre las **2.687** filas, columna a columna: las de `design_lag = 1` son la fila
+    de features de la sesion anterior del diario y las de `design_lag = 0` (`asia_overnight_1`) la
+    de la **propia** sesion, ya publicada en el instantaneo de las 08:45 ET. El corrimiento no
+    pierde sesiones: ``n_shifted_rows == 0`` porque la anterior a 2016-01-07 esta en el diario.
     """
     assert DESIGN_LAG_SESSIONS == 1
     assert real_frame.design_lag_sessions == 1
@@ -136,16 +139,21 @@ def test_a2_the_design_row_of_t_is_the_feature_row_of_t_minus_one(real_frame: Fe
 
     matrix = real_frame.matrix.frame
     design = real_frame.design.frame
+    lags = dict(real_frame.design.design_lag_by_feature)
+    assert lags == {name: feature_store.DESIGN_LAG_BY_FEATURE[name] for name in BASELINE_FEATURES}
+
     position = {session: index for index, session in enumerate(matrix["session"].to_list())}
     lookup = matrix.select(pl.col("session").alias("origin"), *BASELINE_FEATURES)
-    expected = design.select("session", DESIGN_SESSION_COLUMN).join(
-        lookup, left_on=DESIGN_SESSION_COLUMN, right_on="origin", how="left"
-    )
-    assert expected.height == design.height
     for name in BASELINE_FEATURES:
-        assert expected.get_column(name).equals(design.get_column(name)), (
-            f"la columna '{name}' del diseno no es la de la sesion de origen: el corrimiento de "
-            "A2 esta roto"
+        source = DESIGN_SESSION_COLUMN if lags[name] == DESIGN_LAG_SESSIONS else "session"
+        expected = (
+            design.select("session", source)
+            .join(lookup, left_on=source, right_on="origin", how="left")
+            .get_column(name)
+        )
+        assert expected.equals(design.get_column(name)), (
+            f"la columna '{name}' del diseno no es la de su sesion declarada "
+            f"(design_lag={lags[name]}): la regla de disponibilidad de #147 esta rota"
         )
     for session, origin in zip(
         cast("list[date]", design["session"].to_list()),
@@ -153,25 +161,26 @@ def test_a2_the_design_row_of_t_is_the_feature_row_of_t_minus_one(real_frame: Fe
         strict=True,
     ):
         assert position[session] - position[origin] == 1, (
-            f"la sesion {origin} no es la **anterior del diario** a {session}: el corrimiento "
-            "usa la lista de etiquetas y no la del diario (A2)"
+            f"la sesion {origin} no es la **anterior del diario** a {session}: la referencia del "
+            "corrimiento usa la lista de etiquetas y no la del diario (A2)"
         )
 
 
 @needs_store
-def test_a2_mutating_the_session_does_not_move_its_design_row_or_its_probability(
+def test_a2_mutating_a_session_moves_only_the_columns_that_read_it(
     real_frame: FeatureFrame,
 ) -> None:
-    """A2: mutar `close`/`high`/`low`/`ret_long` de `t` no mueve el diseno, ni `p(t)`, ni la
-    decision.
+    """A2 (#147): mutar la fila de `t` mueve **solo** las columnas de `t`, y `p(t)` con ellas.
 
-    El control positivo es mutar la sesion **anterior**: eso si mueve el diseno y la
-    probabilidad. El modelo se ajusta **una vez**, con `t` en el *test* de su fold, de forma que
-    la mutacion tampoco pueda propagarse por el ajuste: lo unico que puede mover `p(t)` es la
-    fila de diseno de `t`.
+    Antes de #147 ninguna columna del diseno de `t` leia la sesion `t`; ahora la leen las de
+    `design_lag = 0` (hoy solo `asia_overnight_1`) y **solo** esas. El control positivo es mutar
+    `t-1`: mueve las otras 9 —las que leen la fila anterior— y **no** el Asia. El modelo se ajusta
+    **una vez**, con `t` en el *test* de su fold, de forma que la mutacion no pueda propagarse por
+    el ajuste: lo unico que puede mover `p(t)` es la fila de diseno de `t`.
     """
     design = real_frame.design.frame
     sessions = real_frame.design.sessions
+    lags = dict(real_frame.design.design_lag_by_feature)
     model = fit_baseline(
         real_frame.design,
         splits=(
@@ -189,19 +198,32 @@ def test_a2_mutating_the_session_does_not_move_its_design_row_or_its_probability
     assert reference[position] is not None
 
     labels = real_frame.labels.with_columns((-pl.col("ret_long") - 0.5).alias("ret_long"))
-    mutated = _design_with(_shock(real_frame.matrix.frame, session=session, factor=1.9), labels)
-    assert mutated.get_column("y").to_list()[position] != design.get_column("y").to_list()[position]
-    assert _design_values(mutated, session) == _design_values(design, session)
-    assert probabilities(model, mutated)[position] == reference[position]
+    before = _design_values(design, session)
+    own = _design_with(_shock(real_frame.matrix.frame, session=session, factor=1.9), labels)
+    assert own.get_column("y").to_list()[position] != design.get_column("y").to_list()[position]
+    after = _design_values(own, session)
+    for name in BASELINE_FEATURES:
+        if lags[name] == 0:
+            assert after[name] != before[name], f"'{name}' declara `design_lag = 0` y no lee `t`"
+        else:
+            assert after[name] == before[name], f"'{name}' no deberia moverse al mutar `t`"
+    assert probabilities(model, own)[position] != reference[position]
 
     moved = _design_with(_shock(real_frame.matrix.frame, session=previous, factor=1.9), labels)
-    assert _design_values(moved, session) != _design_values(design, session)
+    shifted = _design_values(moved, session)
+    for name in BASELINE_FEATURES:
+        if lags[name] == DESIGN_LAG_SESSIONS:
+            assert shifted[name] != before[name], f"'{name}' lee `t-1` y la mutacion no la movio"
+        else:
+            assert shifted[name] == before[name], f"'{name}' no lee `t-1` y se movio"
     assert probabilities(model, moved)[position] != reference[position]
 
 
 def _design_with(matrix: pl.DataFrame, labels: pl.DataFrame) -> pl.DataFrame:
     """Reconstruye la matriz de diseno con la regla del modulo (importada, no copiada)."""
-    return design_frame(matrix, labels=labels).frame
+    return design_frame(
+        matrix, labels=labels, availability=feature_store.DESIGN_LAG_BY_FEATURE
+    ).frame
 
 
 @needs_store

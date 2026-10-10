@@ -51,6 +51,10 @@ SOURCE: Final[str] = MODULE_PATH.read_text(encoding="utf-8")
 TREE: Final[ast.Module] = ast.parse(SOURCE)
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[1]
 
+#: #147: la disponibilidad declarada **por el catalogo**. Es la que `design_frame` consume; el
+#: test que la cruza con la de `features.store` vive en `tests/test_issue_147.py`.
+AVAILABILITY: Final[dict[str, int]] = feature_store.DESIGN_LAG_BY_FEATURE
+
 #: Modulos que ``models/baseline.py`` **no** puede importar (A1), por AST y no por texto.
 FORBIDDEN_ROOTS: Final[tuple[str, ...]] = (
     "duckdb",
@@ -116,7 +120,7 @@ def _labels_frame(features: pl.DataFrame) -> pl.DataFrame:
 def _design(*, rows: int = 240, seed: str = "a24") -> baseline.DesignFrame:
     """La matriz de diseno sintetica completa (features + etiquetas), con el corrimiento."""
     features = _features_frame(rows=rows, seed=seed)
-    return design_frame(features, labels=_labels_frame(features))
+    return design_frame(features, labels=_labels_frame(features), availability=AVAILABILITY)
 
 
 def _assignments(rows: int, *, folds: int = 2, test_size: int = 40) -> tuple[SplitAssignment, ...]:
@@ -320,6 +324,7 @@ CHILD: Final[str] = textwrap.dedent(
     import polars as pl
     from cfdtrader.analysis.experiment_log import ExperimentConfig, run_sha256
     from cfdtrader.backtest.engine import canonical_text
+    from cfdtrader.features.store import DESIGN_LAG_BY_FEATURE
     from cfdtrader.models.baseline import (
         BASELINE_FEATURES, HYPERPARAMETERS, SEED, SplitAssignment, design_frame,
         fit_baseline, probabilities,
@@ -342,7 +347,9 @@ CHILD: Final[str] = textwrap.dedent(
     labels = pl.DataFrame(
         {"session": days[1:], "ret_long": [0.01 * (i % 5 - 2) for i in range(1, rows)]}
     )
-    frame = design_frame(pl.DataFrame(data), labels=labels)
+    frame = design_frame(
+        pl.DataFrame(data), labels=labels, availability=DESIGN_LAG_BY_FEATURE
+    )
     splits = (SplitAssignment(index=0, train=tuple(range(0, 160)), test=tuple(range(160, 200))),)
     model = fit_baseline(frame, splits=splits)
     config = ExperimentConfig(
@@ -460,22 +467,30 @@ def test_design_frame_shifts_one_diary_session_and_counts_what_it_loses() -> Non
     """El corrimiento es el de A2 y lo que no tiene sesion anterior se **cuenta**."""
     features = _features_frame(rows=6)
     labels = _labels_frame(features)
-    complete = design_frame(features, labels=labels)
+    complete = design_frame(features, labels=labels, availability=AVAILABILITY)
     assert complete.design_lag_sessions == DESIGN_LAG_SESSIONS == 1
     assert complete.n_sessions == 5
     assert complete.n_shifted_rows == 0
     assert complete.sessions == tuple(cast("list[object]", labels["session"].to_list()))
 
-    partial = design_frame(features.slice(0, 4), labels=labels)
+    partial = design_frame(features.slice(0, 4), labels=labels, availability=AVAILABILITY)
     assert partial.n_sessions == 3
     assert partial.n_shifted_rows == 2
 
     with pytest.raises(UnknownFeatureError):
-        design_frame(features.select("session", *BASELINE_FEATURES[:3]), labels=labels)
+        design_frame(
+            features.select("session", *BASELINE_FEATURES[:3]),
+            labels=labels,
+            availability=AVAILABILITY,
+        )
     with pytest.raises(InvalidDesignFrameError):
-        design_frame(cast("pl.DataFrame", "no es un frame"), labels=labels)
+        design_frame(
+            cast("pl.DataFrame", "no es un frame"), labels=labels, availability=AVAILABILITY
+        )
     with pytest.raises(InvalidDesignFrameError):
-        design_frame(features, labels=cast("pl.DataFrame", "no es un frame"))
+        design_frame(
+            features, labels=cast("pl.DataFrame", "no es un frame"), availability=AVAILABILITY
+        )
 
 
 def test_fit_rejects_frames_and_splits_it_cannot_use() -> None:
@@ -516,7 +531,7 @@ def test_probabilities_are_none_outside_every_test() -> None:
 def test_a_design_frame_carries_the_session_the_features_came_from() -> None:
     """La sesion de origen de cada fila de diseno viaja en el frame (auditoria de A2)."""
     features = _features_frame(rows=6)
-    frame = design_frame(features, labels=_labels_frame(features))
+    frame = design_frame(features, labels=_labels_frame(features), availability=AVAILABILITY)
     origin = frame.frame[baseline.DESIGN_SESSION_COLUMN].to_list()
     assert origin == cast("list[object]", features["session"].to_list())[:-1]
 

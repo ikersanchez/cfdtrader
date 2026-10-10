@@ -43,6 +43,7 @@ from cfdtrader.analysis.experiment_log import run_sha256
 from cfdtrader.backtest.engine import canonical_text
 from cfdtrader.backtest.metrics import LOG_LOSS_EPSILON
 from cfdtrader.data.store import Store
+from cfdtrader.features import store as feature_store
 from cfdtrader.models import baseline, calibration
 from cfdtrader.models.baseline import (
     BASELINE_FEATURES,
@@ -733,8 +734,16 @@ def test_a10_a_calibration_that_cannot_help_is_published_with_its_sign() -> None
 
 
 @needs_store
-def test_a10_the_report_runs_to_the_end_and_publishes_the_negative_delta(tmp_path: Path) -> None:
-    """A10: la CLI sale ``0`` y el informe real publica un ``delta`` negativo **con su signo**."""
+def test_a10_the_report_runs_to_the_end_and_publishes_the_delta_with_its_sign(
+    tmp_path: Path,
+) -> None:
+    """A10: la CLI sale ``0`` y el informe real publica el ``delta`` **con su signo**.
+
+    #147 re-alineo el Asia del diseno, y con el modelo cambio **la medida**: el delta del Brier
+    (``before - after``) pasa de negativo a positivo —antes ``-``, hoy ``+0.0004109``
+    (0.2559734 → 0.2555626 sobre las 500 sesiones de *test*)—, asi que lo que se fija aqui es la
+    **regla de signo** y el signo **medido**, nunca un numero copiado de otro artefacto.
+    """
     reports = tmp_path / "reports"
     code = main(
         [
@@ -760,8 +769,8 @@ def test_a10_the_report_runs_to_the_end_and_publishes_the_negative_delta(tmp_pat
     assert delta["brier_score"] == (
         float(cast("float", before["brier_score"])) - float(cast("float", after["brier_score"]))
     )
-    assert delta["improves"] is False
-    assert float(cast("float", delta["brier_score"])) < 0.0
+    assert delta["improves"] is True
+    assert float(cast("float", delta["brier_score"])) > 0.0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -973,7 +982,9 @@ def _synthetic_design(rows: int = 400) -> baseline.DesignFrame:
     labels = pl.DataFrame(
         {"session": days[1:], "ret_long": [0.01 * (index % 3 - 1) for index in range(1, rows)]}
     )
-    return design_frame(pl.DataFrame(data), labels=labels)
+    return design_frame(
+        pl.DataFrame(data), labels=labels, availability=feature_store.DESIGN_LAG_BY_FEATURE
+    )
 
 
 def _replaced(frame: baseline.DesignFrame, mutated: pl.DataFrame) -> baseline.DesignFrame:
