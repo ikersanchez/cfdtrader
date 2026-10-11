@@ -438,8 +438,8 @@ FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         f"media de true_range de las {ATR_WINDOW} sesiones anteriores / C_{{t-1}}",
         ATR_WINDOW,
         "raw.market_daily",
-        "cierre de la sesion t",
-        1,
+        "cierre de la sesion t-1",
+        0,
     ),
     CatalogEntry(
         "parkinson_rv",
@@ -471,7 +471,7 @@ FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         1,
         "raw.market_daily",
         "cierre de la sesion t-1",
-        1,
+        0,
     ),
     CatalogEntry(
         "har_lag4",
@@ -479,7 +479,7 @@ FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         HAR_LAG_WEEKLY,
         "raw.market_daily",
         "cierre de la sesion t-1",
-        1,
+        0,
     ),
     CatalogEntry(
         "har_lag17",
@@ -487,7 +487,7 @@ FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         HAR_LAG_MONTHLY,
         "raw.market_daily",
         "cierre de la sesion t-1",
-        1,
+        0,
     ),
     CatalogEntry(
         "har_forecast",
@@ -503,7 +503,7 @@ FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         1,
         "raw.market_daily",
         "cierre de la sesion t-1",
-        1,
+        0,
     ),
     CatalogEntry(
         "vix_zscore",
@@ -520,7 +520,7 @@ FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         VIX_MIN_SESSIONS,
         "raw.market_daily",
         "cierre de la sesion t-1",
-        1,
+        0,
     ),
 )
 
@@ -605,7 +605,7 @@ TECHNICAL_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         ATR_WINDOW,
         "raw.market_daily",
         "cierre de la sesion t-1",
-        1,
+        0,
     ),
     CatalogEntry(
         "dist_sma_20",
@@ -647,7 +647,7 @@ TECHNICAL_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         TECHNICAL_MIN_SESSIONS,
         "raw.market_daily",
         "cierre de la sesion t-1",
-        1,
+        0,
     ),
     CatalogEntry(
         "dist_sma_20_z",
@@ -1029,7 +1029,7 @@ REGIME_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         REGIME_MIN_SESSIONS,
         "raw.market_daily",
         "cierre de la sesion t-1",
-        1,
+        0,
     ),
     CatalogEntry(
         "garch_forecast",
@@ -1038,7 +1038,7 @@ REGIME_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         GARCH_MIN_TRAIN,
         "raw.market_daily",
         "cierre de la sesion t-1",
-        1,
+        0,
     ),
     CatalogEntry(
         "garch_forecast_z",
@@ -1063,7 +1063,7 @@ REGIME_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         None,
         "raw.market_daily",
         "de antemano",
-        1,
+        0,
     ),
     CatalogEntry(
         "sessions_to_opex",
@@ -1264,29 +1264,41 @@ def _design_lag_by_feature() -> dict[str, int]:
     return lags
 
 
-#: **Disponibilidad declarada** de las 57 columnas (#147, ampliada en #150): sesiones
-#: que la fila de diseno de `t` retrocede para leer cada una. Es la **unica**
-#: declaracion: la consume :func:`cfdtrader.models.baseline.design_frame` (via
-#: ``availability``) y el camino diario, de modo que no hay dos reglas.
+#: **Disponibilidad declarada** de las 57 columnas (#147, ampliada en #150 y en la
+#: auditoria de disponibilidad): sesiones que la fila de diseno de `t` retrocede para
+#: leer cada una. Es la **unica** declaracion: la consume
+#: :func:`cfdtrader.models.baseline.design_frame` (via ``availability``) y el camino
+#: diario, de modo que no hay dos reglas.
 #:
-#: Declaran `0` —el dato de la **propia** sesion `t`, ya publicado en el
-#: instantaneo de las 08:45 ET— las ocho columnas cuyo input ya es computable en ese
-#: instante:
+#: Declaran `0` —el dato de la **propia** sesion `t`, ya publicado en el instantaneo
+#: de las 08:45 ET— las columnas cuyo input ya es computable en ese instante:
 #:
-#: - las cuatro cuyo mercado cierra **antes** de esa hora: el overnight asiatico
-#:   (`^N225` a las 06:00 UTC y `^HSI` a las 08:00 UTC, #147), el cierre europeo previo
-#:   y el dolar (los dos a las 11:30/17:00 ET del dia **anterior**, #150) y la
-#:   dispersion sectorial (16:00 ET del anterior, #150);
-#: - las cuatro de las familias ancladas al S&P cuya fila `t` se calcula **solo** con
-#:   sesiones `<= t-1` (#153): `har_forecast` y `vix_zscore` (volatilidad),
-#:   `garch_forecast_z` e `is_es_roll_session` (regimen). No necesitan la barra del
-#:   ancla de `t`: el primer par ajusta/proyecta con el cierre de `t-1` y el segundo
-#:   lee el calendario.
+#: - las de **mercado ajeno** cuyo cierre es **antes** de esa hora: el overnight
+#:   asiatico (`^N225` a las 06:00 UTC y `^HSI` a las 08:00 UTC, #147), el cierre
+#:   europeo previo y el dolar (los dos a las 11:30/17:00 ET del dia **anterior**,
+#:   #150) y la dispersion sectorial (16:00 ET del anterior, #150);
+#: - las de las familias **ancladas al S&P** cuya fila `t` se calcula **solo** con
+#:   sesiones `<= t-1` (#153 mas la auditoria de disponibilidad): volatilidad
+#:   (`har_forecast`, `har_lag1`, `har_lag4`, `har_lag17`, `vix_zscore`, `vix_level`,
+#:   `vix_percentile`, `atr_norm`), tecnica (`atr_norm_z`) y regimen
+#:   (`garch_forecast_z`, `garch_forecast`, `rv_percentile`, `is_es_roll_session`,
+#:   `day_of_week`). No necesitan la barra del ancla de `t`: las ventanas rodantes ya
+#:   estan desplazadas a `t-1` y el calendario no depende de ninguna barra.
 #:
-#: El resto declara `1`: su fila `t` necesita la barra del ancla de `t`, o una
-#: publicacion posterior al instantaneo (la auditoria razonada de las 10 features de
-#: #24 esta en #150). `dist_sma_20_z` y `ust_10y_chg_5` son de ese grupo: su desfase
-#: es **forzado**, no evitable.
+#: El resto declara `1`, y ninguno es evitable hoy:
+#:
+#: - **forzado por el reloj del ancla**: su fila `t` necesita la barra de `t` (cierre
+#:   a las 16:00 ET), asi que leerla en el instantaneo seria *look-ahead*
+#:   (`true_range`, `parkinson_rv`, `ret_log`, `ret_sq`, `ret_1/5/21`, `dist_sma_20`,
+#:   `dist_sma_20_z`, `rsi_14`, `range_pos_20`, `vol_break_20`, `efficiency_ratio_20`);
+#: - **forzado por el corte *point-in-time* de su familia**: la macro se define al
+#:   `as_of` de la fila (16:00 ET), de modo que una publicacion posterior al
+#:   instantaneo sigue entrando en la sesion (`ust_10y_chg_5` y el resto de macro);
+#: - **conservador, a la espera de su lector pendiente**: las **commodities/FX** y las
+#:   columnas de contexto que no son de las cuatro ya publicadas
+#:   (`corr_*_60`, `beta_vix_60`, `sector_count`, `sector_dispersion_1_z`) se calculan
+#:   con cierres anteriores al instantaneo, pero el camino pendiente no tiene todavia
+#:   su formula; su auditoria es una tarea aparte y hasta entonces conservan el `1`.
 DESIGN_LAG_BY_FEATURE: Final[dict[str, int]] = _design_lag_by_feature()
 
 

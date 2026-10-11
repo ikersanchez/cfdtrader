@@ -31,6 +31,7 @@ import pytest
 from cfdtrader.analysis import feature_frame as ff
 from cfdtrader.data.store import Store
 from cfdtrader.delivery import run_daily
+from cfdtrader.features import context as context_features
 from cfdtrader.features import store as feature_store
 from cfdtrader.models.baseline import BASELINE_FEATURES
 
@@ -48,6 +49,97 @@ MOVED_COLUMNS: Final[tuple[str, ...]] = (
 #: Las dos cuyo desfase es **forzado**: la barra del ancla de `t`, o el `as_of` de la familia macro.
 FORCED_COLUMNS: Final[tuple[str, ...]] = ("dist_sma_20_z", "ust_10y_chg_5")
 
+#: Las columnas que la **auditoria de disponibilidad** (punto 1) anadio despues de #153: su fila
+#: `t` solo usa sesiones `<= t-1` —o el calendario—, asi que se sirven desde la fila pendiente con
+#: la misma regla que las cuatro de #153. No estan en `BASELINE_FEATURES`: el catalogo las declara
+#: para que, si algun dia se promueven al modelo, no haya *train/serve skew*.
+AUDITED_COLUMNS: Final[tuple[str, ...]] = (
+    "har_lag1",
+    "har_lag4",
+    "har_lag17",
+    "vix_level",
+    "vix_percentile",
+    "atr_norm",
+    "atr_norm_z",
+    "garch_forecast",
+    "rv_percentile",
+    "day_of_week",
+)
+
+#: El **motivo** de cada columna movida: su fila `t` se calcula con sesiones `<= t-1`, o es una
+#: marca del calendario. Es la auditoria leida de la **formula** (`volatility.py`, `technical.py`,
+#: `regime.py`), no de la prosa del `req_as_of` (que en `atr_norm` decia `t` y es `t-1`).
+AUDIT_REASONS: Final[dict[str, str]] = {
+    "har_lag1": "parkinson_rv de t-1: la ventana ya esta desplazada una sesion",
+    "har_lag4": "media de parkinson_rv de t-2 ... t-5: toda la ventana es < t",
+    "har_lag17": "media de parkinson_rv de t-6 ... t-22: toda la ventana es < t",
+    "vix_level": "el cierre del VIX de t-1 (shift(1)): publicado antes del snapshot",
+    "vix_percentile": "percentil del nivel de VIX de t-1 sobre su historia <= t-1",
+    "atr_norm": "true_range de t-20 ... t-1 normalizado por C_{t-1}: la sesion t no entra",
+    "atr_norm_z": "normalizacion expandida de atr_norm, que ya es <= t-1",
+    "garch_forecast": "omega + alpha*eps^2_T + beta*sigma^2_T con T = t-1",
+    "rv_percentile": "percentil de la volatilidad realizada de t-1 sobre la historia < t-1",
+    "day_of_week": "isoweekday() de la sesion: calendario, no depende de ninguna barra",
+}
+
+#: Las columnas que **no** pueden servirse en el instantaneo porque su fila `t` necesita la barra
+#: del ancla de `t` (cierre a las 16:00 ET): leerlas antes seria *look-ahead*. Su desfase es
+#: **forzado** por el reloj, no evitable.
+FORCED_BY_ANCHOR_CLOCK: Final[tuple[str, ...]] = (
+    "true_range",
+    "parkinson_rv",
+    "ret_log",
+    "ret_sq",
+    "ret_1",
+    "ret_5",
+    "ret_21",
+    "dist_sma_20",
+    "dist_sma_20_z",
+    "rsi_14",
+    "range_pos_20",
+    "vol_break_20",
+    "efficiency_ratio_20",
+)
+
+#: Las de la familia **macro**: su corte *point-in-time* es el `as_of` de la fila (16:00 ET): una
+#: publicacion posterior al instantaneo sigue entrando en la sesion; adelantarlas seria
+#: *look-ahead* (la auditoria razonada de `ust_10y_chg_5` esta en #150).
+FORCED_BY_MACRO_CUT: Final[tuple[str, ...]] = (
+    "fed_funds",
+    "fed_funds_chg_5",
+    "ust_10y",
+    "ust_10y_chg_5",
+    "ust_2y",
+    "ust_2y_chg_5",
+    "pendiente_2s10s",
+    "pendiente_2s10s_chg_5",
+    "cpi_yoy",
+    "pce_yoy",
+    "dxy",
+    "ust_10y_z",
+    "dxy_z",
+)
+
+#: Las que **podrian** declararse `0` (su input cierra antes del snapshot) pero **aun no tienen
+#: lector pendiente**: las commodities/FX y las de contexto que no son de las cuatro ya publicadas.
+#: Conservan el `1` conservador y su auditoria es una tarea aparte. `sessions_to_opex` es de
+#: calendario pero arrastra nulos de cola (#79), asi que tambien espera.
+DEFERRED_READER: Final[tuple[str, ...]] = (
+    "corr_dax_60",
+    "corr_ftse_60",
+    "corr_stoxx_60",
+    "corr_nikkei_60",
+    "beta_vix_60",
+    "sector_count",
+    "sector_dispersion_1_z",
+    "sessions_to_opex",
+    "oil_ret_1",
+    "oil_ret_5",
+    "oil_ret_1_z",
+    "gold_ret_1",
+    "eurusd_ret_1",
+)
+
 needs_store = pytest.mark.skipif(
     not (REAL_DATA / "derived" / "labels").exists(),
     reason="el almacen real no esta en el arbol: C2/C3/C6 se miden sobre el (en solo lectura)",
@@ -62,7 +154,10 @@ def test_c1_the_moved_columns_are_declared_readable_at_the_snapshot() -> None:
     declared = feature_store.DESIGN_LAG_BY_FEATURE
     assert all(declared[name] == 0 for name in MOVED_COLUMNS)
     assert set(MOVED_COLUMNS) <= set(ff.PENDING_FAMILY_COLUMNS)
-    assert set(ff.PENDING_FAMILY_COLUMNS) == set(MOVED_COLUMNS)
+    # #153 + la auditoria de disponibilidad del punto 1: el lector pendiente es **exactamente**
+    # las cuatro de #153 mas las auditadas (la union completa la cierra
+    # `test_issue_150::test_c2_...`).
+    assert set(ff.PENDING_FAMILY_COLUMNS) == set(MOVED_COLUMNS) | set(AUDITED_COLUMNS)
 
 
 def test_c1_the_forced_lag_columns_are_untouched() -> None:
@@ -73,12 +168,45 @@ def test_c1_the_forced_lag_columns_are_untouched() -> None:
 
 
 def test_c1_the_pending_families_are_the_snap_anchored_ones() -> None:
-    """Cada columna pendiente declara de que familia sale, y las dos son de volatilidad/regimen."""
+    """Cada columna pendiente declara de que familia sale, y son las ancladas al S&P (C1)."""
     assert set(ff.PENDING_FAMILY_COLUMNS.values()) == {
         feature_store.VOLATILITY_FEATURE_SET,
+        feature_store.TECHNICAL_FEATURE_SET,
         feature_store.REGIME_FEATURE_SET,
     }
-    assert set(ff.PENDING_FAMILY_COLUMNS) <= set(BASELINE_FEATURES)
+    # Las cuatro de #153 **si** son del contrato de #24; las auditadas despues, no.
+    assert set(MOVED_COLUMNS) <= set(BASELINE_FEATURES)
+    assert set(AUDITED_COLUMNS).isdisjoint(BASELINE_FEATURES)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# La auditoria de disponibilidad: las 57 columnas, en tres grupos declarados
+# ─────────────────────────────────────────────────────────────────────────────
+def test_the_audit_partitions_every_catalog_column() -> None:
+    """Cada una de las 57 columnas cae en **exactamente** un grupo declarado.
+
+    Los tres grupos son: las legibles en el instantaneo (`design_lag = 0`), las forzadas por el
+    reloj del ancla o por el corte macro, y las conservadoras a la espera de su lector. Si una
+    columna nueva del catalogo no cae en ninguno, esta prueba falla: eso es la auditoria.
+    """
+    declared = feature_store.DESIGN_LAG_BY_FEATURE
+    readable = {name for name, lag in declared.items() if lag == 0}
+    forced = set(FORCED_BY_ANCHOR_CLOCK) | set(FORCED_BY_MACRO_CUT)
+    deferred = set(DEFERRED_READER)
+    assert readable == set(context_features.PENDING_COLUMNS) | set(ff.PENDING_FAMILY_COLUMNS)
+    assert not (forced & deferred)
+    assert not (readable & forced)
+    assert not (readable & deferred)
+    assert readable | forced | deferred == set(declared)
+    assert all(declared[name] == 1 for name in forced | deferred)
+
+
+def test_the_audited_columns_have_a_declared_reason() -> None:
+    """Cada columna movida a `0` por la auditoria declara su motivo, y su lectura coincide."""
+    assert set(AUDIT_REASONS) == set(AUDITED_COLUMNS)
+    for name, reason in AUDIT_REASONS.items():
+        assert len(reason) > 30, name
+        assert feature_store.DESIGN_LAG_BY_FEATURE[name] == 0, name
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -245,9 +373,10 @@ def test_c2_the_pending_value_is_the_matrix_row_of_the_same_session(
     matrix = ff.build_feature_matrix(store)
     session = matrix.last_session
     _hide_anchor_bar(monkeypatch, session)
-    served = ff.pending_session_values(store, session=session, columns=list(MOVED_COLUMNS))
+    columns = (*MOVED_COLUMNS, *AUDITED_COLUMNS)
+    served = ff.pending_session_values(store, session=session, columns=list(columns))
     row = matrix.frame.filter(pl.col("session") == session).row(0, named=True)
-    for name in MOVED_COLUMNS:
+    for name in columns:
         assert float(cast("float", served[name])) == float(cast("float", row[name])), name
 
 
@@ -314,7 +443,7 @@ CHILD: Final[str] = (
 
 
 def _child_pending(hashseed: str) -> dict[str, object]:
-    """Las cuatro columnas de la fila pendiente en un proceso fresco con esa semilla de `hash`."""
+    """Las columnas de la fila pendiente en un proceso fresco con esa semilla de `hash`."""
     completed = subprocess.run(  # noqa: S603
         [sys.executable, "-c", CHILD],
         capture_output=True,
@@ -332,5 +461,5 @@ def test_c6_two_processes_agree_on_the_pending_family_read() -> None:
     first = _child_pending("0")
     second = _child_pending("1")
     assert first == second
-    assert set(first) == set(MOVED_COLUMNS)
+    assert set(first) == set(MOVED_COLUMNS) | set(AUDITED_COLUMNS)
     assert all(value != "None" for value in first.values())

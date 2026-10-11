@@ -323,6 +323,7 @@ def test_c2_every_declared_zero_has_a_pending_reader_and_only_context_columns_do
     assert set(formulas) == set(context_features.PENDING_COLUMNS)
     assert set(ff.PENDING_FAMILY_COLUMNS.values()) <= {
         feature_store.VOLATILITY_FEATURE_SET,
+        feature_store.TECHNICAL_FEATURE_SET,
         feature_store.REGIME_FEATURE_SET,
     }
 

@@ -299,15 +299,27 @@ def missing_context_series(store: Store) -> tuple[str, ...]:
     return tuple(name for name in feature_store.CONTEXT_SERIES if name not in present)
 
 
-#: **Columnas pendientes** de las familias ancladas al S&P (#153): su fila `t` se calcula **solo**
-#: con sesiones `<= t-1`, asi que su valor ya existe en el instantaneo de decision (08:45 ET) aunque
-#: el ancla no haya cerrado. Cada entrada dice de que **familia** sale la columna; el cruce con
-#: `DESIGN_LAG_BY_FEATURE` (`design_lag = 0`) lo fija un test, igual que #147/#150 hacen con las de
+#: **Columnas pendientes** de las familias ancladas al S&P (#153, ampliada en la
+#: auditoria de disponibilidad): su fila `t` se calcula **solo** con sesiones `<= t-1`
+#: —o con el calendario—, asi que su valor ya existe en el instantaneo de decision
+#: (08:45 ET) aunque el ancla no haya cerrado. Cada entrada dice de que **familia**
+#: sale la columna; el cruce con `DESIGN_LAG_BY_FEATURE` (`design_lag = 0`) lo fija un
+#: test, igual que #147/#150 hacen con las de
 #: :data:`cfdtrader.features.context.PENDING_COLUMNS`.
 PENDING_FAMILY_COLUMNS: Final[dict[str, str]] = {
     "har_forecast": feature_store.VOLATILITY_FEATURE_SET,
+    "har_lag1": feature_store.VOLATILITY_FEATURE_SET,
+    "har_lag4": feature_store.VOLATILITY_FEATURE_SET,
+    "har_lag17": feature_store.VOLATILITY_FEATURE_SET,
     "vix_zscore": feature_store.VOLATILITY_FEATURE_SET,
+    "vix_level": feature_store.VOLATILITY_FEATURE_SET,
+    "vix_percentile": feature_store.VOLATILITY_FEATURE_SET,
+    "atr_norm": feature_store.VOLATILITY_FEATURE_SET,
+    "atr_norm_z": feature_store.TECHNICAL_FEATURE_SET,
     "garch_forecast_z": feature_store.REGIME_FEATURE_SET,
+    "garch_forecast": feature_store.REGIME_FEATURE_SET,
+    "rv_percentile": feature_store.REGIME_FEATURE_SET,
+    "day_of_week": feature_store.REGIME_FEATURE_SET,
     "is_es_roll_session": feature_store.REGIME_FEATURE_SET,
 }
 
@@ -355,6 +367,7 @@ def _pending_family_values(
 
     Se arma el frame del ancla con la fila pendiente al final y se corren las funciones de la
     familia (:func:`cfdtrader.features.volatility.add_features`,
+    :func:`cfdtrader.features.technical.technical_matrix`,
     :func:`cfdtrader.features.regime.regime_matrix`): **no** hay una segunda copia de las formulas.
     La fila pendiente no mueve las sesiones cerradas —todas las formulas son *point-in-time*—, de
     modo que el valor de `t` es el que publicaria la matriz completa en su fila `t`.
@@ -373,6 +386,8 @@ def _pending_family_values(
             how="vertical",
         )
         frames[feature_store.VOLATILITY_FEATURE_SET] = _volatility_frame(bars, vix_bars)
+    if feature_store.TECHNICAL_FEATURE_SET in families:
+        frames[feature_store.TECHNICAL_FEATURE_SET] = technical_matrix(bars, spec=technical_spec())
     if feature_store.REGIME_FEATURE_SET in families:
         frames[feature_store.REGIME_FEATURE_SET] = regime_matrix(bars, spec=regime_spec())
     return {
