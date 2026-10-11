@@ -175,6 +175,7 @@ from cfdtrader.decision.overlay import (
     disabled_overlay,
     overlay_from_extraction,
 )
+from cfdtrader.decision.premarket import PremarketDecision, PremarketError
 from cfdtrader.delivery.staleness import (
     GuardVerdict,
     SessionGuard,
@@ -224,6 +225,10 @@ SCENARIO_LABEL: Final[str] = "S1"
 #: (#148) la recomendacion **publicada** se emite sin overlay; su efecto se conserva en esa tabla
 #: como la variante «con overlay» (#149).
 NEWS_OVERLAY_AGENT: Final[str] = "news"
+
+#: La regla de §12 que consume el gap de pre-mercado del ES **como dato declarado** (§19.23, #148):
+#: solo degrada la sesion a NOTHING, nunca crea ni invierte una direccion.
+PREMARKET_RULE: Final[str] = "21"
 
 #: Valla de honestidad (#109): viaja en **las cuatro** salidas, sin excepcion.
 HONESTY_FENCE: Final[tuple[str, ...]] = (
@@ -792,6 +797,7 @@ def render(
     if output is not None:
         lines.extend(_recommendation_lines(output))
         lines.extend(_blocker_lines(output))
+        lines.extend(_premarket_rule_lines(output))
     if calendar_events is not None:
         lines.extend(_calendar_lines(calendar_events))
     lines.extend(_publication_lines(publications))
@@ -831,6 +837,20 @@ def _blocker_lines(output: GateOutput) -> list[str]:
     o por modo observacion (regla 15) se presentaria igual que un ``NOTHING`` sin motivo.
     """
     return [f"bloqueo: {entry['rule']}:{entry['code']}" for entry in output.blockers]
+
+
+def _premarket_rule_lines(output: GateOutput) -> list[str]:
+    """La regla 21 (§19.23) **siempre** en el informe: si bloqueo y, si no, por que no.
+
+    Un bloqueo ya sale en `bloqueo: 21:...`, pero la regla tambien tiene que **declararse** cuando
+    no actua (dato `unavailable`, ausencia del dato, otra sesion o movimiento por debajo del
+    umbral): si no, un pre-mercado en contra que no bloquea seria indistinguible de una regla que
+    nadie evaluo.
+    """
+    entry = next((item for item in output.rules if item["rule"] == PREMARKET_RULE), None)
+    if entry is None:
+        return []
+    return [f"regla_21: {entry['outcome']} — {entry['detail']}"]
 
 
 def _calendar_lines(signal: EventCalendarSignal) -> list[str]:
@@ -1571,6 +1591,7 @@ def _deliver(
         # feature. El camino diario **no** descarga: lee las barras que capturo el CLI de
         # `premarket_gap` a las 08:45 (`--premarket-bars`). Sin el fichero, la seccion no aparece.
         premarket: Mapping[str, object] | None = None
+        premarket_datum: PremarketDecision | None = None
         if premarket_bars is not None:
             with observer.stage("premarket"):
                 try:
@@ -1582,6 +1603,16 @@ def _deliver(
                     ).payload()
                 except premarket_gap.PremarketGapError as error:
                     print(f"no se puede medir el gap de pre-mercado: {error}", file=sys.stderr)
+        if premarket is not None:
+            # La regla 21 (§19.23) consume el gap como **dato declarado**: el gate no lo mide ni
+            # lee el disco. Un payload inadmisible se declara y la sesion sigue su curso.
+            try:
+                premarket_datum = PremarketDecision.from_payload(premarket)
+            except PremarketError as error:
+                print(
+                    f"el gap de pre-mercado no se puede declarar al gate: {error}",
+                    file=sys.stderr,
+                )
         if guard.blocks and guard.verdict is not GuardVerdict.MARKET_CLOSED:
             # Aqui solo llegan los dos "no se" de frescura. La clausura (#113, MARKET_CLOSED) **no**
             # para el camino: el gate la convierte en un `NOTHING` justificado (regla 19) que si se
@@ -1726,6 +1757,7 @@ def _deliver(
                 monthly_pnl_pct=monthly_pnl_pct,
                 observation_sessions_remaining=guard.observation_sessions_remaining,
                 overlay=declared_overlay,
+                premarket=premarket_datum,
             )
 
         with observer.stage("gate"):

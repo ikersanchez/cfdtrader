@@ -2,7 +2,7 @@
 
 Este modulo es el **unico** sitio del proyecto donde una probabilidad calibrada se convierte
 en una decision operativa: ``LONG``, ``SHORT`` o ``NOTHING``, con su stop, su objetivo, su
-nocional, su tier y el detalle de **cada una de las 19 reglas duras** de ``plan.md`` §12 que
+nocional, su tier y el detalle de **cada una de las 21 reglas duras** de ``plan.md`` §12 que
 le toca aplicar aqui (las 18 originales y la regla 19 de ``tech_stack.md`` §8.4, el dia de
 mercado cerrado como ``NOTHING`` justificado, #113).
 
@@ -81,7 +81,7 @@ gate devuelve ``no_recommendation_undecided`` y ``undecided[]`` nombra cada para
 falta **con su issue**. Las cifras del enunciado (1 %, 2 %, 3c, 0,58, el tamano de ``R``) no
 estan cableadas en ninguna parte: son valores que el llamante declara.
 
-Las 19 reglas de §12 y quien las aplica
+Las 21 reglas de §12 y quien las aplica
 ---------------------------------------
 
 ===========  ==================================================  ==============================
@@ -106,6 +106,8 @@ Regla        Enunciado                                           Quien la aplica
 17           Dias de FOMC ⇒ ``NOTHING``                          gate: input; ingesta #34
 18           Medias sesiones ⇒ ``NOTHING``                       gate: ``is_half_day``; flujo #40
 19           Dia de mercado cerrado ⇒ ``NOTHING``                gate: ``session()``; flujo #113
+20           El overlay del NewsAgent veta la sesion            gate: ``overlay``; veto de §4.9
+21           Contradiccion con el pre-mercado del ES            gate: dato declarado de #141; #148
 ===========  ==================================================  ==============================
 
 Precedencia declarada de los estados: primero la **frescura** y la **calidad** de los datos
@@ -139,6 +141,8 @@ Que **no** hace este modulo (fronteras declaradas, con su issue)
 - **No** es #83: no acumula el P&L diario, semanal ni mensual; lo recibe ya acumulado (la
   contabilidad vive en ``analysis/portfolio_rules``, #83).
 - **No** es #84: no coloca la orden *bracket* en el broker.
+- **No** es #141/#148: no mide el gap de pre-mercado del ES; lo recibe **ya calculado** como dato
+  declarado (``PremarketDecision``) y solo lo compara en la regla 21 (§19.23).
 - **No** decide los parametros de politica: son del propietario (``PARAMETER_ISSUES``), con
   ``None`` = sin decidir.
 - **No** deriva el stop de la volatilidad: recibe ``stop_pct`` ya calculado.
@@ -163,6 +167,7 @@ from cfdtrader.backtest.costs import CostBreakdown, MeasureState
 from cfdtrader.backtest.engine import Decision, Direction, canonical_text
 from cfdtrader.data.calendar import MarketCalendar
 from cfdtrader.decision.overlay import OverlayDecision, OverlayState, apply_overlay, vetoes
+from cfdtrader.decision.premarket import CONFLICT_THRESHOLD_PCT, PremarketDecision
 
 __all__ = [
     "BASIS_DECLARED",
@@ -252,11 +257,12 @@ CODE_TARGET_BELOW_COST: Final[str] = "objetivo_bajo_el_coste"
 CODE_EV_NET_NOT_COMPUTABLE: Final[str] = "ev_neto_no_calculable"
 CODE_EV_BELOW_THRESHOLD: Final[str] = "ev_bajo_el_umbral"
 CODE_TIER_NOT_AUTHORIZED: Final[str] = "tier_no_autorizado"
+CODE_PREMARKET_CONTRADICTION: Final[str] = "contradiccion_premercado"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Las 19 reglas de §12 (una por una, con quien las aplica)
+# Las 21 reglas de §12 (una por una, con quien las aplica)
 # ─────────────────────────────────────────────────────────────────────────────
-#: Las 19 reglas duras de ``plan.md`` §12. ``owner`` dice quien las aplica en esta tarea
+#: Las 21 reglas duras de ``plan.md`` §12. ``owner`` dice quien las aplica en esta tarea
 #: (``gate`` o la issue que las completa, ``issue``). El gate **no** las salta en silencio:
 #: publica el resultado de cada una en ``GateOutput.rules``.
 RULES: Final[tuple[dict[str, str], ...]] = (
@@ -444,6 +450,18 @@ RULES: Final[tuple[dict[str, str], ...]] = (
             "probabilidad calibrada entra por `overlay.adjustment_pct`, no por esta regla"
         ),
     },
+    {
+        "rule": "21",
+        "title": "Contradiccion con el pre-mercado del ES: NOTHING",
+        "owner": "gate",
+        "issue": "#148",
+        "note": (
+            "dato **declarado** de #141 (no una feature): si el ES ya se movio al menos "
+            "`CONFLICT_THRESHOLD_PCT` (0,25 %, §19.23) **en contra** de la direccion del modelo, "
+            "la sesion pasa a NOTHING. Solo degrada: nunca crea ni invierte una direccion. Un "
+            "`unavailable`, un dato de otra sesion o la ausencia del dato **no** bloquean"
+        ),
+    },
 )
 
 #: Que **no** hace este modulo, legible por maquina (A8, A11). Cada frontera con su issue.
@@ -544,6 +562,16 @@ LIMITATIONS: Final[tuple[dict[str, str], ...]] = (
             "inadmisible es GateInputError"
         ),
     },
+    {
+        "id": "regla_21_premercado",
+        "issue": "#149",
+        "statement": (
+            "la regla 21 compara contra el pre-mercado **del dia** que mide #141: el backtest no "
+            "tiene serie historica de pre-mercado, asi que la regla no se aplica alli y la Fase 2 "
+            "sigue sin poder medirla (#149). El dato entra **ya calculado** y sin el la regla no "
+            "actua, sin inventar un 0"
+        ),
+    },
 )
 
 #: Issues con las que este modulo comparte frontera.
@@ -558,6 +586,7 @@ FOLLOW_UPS: Final[tuple[str, ...]] = (
     "#62",
     "#83",
     "#84",
+    "#149",
 )
 
 
@@ -871,7 +900,7 @@ class GateOutput(BaseModel):
         default=(), description="parametros sin decidir con su issue (#59/#60)"
     )
     rules: tuple[dict[str, str], ...] = Field(
-        default=(), description="resultado de cada una de las 20 reglas declaradas en `RULES`"
+        default=(), description="resultado de cada una de las 21 reglas declaradas en `RULES`"
     )
     gate_sha256: str = Field(description=f"{GATE_HASH_PREFIX}<64 hex>; ver GATE_HASH_FORMAT")
 
@@ -1033,10 +1062,10 @@ def _decision_reason(output: GateOutput) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Registro de las 19 reglas
+# Registro de las 21 reglas
 # ─────────────────────────────────────────────────────────────────────────────
 class _RuleLedger:
-    """El paso de cada una de las 19 reglas de §12, en el orden declarado en ``RULES``.
+    """El paso de cada una de las 21 reglas de §12, en el orden declarado en ``RULES``.
 
     Es estado **local** de una llamada: el registro nace y muere dentro de ``evaluate_gate``
     (la funcion sigue siendo pura) y el resultado se publica en ``GateOutput.rules``.
@@ -1071,7 +1100,7 @@ class _RuleLedger:
         self.mark(rule, _RULE_BLOCKED, detail)
 
     def entries(self) -> tuple[dict[str, str], ...]:
-        """Las 19 reglas, en el orden declarado (nunca en el orden de un ``set``)."""
+        """Las 21 reglas, en el orden declarado (nunca en el orden de un ``set``)."""
         return tuple(self._entries[entry["rule"]] for entry in RULES)
 
 
@@ -1133,6 +1162,7 @@ class _Context:
     is_session: bool
     closure_reason: str | None
     fomc_dates_count: int
+    premarket: PremarketDecision | None = None
     overlay: OverlayDecision | None = None
     ledger: _RuleLedger = field(default_factory=_RuleLedger)
 
@@ -1329,6 +1359,7 @@ def _context(
     monthly_pnl_pct: object,
     observation_sessions_remaining: object,
     overlay: object = None,
+    premarket: object = None,
 ) -> _Context:
     """Valida las entradas, aplica las reglas 6 y 7 y deriva lo comun (direccion, EV, calendario).
 
@@ -1361,6 +1392,13 @@ def _context(
             f"overlay: se espera la OverlayDecision de #35 (o None), no {type(overlay).__name__}"
         )
     declared_overlay: OverlayDecision | None = overlay  # ya estrechado por el isinstance de arriba
+    if premarket is not None and not isinstance(premarket, PremarketDecision):
+        raise GateInputError(
+            "premarket: se espera el dato declarado de #141 (`PremarketDecision`) o None, no "
+            f"{type(premarket).__name__}"
+        )
+    # Ya estrechado por el isinstance de arriba: el gate solo lee el dato, no lo construye.
+    declared_premarket: PremarketDecision | None = premarket
     probability = apply_overlay(
         _require_probability(prob_up_calibrated, field_name="prob_up_calibrated"), declared_overlay
     )
@@ -1450,6 +1488,7 @@ def _context(
         is_session=info.is_session,
         closure_reason=info.reason,
         fomc_dates_count=len(declared_fomc),
+        premarket=declared_premarket,
         overlay=declared_overlay,
     )
 
@@ -1482,6 +1521,59 @@ def _loss_blocker(
         return {"rule": rule, "code": code, "detail": detail}
     ledger.mark(rule, _RULE_OK, f"{label} = {_num(value)} > {_num(threshold)}: dentro del limite")
     return None
+
+
+def _premarket_blocker(context: _Context) -> dict[str, str] | None:
+    """Regla 21 (§19.23): el modelo y el pre-mercado del ES se contradicen ⇒ ``NOTHING``.
+
+    El dato es el de #141 y entra **ya calculado**; se compara **solo** ``overnight_move_pct``
+    contra el umbral del propietario. Un ``unavailable``, un dato de **otra sesion** o su ausencia
+    **no** bloquean: son ausencias declaradas, no un ``0``. La regla solo **degrada** la sesion:
+    no crea ni invierte la direccion del modelo.
+    """
+    ledger = context.ledger
+    datum = context.premarket
+    if datum is None:
+        ledger.mark("21", _RULE_OK, "sin dato de pre-mercado en esta llamada: la regla no actua")
+        return None
+    if datum.session != context.session:
+        ledger.mark(
+            "21",
+            _RULE_OK,
+            f"el dato de pre-mercado es de {datum.session.isoformat()} y la sesion evaluada es "
+            f"{context.session.isoformat()}: no se compara un dato de otra sesion",
+        )
+        return None
+    if not datum.measured:
+        ledger.mark(
+            "21",
+            _RULE_OK,
+            f"el pre-mercado esta `{datum.state.value}` ({datum.reason}): una ausencia declarada "
+            "no bloquea, y no se sustituye por un 0",
+        )
+        return None
+    move = datum.overnight_move_pct
+    if move is None:  # invariante de `PremarketDecision`: un `measured` trae su numero
+        ledger.mark(
+            "21", _RULE_OK, "el dato no trae `overnight_move_pct`: no hay nada que comparar"
+        )
+        return None
+    if not datum.conflicts_with(context.direction):
+        ledger.mark(
+            "21",
+            _RULE_OK,
+            f"overnight_move_pct = {_num(move)} % no contradice la direccion del modelo "
+            f"({context.direction.name}) con el umbral {_num(CONFLICT_THRESHOLD_PCT)} % (§19.23)",
+        )
+        return None
+    detail = (
+        f"el modelo propone {context.direction.name} y el ES ya se movio {_num(move)} % en el "
+        f"pre-mercado, en contra y por encima del umbral declarado "
+        f"{_num(CONFLICT_THRESHOLD_PCT)} % (§19.23): la regla 21 degrada la sesion a NOTHING "
+        "(solo degrada: no crea ni invierte la direccion)"
+    )
+    ledger.block("21", detail)
+    return {"rule": "21", "code": CODE_PREMARKET_CONTRADICTION, "detail": detail}
 
 
 def _blockers(context: _Context, decided: _Decided) -> tuple[dict[str, str], ...]:
@@ -1552,6 +1644,9 @@ def _blockers(context: _Context, decided: _Decided) -> tuple[dict[str, str], ...
         blockers.append({"rule": "18", "code": CODE_HALF_SESSION, "detail": detail})
     else:
         ledger.mark("18", _RULE_OK, "la sesion no es media sesion segun el calendario")
+    premarket = _premarket_blocker(context)
+    if premarket is not None:
+        blockers.append(premarket)
     return tuple(blockers)
 
 
@@ -1907,6 +2002,7 @@ def evaluate_gate(
     monthly_pnl_pct: Decimal | None = None,
     observation_sessions_remaining: int = 0,
     overlay: OverlayDecision | None = None,
+    premarket: PremarketDecision | None = None,
 ) -> GateOutput:
     """Decide ``LONG``/``SHORT``/``NOTHING`` y publica stop, objetivo, nocional, tier y reglas.
 
@@ -1922,7 +2018,7 @@ def evaluate_gate(
     3. Decisiones abiertas (#59/#60, ``GateParameters`` con ``None``) ⇒ ``undecided``.
     4. Veto del overlay (regla 20) ⇒ ``NOTHING`` justificado; el ajuste de ±10 pp ya se aplicó a la
        probabilidad al construir el contexto.
-    5. Bloqueos de sesion: reglas 1, 3, 4, 5, 15, 17 y 18.
+    5. Bloqueos de sesion: reglas 1, 3, 4, 5, 15, 17, 18 y 21 (§19.23: el pre-mercado del ES).
     6. Reglas 16, 8, 9 y 10 y, si nada bloquea, el *sizing* (regla 2).
 
     Una entrada inadmisible (un porcentaje en ``float``, un coste con ``nights > 0``, un stop de
@@ -1950,6 +2046,7 @@ def evaluate_gate(
         monthly_pnl_pct=monthly_pnl_pct,
         observation_sessions_remaining=observation_sessions_remaining,
         overlay=overlay,
+        premarket=premarket,
     )
     closed = _closure_output(context)
     if closed is not None:

@@ -54,6 +54,7 @@ from cfdtrader.analysis.pipeline_report import (
     SCENARIO_TARGET_STOP_MULTIPLE,
     scenario_parameters,
 )
+from cfdtrader.analysis.premarket_gap import ES_SERIES, snapshot_instant
 from cfdtrader.backtest.costs import (
     Side,
     SlippageParameter,
@@ -837,7 +838,7 @@ def test_main_emits_the_recommendation_state(
 JOURNAL_DATE: Final[date] = date(2026, 9, 17)
 
 
-def _daily_run(store_root: Path, runs_root: Path, journal_root: Path) -> int:
+def _daily_run(store_root: Path, runs_root: Path, journal_root: Path, *extra: str) -> int:
     """Una ejecucion completa del camino diario sobre los fixtures, con su diario propio."""
     return run_daily.main(
         [
@@ -853,6 +854,7 @@ def _daily_run(store_root: Path, runs_root: Path, journal_root: Path) -> int:
             str(store_root),
             "--runs-root",
             str(runs_root),
+            *extra,
         ]
     )
 
@@ -3325,6 +3327,76 @@ def test_the_premarket_gap_shows_null_when_it_is_unavailable() -> None:
     assert "overnight_move_pct: null" in text
     assert "gap_vs_index_pct: null" in text
     assert "basis_pct: null" in text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Regla 21 (#148, plan.md §19.23): el gap del pre-mercado entra en el gate
+# ─────────────────────────────────────────────────────────────────────────────
+#: Instante declarado del dia con el **snapshot ya pasado** (09:00 ET): el gap necesita un
+#: `--as-of` >= 08:45 ET, y `AS_OF_NEXT` es de las 08:00 ET (todavia no hay pre-mercado medido).
+AS_OF_GAP: Final[str] = "2026-09-17T13:00:00+00:00"
+
+
+def _add_es_closes(root: Path, *, close: float = 5000.0) -> None:
+    """Anade las barras diarias de `ES=F`: sin referencia, el gap de #141 es `unavailable`."""
+    anchor = _anchor()
+    Store(root).append(
+        "raw",
+        "market_daily",
+        [
+            _bar(ES_SERIES, cast("date", row["session"]), SOURCE_MARKET, _flat(close))
+            for row in anchor.iter_rows(named=True)
+        ],
+    )
+
+
+def _captured_bars(moment: str, *, move_pct: float, reference: float = 5000.0) -> str:
+    """Barras capturadas de #141: una sola barra, cinco minutos antes del snapshot."""
+    _, snapshot = snapshot_instant(datetime.fromisoformat(moment))
+    instant = (snapshot - timedelta(minutes=5)).astimezone(UTC).isoformat()
+    price = reference * (1.0 + move_pct / 100.0)
+    return json.dumps([{"instant": instant, "price": round(price, 6)}])
+
+
+def test_21_the_premarket_gap_degrades_the_session(
+    store_root: Path,
+    runs_root: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """#148: con el ES en contra y por encima del umbral, el gate bloquea el dia (regla 21)."""
+    root = tmp_path / "store_con_es"
+    shutil.copytree(store_root, root)
+    _add_es_closes(root)
+
+    # 1) Sin fichero de barras: la regla 21 no tiene dato, lo declara y la sesion sigue su curso.
+    limpio = tmp_path / "journal_limpio"
+    assert _daily_run(root, runs_root, limpio, "--as-of", AS_OF_GAP) == 0
+    sin_dato = capsys.readouterr().out
+    direction = cast("str", _journal_row(limpio)["direction"])
+    assert direction in ("long", "short")
+    assert "regla_21: pass" in sin_dato
+    assert "sin dato de pre-mercado" in sin_dato
+    assert "bloqueo: 21" not in sin_dato
+
+    # 2) Con el ES moviendose **en contra** del modelo, por encima del umbral del propietario.
+    move = 3.0 if direction == "short" else -3.0
+    bars = tmp_path / "premarket_bars.json"
+    bars.write_text(_captured_bars(AS_OF_GAP, move_pct=move), encoding="utf-8")
+    bloqueado = tmp_path / "journal_bloqueado"
+    assert (
+        _daily_run(root, runs_root, bloqueado, "--as-of", AS_OF_GAP, "--premarket-bars", str(bars))
+        == 0
+    )
+    out = capsys.readouterr().out
+    assert "premarket_es: measured" in out
+    assert "bloqueo: 21:contradiccion_premercado" in out
+    assert "regla_21: blocked" in out
+
+    row = _journal_row(bloqueado)
+    assert row["direction"] == "nothing", "solo degrada: nunca emite la direccion contraria"
+    assert row["direction"] != ("short" if direction == "long" else "long")
+    assert "contradiccion_premercado" in cast("list[str]", row["blocking_events"])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
