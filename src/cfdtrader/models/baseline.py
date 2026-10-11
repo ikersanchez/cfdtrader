@@ -1,7 +1,10 @@
 """Modelo baseline de probabilidad: logistica con elastic net sobre 10 features (#24).
 
 Responde **una** pregunta —«la sesion `t` cierra por encima de su apertura?»— para la
-direccion **larga unica**: ``P(y = 1)`` con ``y = 1{ret_long > 0}``.
+direccion **larga unica**: ``P(y = 1)`` con ``y = 1{ret_long > 0}``. La misma maquinaria
+responde la pregunta espejo para la direccion **corta** (#78) cambiando **solo** la columna de
+objetivo (:func:`design_frame(..., target_column="ret_short")`), de modo que el espejo no
+duplica ni la formula ni el ajuste.
 
 Este modulo es **puro** (A1): del frame etiquetado a las predicciones, sin almacen y sin
 capa de informe. No importa ``cfdtrader.data``, ``cfdtrader.analysis``, ``cfdtrader.features``,
@@ -56,6 +59,7 @@ __all__ = [
     "HYPERPARAMETERS",
     "MODEL_DOES_NOT_DO",
     "SEED",
+    "TARGET_COLUMN_LONG",
     "BaselineError",
     "BaselineModel",
     "DesignFrame",
@@ -84,6 +88,12 @@ DESIGN_LAG_SESSIONS: Final[int] = 1
 #: Umbral de decision declarado a priori (A11): `p >= 0,5` ⇒ largo. El umbral economico de
 #: §4.4 y el *sizing* son #27 y #60, **no** esto.
 DECISION_THRESHOLD: Final[float] = 0.5
+
+#: Columna de la etiqueta de la direccion **larga** (A3): el objetivo de #24 es
+#: ``y = 1{ret_long > 0}``. El espejo de la direccion corta (#78) usa ``ret_short`` por el
+#: **mismo** camino: :func:`design_frame` acepta la columna de objetivo y nada mas cambia, de
+#: modo que no hay dos formulas ni dos codigos de ajuste.
+TARGET_COLUMN_LONG: Final[str] = "ret_long"
 
 #: Columna de auditoria del corrimiento: la sesion de la fila que leen las columnas con el rezago
 #: de **referencia** (:data:`DESIGN_LAG_SESSIONS`). El rezago **efectivo** de cada columna viaja
@@ -223,6 +233,11 @@ class DesignFrame:
     publicar la latencia efectiva de cada feature (C11 de #147) sin volver a consultar el
     catalogo en la capa de informe. ``design_lag_sessions`` es la **referencia** de #24 (el maximo
     de esos rezagos), no la regla.
+
+    ``target_column`` es la columna de la etiqueta que produce ``y`` (A3): ``ret_long`` en #24 y
+    ``ret_short`` en el espejo de la direccion corta (#78). Viaja en el frame porque **es** la
+    identidad del objetivo: la capa de informe publica la regla (:attr:`target_rule`) y un
+    objetivo distinto no se puede confundir con el de #24.
     """
 
     frame: pl.DataFrame
@@ -233,6 +248,7 @@ class DesignFrame:
     design_lag_sessions: int
     features: tuple[str, ...] = BASELINE_FEATURES
     design_lag_by_feature: tuple[tuple[str, int], ...] = ()
+    target_column: str = TARGET_COLUMN_LONG
 
     @property
     def sessions(self) -> tuple[date, ...]:
@@ -243,6 +259,11 @@ class DesignFrame:
     def positives(self) -> int:
         """Numero de ``y == 1`` (A3)."""
         return int(self.frame.get_column("y").sum())
+
+    @property
+    def target_rule(self) -> str:
+        """La regla del objetivo, en prosa: ``ret_long > 0`` (#24) o ``ret_short > 0`` (#78)."""
+        return f"{self.target_column} > 0"
 
 
 def _require_frame(frame: object, *, what: str) -> pl.DataFrame:
@@ -320,6 +341,7 @@ def design_frame(
     labels: pl.DataFrame,
     selected: Sequence[str] = BASELINE_FEATURES,
     availability: Mapping[str, int],
+    target_column: str = TARGET_COLUMN_LONG,
 ) -> DesignFrame:
     """Construye la matriz de diseno desde el frame de features y las etiquetas (A2, A3).
 
@@ -342,9 +364,12 @@ def design_frame(
     (el barrido de #82 la consume desde ahi). Un nombre que el frame no traiga es
     :class:`UnknownFeatureError`, nunca una columna de ceros.
 
-    ``labels`` trae ``session`` y ``ret_long``; el objetivo es ``y = 1{ret_long > 0}`` (A3).
-    Las sesiones que no estan en las etiquetas se quedan fuera del diseno, y las etiquetas que
-    no tienen sesion anterior se cuentan en ``n_shifted_rows`` en vez de rellenarse.
+    ``labels`` trae ``session`` y la columna de objetivo; el objetivo es
+    ``y = 1{target_column > 0}`` (A3). Por defecto la columna es :data:`TARGET_COLUMN_LONG`
+    (``ret_long``, el contrato de #24); el espejo de la direccion corta (#78) pasa ``ret_short``
+    y **nada mas** cambia: la regla de disponibilidad, el corrimiento y el conteo de nulos son
+    los mismos. Las sesiones que no estan en las etiquetas se quedan fuera del diseno, y las
+    etiquetas que no tienen sesion anterior se cuentan en ``n_shifted_rows`` en vez de rellenarse.
     """
     feature_frame = _require_frame(features, what="features")
     label_frame = _require_frame(labels, what="labels")
@@ -355,7 +380,7 @@ def design_frame(
             "matriz, y no se rellena con las 10 de control por defecto (A4)"
         )
     _require_columns(feature_frame, columns=("session", *columns), what="features")
-    _require_columns(label_frame, columns=("session", "ret_long"), what="labels")
+    _require_columns(label_frame, columns=("session", target_column), what="labels")
     lags = _require_availability(columns, availability)
     reference = max(lags.values()) if lags else DESIGN_LAG_SESSIONS
 
@@ -368,10 +393,10 @@ def design_frame(
         ]
     )
     joined = shifted.join(
-        label_frame.select("session", "ret_long").sort("session"), on="session", how="inner"
+        label_frame.select("session", target_column).sort("session"), on="session", how="inner"
     )
     joined = joined.with_columns(
-        (pl.col("ret_long") > 0).cast(pl.Int64).alias("y"),
+        (pl.col(target_column) > 0).cast(pl.Int64).alias("y"),
     ).sort("session")
 
     nulls = sum(joined.get_column(name).null_count() for name in columns)
@@ -384,6 +409,7 @@ def design_frame(
         design_lag_sessions=reference,
         features=columns,
         design_lag_by_feature=tuple((name, lags[name]) for name in columns),
+        target_column=target_column,
     )
 
 

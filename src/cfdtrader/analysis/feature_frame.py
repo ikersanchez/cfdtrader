@@ -79,6 +79,7 @@ __all__ = [
     "load_context_inputs",
     "load_historical_market_candidates",
     "load_labels",
+    "load_short_labels",
     "missing_context_series",
     "pending_session_values",
 ]
@@ -113,6 +114,11 @@ MACRO_QUERY: Final[str] = (
 #: Las etiquetas de #10: una fila por sesion, con las dos direcciones (el `series_id` entra
 #: como literal validado por el llamante, como en `analysis.backtest_report`).
 LABELS_COLUMNS: Final[tuple[str, ...]] = ("session", "ret_long", "is_half_day", "k_sigma")
+
+#: Las etiquetas de la direccion **corta** (#78): `session` y `ret_short`. Se leen por una
+#: consulta aparte y **no** se anaden a :data:`LABELS_COLUMNS`: la ruta larga de #24 no cambia y
+#: un almacen sin `ret_short` no rompe la construccion del frame de #24.
+SHORT_LABELS_COLUMNS: Final[tuple[str, ...]] = ("session", "ret_short")
 
 #: Orden de ensamblado de las familias. Es el orden en que se publican las columnas y no
 #: depende del contenido: cambiarlo cambia el ``matrix_sha256``.
@@ -254,21 +260,49 @@ def _require_datasets(store: Store, *, names: Sequence[str]) -> None:
         )
 
 
-def load_labels(store: Store, *, series_id: str = "^GSPC") -> pl.DataFrame:
-    """Las etiquetas de esa serie: ``session``, ``ret_long`` y su procedencia (A3)."""
+def _validated_series(series_id: str) -> str:
+    """El ``series_id`` de una consulta a ``derived.labels``, o error tipado si no es admisible."""
     if "'" in series_id or ";" in series_id:
         raise MissingFeatureDatasetError(
             f"el `series_id` {series_id!r} no es un identificador admisible: se compone un "
             "literal SQL y no se interpola texto libre"
         )
+    return series_id
+
+
+def load_labels(store: Store, *, series_id: str = "^GSPC") -> pl.DataFrame:
+    """Las etiquetas de esa serie: ``session``, ``ret_long`` y su procedencia (A3)."""
+    validated = _validated_series(series_id)
     query = (
         "SELECT session, ret_long, is_half_day, k_sigma FROM derived.labels "  # noqa: S608
-        f"WHERE series_id = '{series_id}' ORDER BY session"
+        f"WHERE series_id = '{validated}' ORDER BY session"
     )
     frame = _query(store, query, dataset="derived.labels")
     if frame.height == 0:
         raise MissingFeatureDatasetError(
             f"`derived.labels` no tiene ninguna sesion de {series_id!r}: sin etiquetas no hay "
+            "objetivo que modelar"
+        )
+    return frame
+
+
+def load_short_labels(store: Store, *, series_id: str = "^GSPC") -> pl.DataFrame:
+    """Las etiquetas de la direccion **corta** (#78): ``session`` y ``ret_short`` (A3).
+
+    Consulta aparte de :func:`load_labels` a proposito: la ruta larga de #24 no cambia y un
+    almacen que no publique ``ret_short`` sigue construyendo su frame de #24. Trae la columna del
+    objetivo del **espejo** desde el **mismo** ``derived.labels``, sin una segunda aritmetica de
+    etiquetas ni una segunda fuente.
+    """
+    validated = _validated_series(series_id)
+    query = (
+        "SELECT session, ret_short FROM derived.labels "  # noqa: S608
+        f"WHERE series_id = '{validated}' ORDER BY session"
+    )
+    frame = _query(store, query, dataset="derived.labels (ret_short)")
+    if frame.height == 0:
+        raise MissingFeatureDatasetError(
+            f"`derived.labels` no tiene ninguna sesion de {validated!r}: sin etiquetas no hay "
             "objetivo que modelar"
         )
     return frame
