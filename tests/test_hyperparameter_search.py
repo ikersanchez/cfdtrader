@@ -543,7 +543,9 @@ def test_a2_a_name_outside_the_catalog_is_a_typed_error() -> None:
 
 def test_a2_a_subset_with_design_nulls_is_not_imputed() -> None:
     """`n_nulls_in_features` se publica por subconjunto: un nulo de diseno **no** se imputa"""
-    frame = _synthetic_frame(nulls_in="har_forecast")
+    # La columna nula es de **rezago 1** (`dist_sma_20_z`, #153 movio `har_forecast` a `0`): asi el
+    # nulo de la primera fila del frame entra en la fila de diseno de la sesion siguiente.
+    frame = _synthetic_frame(nulls_in="dist_sma_20_z")
     labels = _synthetic_labels(frame)
     control = next(variant for variant in SEARCH_SPACE if variant.feature_set == "control")
     design = search.design_for(control, features=frame, labels=labels)
@@ -1186,7 +1188,8 @@ def _synthetic_rows() -> list[search.SweepRow]:
 
 def test_a7_a_subset_with_nulls_is_an_attempt_without_a_measure() -> None:
     """`_attempt` deja la variante intentada con su motivo y sin modelo (A7)."""
-    frame = _synthetic_frame(nulls_in="har_forecast")
+    # Columna de **rezago 1** (como en A2): su nulo de la primera fila si entra en el diseno (#153).
+    frame = _synthetic_frame(nulls_in="dist_sma_20_z")
     labels = _synthetic_labels(frame)
     stub = SimpleNamespace(matrix=SimpleNamespace(frame=frame))
     control = next(variant for variant in SEARCH_SPACE if variant.feature_set == "control")
