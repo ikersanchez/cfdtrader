@@ -4,8 +4,8 @@
 |---|---|
 | **Fecha** | 2026-10-11 |
 | **Origen** | seguimiento de #141 / #148 / #149 / #107 |
-| **Estado** | Revisión medida **y corregida** (§0/§2.1: **sí** hay candidata gratuita). **No** adopta nada: `phase2_ready = false`, carril B bloqueado. |
-| **Aval de honestidad** | esto **no** afirma *edge*. Un «no hay serie» medido vale más que una feature prometida. |
+| **Estado** | Revisión medida **y corregida**. §0/§2.1: **sí** hay fuente gratuita (Dukascopy) y **sí** cubre la ventana; §2.1.1: su **ToU prohíbe automatizarla** ⇒ sigue **bloqueada**, por **licencia**. **No** adopta nada: `phase2_ready = false`, carril B bloqueado. |
+| **Aval de honestidad** | esto **no** afirma *edge*. Un «no hay serie» medido vale más que una feature prometida; y un «no se puede» por licencia vale más que una descarga que rompe un contrato. |
 
 ## La pregunta
 
@@ -24,6 +24,7 @@ está comprobado es mucho más estrecho:
 | `yfinance` no da más de ~2 años a 1h ni ~60 días a 5m | **Sí**, medido (§1) |
 | #149 midió **4** granularidades (`5m/30m/1h/1d`, todas de `yfinance`) y la mejor cubre **604** sesiones frescas frente a **2 688** | **Sí** (`premarket_history.json`) |
 | **Ninguna** fuente gratuita tiene la serie histórica | **No** — era una inferencia, y §2.1 la desmiente |
+| ¿Se puede **usar esa fuente desde el código**? | **No**: el ToU de Dukascopy prohíbe la automatización sin consentimiento escrito (§2.1.1). El bloqueo es de **licencia**, no de cobertura |
 | #107 «bloquea» el dato | **Impreciso**: #107 lo cerró el **propietario** por su criterio (b) —**no adquirir la cotización del CFD del bróker**, que es de pago y es acción suya—, **no** por «no hay fuente gratuita». Son cosas distintas |
 
 ## 1. Lo medido hoy (sonda directa sobre `yfinance`, 2026-10-11)
@@ -73,17 +74,62 @@ Es **tick a tick** del propio subyacente, así que **reconstruye la barra de las
 instante de decisión, 12:45/13:45 UTC) con la granularidad que se quiera. **Es un candidato gratuito
 real que #149 no probó**: sus cuatro candidatas eran **todas** `yfinance`.
 
-Lo que **queda por medir** (no concluido en esta nota):
+El dato es gratis y **llega**. Lo que no llega es la **vía**: el proveedor **prohíbe automatizarla**
+(§2.1.1). Resumen de lo medido y de lo que queda:
 
-- **Fecha de inicio exacta y continuidad**: la sonda se topó con un **límite de peticiones** (el
-  mismo fichero pasó de `200` a `503`/`000` al insistir), así que el alcance fino quedó incompleto.
-  Hay que repetirlo **despacio** (una petición cada varios segundos) y comprobar que una sesión
-  completa tiene sus 24 ficheros.
-- **Licencia / ToS** de Dukascopy y **coste de ingeniería** (descarga masiva: ~24 ficheros/día ×
-  ~250 días × ~12 años ≈ 70 000 ficheros).
+- **Cobertura: medida** (tabla de arriba): desde finales de **2013** ⇒ **~3 000 sesiones**, por encima
+  de las **2 688** que exige el modelo.
+- **Continuidad fina: no medida, y no se va a medir por esta vía.** La sonda se topó con el **límite
+  de peticiones** (el mismo fichero pasó de `200` a `503`/`000` al insistir) y **no se insistió**:
+  insistir automatizadamente es justo lo que §2.1.1 descarta.
+- **Licencia: medida** — la prohibición de §2.1.1 es el **bloqueo real** de esta vía.
 - **Coherencia de instrumento**: es el CFD de **otro** bróker, no el del usuario (`SPX500:CFD`), pero
   **sí** es una cotización de CFD del S&P en sesión de 24 h — más parecida al instrumento operado que
   el futuro `ES=F`.
+
+### 2.1.1 Legalidad: el `datafeed` **no** se puede automatizar (medido hoy)
+
+Es lo que **cierra** esta vía por ahora. Comprobado hoy:
+
+| Comprobación | Resultado |
+|---|---|
+| `https://datafeed.dukascopy.com/robots.txt` | **`404`** — el host del feed no publica reglas de rastreo |
+| `https://www.dukascopy.com/robots.txt` | **`200`**, `Allow: /` salvo rutas internas (`/cgi-bin/`, `/fxspider/…`) ⇒ el sitio **no** veta el rastreo genérico |
+| **Terms of Use** (`/swiss/english/legal-pages/terms-of-use/`) | **prohíben** la automatización (cita abajo) |
+
+Cita textual de los *Terms of Use*:
+
+> *«You shall not use or attempt to use any "scraper," "robot," "bot," "spider," "data mining,"
+> "computer code," or any other automate device, program, tool, algorithm, process or methodology to
+> access, acquire, copy, or monitor any portion of the WEBSITE, any data or content found on or
+> accessed through the WEBSITE, or any other WEBSITE information **without the prior express written
+> consent of DUKASCOPY**.»*
+
+Y en el mismo documento: *«You may neither take nor attempt any action that … imposes … an
+**unreasonable or disproportionately large load** … on the WEBSITE»*, y solo se permite guardar
+copias *«for your own **personal, non-commercial use**»*.
+
+**El matiz, dicho en voz alta:** la cláusula habla de «the WEBSITE» y el feed vive en otro host
+(`datafeed.dukascopy.com`). Ese matiz **no autoriza**: el mismo documento declara **reservados todos
+los derechos** sobre el contenido de Dukascopy, y la propia FAQ de la casa ofrece el dato gratis
+**«through Dukascopy's Historical Data Export tool»** —es decir, la vía que **ellos** ofrecen es la
+**herramienta**, no el `datafeed` por script—. Lectura prudente, y la que sigo: **automatizar la
+descarga no está permitido sin consentimiento escrito previo**.
+
+**Lo que hice hoy, declarado:** una **sonda acotada** de ~25 peticiones pequeñas para comprobar
+existencia, cobertura y formato. Es una comprobación de viabilidad, no una adquisición sistemática, y
+**se detuvo** en cuanto apareció el ToU; no se descargó ningún histórico.
+
+**Vías que sí son legales (y son las que se proponen):**
+
+1. **Herramienta oficial** — *Historical Data Export* (web) o **JForex → Historical Data Manager**:
+   la casa da ahí el histórico tick/CSV **gratis** (su FAQ lo declara textualmente). Es una descarga
+   **manual**, hecha por la persona ⇒ dentro del uso «personal, non-commercial» del ToU.
+2. **Consentimiento escrito** de Dukascopy para automatizar el `datafeed` — el propio ToU lo
+   contempla («*without the prior express written consent*»). Es un correo: **acción del propietario**.
+3. **Nada de esto reabre #107**, que va de la **cotización del CFD del bróker** (cerrada por el
+   propietario el 2026-10-09). Aquí se habla de una **serie de pre-mercado para una feature**: otra
+   necesidad, otra fuente, otra decisión.
 
 ### 2.2 Stooq (probado, no usable)
 
@@ -141,33 +187,41 @@ diario arrastra el artefacto de #52), pero es gratis medirlo.
 - **Sustituir la barra de 24 h del ES por el pre-mercado**: su barra `t` cierra a las 16:00 ET y a
   las 08:45 **aún no existe**: usarla sería *look-ahead* (lo mide #141).
 - **Un feature entrenado con `yfinance`**: medido, su ventana no llega (#149).
-- **⚠️ NO se puede afirmar** que no exista fuente gratuita. **Dukascopy (§2.1) está pendiente de
-  medir** y es la vía que puede reabrir la promoción a *feature*: si su histórico tick alcanza los
-  ~10 años, la tarea deja de ser «contratar» y pasa a ser **ingerir un tick gratuito**.
+- **⚠️ NO se puede afirmar** que no exista fuente gratuita: **Dukascopy sí sirve el histórico tick del
+  S&P, gratis, desde finales de 2013** (§2.1) ⇒ cubre las 2 688 sesiones que el modelo exige. Lo que
+  **no** se puede es **automatizar la descarga**: su ToU lo prohíbe sin consentimiento escrito
+  (§2.1.1). La promoción sigue **bloqueada**, pero por **licencia**, no por **cobertura** — y las
+  vías legales están identificadas.
 
-## 4. Recomendación (revisada a la luz de §2.1)
+## 4. Recomendación (revisada a la luz de §2.1 y §2.1.1)
 
 | Opción | Coste | Cuándo sirve | Riesgo |
 |---|---|---|---|
-| **2.1 Medir la cobertura de Dukascopy** (fecha de inicio + continuidad, despacio) | bajo | inmediato | ninguno; es una medición |
-| **2.1b Ingerir Dukascopy** *si la cobertura llega a ~10 años* | medio | al cerrar la medición | ToS y coste de ingeniería (tick a barra) |
+| **2.1 Cobertura de Dukascopy** | — | **hecho**: sirve el tick del S&P desde finales de 2013 (~3 000 sesiones) | ninguno |
+| **2.1b Conseguir el histórico por la vía legal** (herramienta oficial, a mano) | bajo | días, si el propietario la ejecuta | el volumen (~12 años de ticks) |
+| **2.1c Pedir consentimiento escrito para automatizar el `datafeed`** | bajo | semanas (depende de Dukascopy) | que no contesten, o que digan que no |
+| ~~2.1d Automatizar el `datafeed` por script~~ | — | **descartado** | **prohibido por el ToU** (§2.1.1) |
 | **3.1 Persistir el snapshot (acumular)** | bajo | a partir de ~1 año (medir) / ~10 (entrenar) | ninguno; es solo acumular |
 | **3.3 Medir basis y retorno nocturno** | bajo | inmediato | expectativa baja; no adopta nada |
 | **3.2 Más datos declarados + avisos** | bajo | inmediato | un aviso que no decide (carril A) |
 | **Contratar histórico point-in-time** | de pago | inmediato | decisión del propietario |
 
-**Orden propuesto, corregido:** **(2.1)** cerrar la medición de Dukascopy — es lo único que puede
-convertir un «no hay serie» en un **feature entrenable gratis**, y ya está demostrado que el
-proveedor sirve datos reales de ≥10 años. Si la cobertura se confirma, la tarea deja de ser
-«contratar» y pasa a ser **ingerir**. En paralelo, **(3.1)** acumular el snapshot propio (barato y
-complementario) y **(3.3)** medir las dos candidatas históricas con la puerta de #146.
+**Orden propuesto, corregido otra vez — y esta vez por una razón legal, no técnica:** la cobertura ya
+está **medida y llega**; lo que bloquea la vía es el **ToU**. Así que lo primero no es «medir más»,
+sino **(2.1b/2.1c) conseguir el dato por una puerta permitida**: la herramienta oficial a mano, o
+pedir consentimiento escrito. En paralelo siguen en pie **(3.1)** acumular el snapshot propio (barato
+y complementario) y **(3.3)** medir las dos candidatas históricas con la puerta de #146.
+
+**Sin la puerta legal, el veredicto de #149 no cambia**: no hay serie utilizable **para el código**.
 
 ## Cómo se reproduce la sonda
 
-```bash
-uv run python .scratch/probe_free_sources.py            # la tabla de la seccion 1 (yfinance)
+**La sonda de Dukascopy no se reproduce a escala**: su ToU lo prohíbe sin consentimiento escrito
+(§2.1.1). Lo que se hizo fue **una** comprobación acotada de viabilidad (unos pocos ficheros), y el
+comando se deja aquí **solo para dejar constancia del formato** — **no** es la vía de adquisición:
 
-# Dukascopy: un fichero tick (respetar el limite de peticiones: una cada varios segundos)
+```bash
+# NO usar esto para descargar el histórico: ver §2.1.1 (ToU de Dukascopy).
 curl -s -o /tmp/duka.bi5 'https://datafeed.dukascopy.com/datafeed/USA500IDXUSD/2024/05/03/08h_ticks.bi5'
 uv run python -c "import lzma; d=lzma.decompress(open('/tmp/duka.bi5','rb').read(), format=lzma.FORMAT_ALONE); print(len(d)//20, 'ticks')"
 ```

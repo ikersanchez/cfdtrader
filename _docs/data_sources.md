@@ -5,7 +5,8 @@
 > **ausencia de fuente del `SPX500:CFD`** con la evidencia de la comprobación.
 >
 > Declaración de fuentes en `config/data_sources.yaml` (series y respaldos) y en
-> `config/macro_series.yaml` (series macro). Verificación: **2026-09-17**.
+> `config/macro_series.yaml` (series macro). Verificación: **2026-09-17**; ampliada el
+> **2026-10-11** con Dukascopy (abajo: fuente **real** que **no** se ingiere, por licencia).
 > Cierre de **#107** por el criterio (b) —el proxy declarado es la ruta
 > definitiva—: **2026-10-09**.
 
@@ -259,6 +260,44 @@ seguimiento de la adquisición —**#107**— queda **cerrado por el criterio (b
 **2026-10-09**: **no** se adquiere el dato del CFD y el proxy declarado es **la
 ruta definitiva**, no provisional. El proxy declarado **no** mide el *tracking
 difference* ni el spread real del CFD: eso queda **aceptado y declarado**.
+
+## Dukascopy — el histórico del S&P es gratis, pero **no automatizable** (2026-10-11)
+
+Registrado aquí porque es una fuente **real y medida** que la comprobación del 2026-09-17 **no probó**
+(sus candidatas eran todas de `yfinance`) y porque su **límite es de licencia, no de cobertura**. **No**
+entra en `config/data_sources.yaml`: **no se ingiere**.
+
+- **Qué sirve.** `datafeed.dukascopy.com` entrega ficheros `.bi5` (LZMA *alone*) con **ticks**
+  (20 bytes big-endian por tick: `uint32` ms de la hora, `uint32` ask, `uint32` bid, `float32`
+  askvol, `float32` bidvol), por hora, del instrumento `USA500IDXUSD` —el S&P 500 de Dukascopy, en
+  sesión de 24 h—.
+- **Cobertura medida** (sondas del 2026-10-11, fichero `12h` UTC): `2009–2011` → `404`; `2012-06` y
+  `2013-06` → `200` con **0 bytes**; **desde finales de 2013** → `200` **con datos**. Los precios
+  cuadran con su fecha: `2014-06-03` ≈ **1 919,331** (el S&P estaba ~1 920) y `2024-06-03` ≈
+  **5 284,269**. Son **~12,5 años**, por encima de las 2 688 sesiones que exige el modelo.
+- **Lo que lo bloquea es el ToU, no la técnica.** Los *Terms of Use* de Dukascopy
+  (`/swiss/english/legal-pages/terms-of-use/`) prohíben usar *«any "scraper," "robot," "bot,"
+  "spider," "data mining," "computer code," or any other automate device, program, tool, algorithm,
+  process or methodology to access, acquire, copy, or monitor any portion of the WEBSITE … without
+  the prior express written consent of DUKASCOPY»*, y vetar cualquier acción que imponga *«an
+  unreasonable or disproportionately large load»*. Matiz honesto: la cláusula dice «the WEBSITE» y el
+  feed vive en otro host; pero el mismo documento **reserva todos los derechos** sobre el contenido y
+  la vía gratuita que la casa **ofrece** es la **herramienta**, no el feed por script. Se aplica la
+  lectura prudente: **nada de automatizar sin consentimiento escrito**.
+- **`robots.txt`.** `datafeed.dukascopy.com/robots.txt` → `404` (no publica reglas);
+  `www.dukascopy.com/robots.txt` → `200` con `Allow: /` salvo rutas internas. No es una autorización:
+  manda el ToU.
+- **Vías permitidas.** (1) La **herramienta oficial**: *Historical Data Export* (web) o **JForex →
+  Historical Data Manager**, que la propia FAQ describe como **gratuita** y con descarga *«from
+  tick-by-tick to monthly»* — descarga **manual**, dentro del uso personal y no comercial que el ToU
+  admite. (2) **Pedir consentimiento escrito** para automatizar; el ToU lo contempla expresamente.
+- **Licencia.** Contenido de Dukascopy: uso **personal y no comercial**, sin redistribución, con
+  `source` y `fetched_at` declarados como en cualquier otra fuente; el dato crudo **no** se versiona.
+- **Qué NO es.** Esto **no** reabre **#107** —que va de la **cotización del CFD del bróker**, cerrada
+  por el propietario el 2026-10-09— ni cambia la sección «SIN FUENTE» de arriba: el `SPX500:CFD` del
+  bróker sigue **sin fuente**. Aquí se habla de otra necesidad (una serie de **pre-mercado** para una
+  *feature*) y de **otro** instrumento (el CFD **de otro** bróker). La revisión completa, con la
+  medición, está en `_docs/premarket_data_review_2026-10-11.md` §2.1 y §2.1.1.
 
 ## `open` diario de `^GSPC` — limitación conocida y decisión de la fuente de apertura
 
