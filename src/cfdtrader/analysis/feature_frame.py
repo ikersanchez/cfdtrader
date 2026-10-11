@@ -40,6 +40,11 @@ from cfdtrader.features.context import (
     context_spec,
     pending_context_values,
 )
+from cfdtrader.features.historical_market import (
+    HistoricalMarketCandidates,
+    HistoricalMarketDataError,
+    build_historical_market_candidates,
+)
 from cfdtrader.features.macro import (
     ANCHOR_INPUT_COLUMNS,
     DXY_INPUT_COLUMNS,
@@ -57,6 +62,7 @@ __all__ = [
     "ANCHOR_SERIES",
     "FAMILY_ORDER",
     "FEATURES_LIMITATIONS",
+    "HISTORICAL_MARKET_QUERY",
     "MACRO_QUERY",
     "MARKET_QUERY",
     "PENDING_FAMILY_COLUMNS",
@@ -71,6 +77,7 @@ __all__ = [
     "build_feature_matrix",
     "family_spec",
     "load_context_inputs",
+    "load_historical_market_candidates",
     "load_labels",
     "missing_context_series",
     "pending_session_values",
@@ -87,6 +94,12 @@ VIX_SERIES: Final[str] = "^VIX"
 MARKET_QUERY: Final[str] = (
     "SELECT series_id, as_of, open, high, low, close FROM raw.market_daily "
     "ORDER BY series_id, as_of"
+)
+
+#: Lectura opt-in de #156. No se incluye en la matriz ordinaria ni en el experimento commodities.
+HISTORICAL_MARKET_QUERY: Final[str] = (
+    "SELECT source, series_id, as_of, open, close FROM raw.market_daily "
+    "WHERE series_id IN ('ES=F', '^GSPC') ORDER BY series_id, as_of, source"
 )
 
 SECTORS_QUERY: Final[str] = (
@@ -259,6 +272,19 @@ def load_labels(store: Store, *, series_id: str = "^GSPC") -> pl.DataFrame:
             "objetivo que modelar"
         )
     return frame
+
+
+def load_historical_market_candidates(store: Store) -> HistoricalMarketCandidates:
+    """Carga las candidatas opt-in de ``raw.market_daily`` y su auditoria de cobertura."""
+    bars = _with_session(
+        _query(store, HISTORICAL_MARKET_QUERY, dataset="raw.market_daily (ES=F y ^GSPC)")
+    )
+    try:
+        return build_historical_market_candidates(bars)
+    except HistoricalMarketDataError as error:
+        raise FeatureFrameError(
+            f"no se pueden calcular las candidatas historicas: {error}"
+        ) from error
 
 
 # ─────────────────────────────────────────────────────────────────────────────

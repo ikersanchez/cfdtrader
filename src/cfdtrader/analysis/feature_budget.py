@@ -65,6 +65,7 @@ from cfdtrader.analysis.feature_frame import (
     FeatureFrame,
     FeatureFrameError,
     build_feature_frame,
+    load_historical_market_candidates,
 )
 from cfdtrader.backtest.costs import declared_cost_model, declared_slippage_assumption
 from cfdtrader.backtest.engine import (
@@ -90,6 +91,12 @@ from cfdtrader.data.calendar import load_calendar
 from cfdtrader.data.settings import ConfigurationError, load_settings
 from cfdtrader.data.store import Store
 from cfdtrader.features import store as feature_store
+from cfdtrader.features.historical_market import (
+    HISTORICAL_MARKET_CANDIDATE_CATALOG,
+    HISTORICAL_MARKET_CANDIDATE_COLUMNS,
+    HISTORICAL_MARKET_CANDIDATE_SET,
+    HISTORICAL_MARKET_DESIGN_LAG_BY_FEATURE,
+)
 from cfdtrader.models.baseline import (
     BASELINE_FEATURES,
     DesignFrame,
@@ -107,6 +114,7 @@ __all__ = [
     "CANDIDATE_FEATURES",
     "CANDIDATE_SET",
     "CLI_NAME",
+    "COMMODITIES_CANDIDATE_GROUP",
     "CONTROL_FEATURES",
     "CONTROL_SET",
     "DECISION_ADOPT",
@@ -114,6 +122,11 @@ __all__ = [
     "DECISION_SWAP",
     "EXPANDED_SET",
     "GATE_RULE",
+    "HISTORICAL_BUDGET_RULE",
+    "HISTORICAL_EXPANDED_SET",
+    "HISTORICAL_MARKET_CANDIDATES",
+    "HISTORICAL_MARKET_CANDIDATE_GROUP",
+    "HISTORICAL_SWAP_PREFIX",
     "INTERCHANGE_RULE",
     "REPORT_PREFIX",
     "SWAP_PREFIX",
@@ -178,6 +191,19 @@ DECISION_KEEP: Final[str] = "mantiene_control"
 CONTROL_FEATURES: Final[tuple[str, ...]] = BASELINE_FEATURES
 CANDIDATE_FEATURES: Final[tuple[str, ...]] = feature_store.COMMODITIES_FEATURE_COLUMNS
 CANDIDATE_SET: Final[str] = feature_store.COMMODITIES_FEATURE_SET
+
+#: Grupo opt-in y separado: no altera las candidatas del experimento de commodities (#146).
+COMMODITIES_CANDIDATE_GROUP: Final[str] = "commodities"
+HISTORICAL_MARKET_CANDIDATE_GROUP: Final[str] = "historical_market"
+HISTORICAL_MARKET_CANDIDATES: Final[tuple[str, ...]] = HISTORICAL_MARKET_CANDIDATE_COLUMNS
+HISTORICAL_EXPANDED_SET: Final[str] = "expanded_historical_market_v1"
+HISTORICAL_SWAP_PREFIX: Final[str] = "swap_historical"
+HISTORICAL_BUDGET_RULE: Final[str] = (
+    "Se mide el control de 10 columnas frente al ampliado (control + exactamente las dos "
+    "candidatas de `historical_market_v1`, 12 columnas) y un intercambio por candidata (10). "
+    "Se aplica sin cambios el protocolo de #146; el espacio historico no forma parte del grupo "
+    "ni de las conclusiones del experimento de commodities."
+)
 
 
 class BudgetError(Exception):
@@ -379,6 +405,11 @@ def planned_sets(
     *,
     control: Sequence[str] = CONTROL_FEATURES,
     candidates: Sequence[str] = CANDIDATE_FEATURES,
+    candidate_set: str = CANDIDATE_SET,
+    expanded_name: str = EXPANDED_SET,
+    swap_prefix: str = SWAP_PREFIX,
+    expanded_source: str | None = None,
+    expanded_provenance: str | None = None,
 ) -> tuple[FeatureSet, ...]:
     """El **espacio pre-registrado**: control, ampliado y un intercambio por candidata (A1).
 
@@ -399,14 +430,28 @@ def planned_sets(
         raise BudgetError(
             f"control y candidatas no pueden solaparse: {overlap} (la procedencia seria ambigua)"
         )
+    default_commodity_group = (
+        tuple(candidates) == CANDIDATE_FEATURES
+        and candidate_set == CANDIDATE_SET
+        and expanded_name == EXPANDED_SET
+        and swap_prefix == SWAP_PREFIX
+    )
     expanded = FeatureSet(
-        name=EXPANDED_SET,
+        name=expanded_name,
         kind="expanded",
         columns=(*control_tuple, *candidates_tuple),
-        source="BASELINE_FEATURES + commodities_v1 (control + candidatas)",
-        provenance=(
+        source=expanded_source
+        or (
+            "BASELINE_FEATURES + commodities_v1 (control + candidatas)"
+            if default_commodity_group
+            else f"BASELINE_FEATURES + {candidate_set} (control + candidatas)"
+        ),
+        provenance=expanded_provenance
+        or (
             "control + las 5 candidatas de `commodities_v1` (#143); 15 columnas, el limite "
             "declarado de `plan.md` §9"
+            if default_commodity_group
+            else f"control + las {len(candidates_tuple)} candidatas de `{candidate_set}`"
         ),
     )
     sets: list[FeatureSet] = [
@@ -432,7 +477,7 @@ def planned_sets(
         columns = tuple(candidate if name == dropped else name for name in control_tuple)
         sets.append(
             FeatureSet(
-                name=f"{SWAP_PREFIX}_{candidate}",
+                name=f"{swap_prefix}_{candidate}",
                 kind="swap",
                 columns=columns,
                 source=(f"BASELINE_FEATURES - `{dropped}` + `{candidate}` (regla del intercambio)"),
@@ -613,8 +658,17 @@ def _blocks_for(n_observations: int) -> int | None:
     return None
 
 
-def _unusable(feature_set: FeatureSet, *, frame: FeatureFrame, error: str) -> SetMeasurement:
+def _unusable(
+    feature_set: FeatureSet,
+    *,
+    frame: FeatureFrame,
+    error: str,
+    matrix_sha256: str | None = None,
+    feature_spec_sha256: Mapping[str, str] | None = None,
+) -> SetMeasurement:
     """La medida de un conjunto que no se pudo ajustar: `usable = false` con su motivo (A2)."""
+    matrix_digest = matrix_sha256 or frame.matrix.matrix_sha256
+    spec_digest = feature_spec_sha256 or frame.matrix.feature_spec_sha256
     return SetMeasurement(
         name=feature_set.name,
         kind=feature_set.kind,
@@ -625,13 +679,13 @@ def _unusable(feature_set: FeatureSet, *, frame: FeatureFrame, error: str) -> Se
         sharpe=None,
         brier=None,
         log_loss=None,
-        matrix_sha256=frame.matrix.matrix_sha256,
+        matrix_sha256=matrix_digest,
         features_version=_features_version(
             feature_set.columns,
-            matrix_sha256=frame.matrix.matrix_sha256,
+            matrix_sha256=matrix_digest,
             plan_sha256="",
         ),
-        feature_spec_sha256=frame.matrix.feature_spec_sha256,
+        feature_spec_sha256=spec_digest,
         feature_code_version=frame.matrix.feature_code_version,
         error=error,
     )
@@ -665,7 +719,10 @@ def _usable_matrix(
 
 
 def _dsr_block(
-    usable: Sequence[SetMeasurement], returns_by_name: Mapping[str, Mapping[date, float]]
+    usable: Sequence[SetMeasurement],
+    returns_by_name: Mapping[str, Mapping[date, float]],
+    *,
+    attempted_trials: int | None = None,
 ) -> dict[str, object]:
     """El DSR de la variante de mayor Sharpe, con `n_trials` = conjuntos probados (A9)."""
     built = _usable_matrix(usable, returns_by_name)
@@ -682,7 +739,11 @@ def _dsr_block(
         )
         index = select_variant(matrix)
         selected = [row[index] for row in matrix]
-        result = deflated_sharpe_ratio(selected, n_trials=len(usable), sr_variance=variance)
+        result = deflated_sharpe_ratio(
+            selected,
+            n_trials=len(usable) if attempted_trials is None else attempted_trials,
+            sr_variance=variance,
+        )
     except OverfittingError as error:
         return {
             "state": "not_evaluable",
@@ -776,29 +837,80 @@ def measure(
     store: Store,
     as_of: datetime,
     sets: Sequence[FeatureSet] | None = None,
+    candidate_group: str = COMMODITIES_CANDIDATE_GROUP,
 ) -> BudgetReport:
-    """Re-mide la Fase 2 para el espacio pre-registrado y devuelve el informe (A8, A10).
+    """Mide un grupo pre-registrado con el mismo protocolo de la Fase 2 (A8, A10).
 
     El protocolo es el de la Fase 2, **importado** y no reimplementado: el plan de particiones de
     #12 (purga y embargo), el modelo de #24/#25 con su calibrador, el motor de #13 con el coste
-    declarado de #11. La unica cosa que cambia entre conjuntos es **la lista de columnas** del
-    diseno. La matriz completa de features (las 57 del catalogo) se construye **una sola vez**.
+    declarado de #11. El valor por defecto conserva el espacio commodities de #146. El grupo
+    historico es opt-in, se une solo para esta llamada y no altera la matriz ni el experimento
+    commodities.
     """
     moment = _as_utc(as_of)
+    if candidate_group not in {
+        COMMODITIES_CANDIDATE_GROUP,
+        HISTORICAL_MARKET_CANDIDATE_GROUP,
+    }:
+        raise BudgetError(f"grupo de candidatas desconocido: {candidate_group!r}")
     history = backtest_report.load_history(store, series_id=backtest_report.SERIES_ID)
     calendar = load_calendar(years=_calendar_years(history.daily))
     universe = backtest_report.build_inputs(history, calendar=calendar)
     frame = build_feature_frame(store, series_id=backtest_report.SERIES_ID)
     _require_alignment(universe, frame)
-    planned = tuple(sets) if sets is not None else planned_sets(frame.matrix.frame)
-    # Ventana **comun de casos completos**: el modelo no acepta `NaN` y las candidatas traen los
-    # nulos del WTI negativo del 2020-04. Todos los conjuntos se miden en las MISMAS sesiones.
-    union_columns = tuple(dict.fromkeys((*CONTROL_FEATURES, *CANDIDATE_FEATURES)))
+    candidates = CANDIDATE_FEATURES
+    analysis_matrix = frame.matrix.frame
+    availability = feature_store.DESIGN_LAG_BY_FEATURE
+    candidate_audit: Mapping[str, object] | None = None
+    candidate_matrix_sha256 = frame.matrix.matrix_sha256
+    candidate_spec_sha256 = frame.matrix.feature_spec_sha256
+    if candidate_group == HISTORICAL_MARKET_CANDIDATE_GROUP:
+        loaded = load_historical_market_candidates(store)
+        analysis_matrix = analysis_matrix.join(
+            loaded.frame, on="session", how="left", validate="1:1"
+        )
+        candidates = HISTORICAL_MARKET_CANDIDATES
+        availability = {
+            **feature_store.DESIGN_LAG_BY_FEATURE,
+            **HISTORICAL_MARKET_DESIGN_LAG_BY_FEATURE,
+        }
+        candidate_audit = loaded.audit
+        candidate_matrix_sha256 = _candidate_matrix_digest(
+            frame.matrix.matrix_sha256,
+            analysis_matrix.select("session", *candidates),
+        )
+        candidate_spec_sha256 = {
+            **frame.matrix.feature_spec_sha256,
+            HISTORICAL_MARKET_CANDIDATE_SET: _historical_candidate_spec_digest(),
+        }
+        planned = (
+            tuple(sets)
+            if sets is not None
+            else planned_sets(
+                analysis_matrix,
+                candidates=candidates,
+                candidate_set=HISTORICAL_MARKET_CANDIDATE_SET,
+                expanded_name=HISTORICAL_EXPANDED_SET,
+                swap_prefix=HISTORICAL_SWAP_PREFIX,
+                expanded_source=(
+                    "BASELINE_FEATURES + historical_market_v1 "
+                    "(control + dos candidatas point-in-time)"
+                ),
+                expanded_provenance=(
+                    "control + exactamente `es_basis` y `spx_overnight_ret_1`; 12 columnas, dentro "
+                    "del presupuesto declarado de 10-15"
+                ),
+            )
+        )
+    else:
+        planned = tuple(sets) if sets is not None else planned_sets(analysis_matrix)
+    # Ventana comun de casos completos: las mismas filas se usan para todos los conjuntos.
+    union_columns = tuple(dict.fromkeys((*CONTROL_FEATURES, *candidates)))
     union_design = design_frame(
-        frame.matrix.frame,
+        analysis_matrix,
         labels=frame.labels,
         selected=union_columns,
-        availability=feature_store.DESIGN_LAG_BY_FEATURE,
+        availability=availability,
     )
     keep = _complete_sessions(union_design)
     keep_set = set(keep)
@@ -815,10 +927,10 @@ def measure(
     for feature_set in planned:
         try:
             full_design = design_frame(
-                frame.matrix.frame,
+                analysis_matrix,
                 labels=frame.labels,
                 selected=feature_set.columns,
-                availability=feature_store.DESIGN_LAG_BY_FEATURE,
+                availability=availability,
             )
             design = _restrict_design(full_design, keep)
             model = fit_baseline(
@@ -837,7 +949,15 @@ def measure(
                 financing_cut=None,
             )
         except (UnknownFeatureError, InvalidDesignFrameError, DecisionError) as error:
-            measurements.append(_unusable(feature_set, frame=frame, error=str(error)))
+            measurements.append(
+                _unusable(
+                    feature_set,
+                    frame=frame,
+                    error=str(error),
+                    matrix_sha256=candidate_matrix_sha256,
+                    feature_spec_sha256=candidate_spec_sha256,
+                )
+            )
             returns_by_name[feature_set.name] = {}
             continue
         returns = _returns_by_session(run)
@@ -862,26 +982,26 @@ def measure(
                 sharpe=sharpe_ratio(series, annualization=1) if usable and series else None,
                 brier=brier_score(probabilities, observed) if probabilities else None,
                 log_loss=log_loss(probabilities, observed) if probabilities else None,
-                matrix_sha256=frame.matrix.matrix_sha256,
+                matrix_sha256=candidate_matrix_sha256,
                 features_version=_features_version(
                     feature_set.columns,
-                    matrix_sha256=frame.matrix.matrix_sha256,
+                    matrix_sha256=candidate_matrix_sha256,
                     plan_sha256=plan.plan_sha256,
                 ),
-                feature_spec_sha256=frame.matrix.feature_spec_sha256,
+                feature_spec_sha256=candidate_spec_sha256,
                 feature_code_version=frame.matrix.feature_code_version,
                 error=None,
             )
         )
 
     control = next((item for item in measurements if item.name == CONTROL_SET), None)
-    candidates = [item for item in measurements if item.name != CONTROL_SET]
+    candidate_measurements = [item for item in measurements if item.name != CONTROL_SET]
     usable_measurements = [item for item in measurements if item.usable]
     if control is None or not control.usable:
         verdict = Verdict(VERDICT_NOT_EVALUABLE, None, None, 0)
         best: SetMeasurement | None = None
     else:
-        best = _best_candidate(candidates)
+        best = _best_candidate(candidate_measurements)
         if best is None:
             verdict = Verdict(VERDICT_NOT_EVALUABLE, None, None, 0)
         else:
@@ -889,11 +1009,37 @@ def measure(
             control_series = [returns_by_name[CONTROL_SET][session] for session in sessions]
             best_series = [returns_by_name[best.name][session] for session in sessions]
             verdict = classify_verdict(control_series, best_series)
-    dsr = _dsr_block(usable_measurements, returns_by_name)
+    dsr = _dsr_block(
+        usable_measurements,
+        returns_by_name,
+        attempted_trials=(
+            len(measurements) if candidate_group == HISTORICAL_MARKET_CANDIDATE_GROUP else None
+        ),
+    )
     pbo = _pbo_block(usable_measurements, returns_by_name)
     significance_ok, gate_reason = _significance(dsr, pbo)
     decision, adopted = decide_budget(verdict.verdict, best, significance_ok=significance_ok)
     chosen = next(item for item in measurements if item.name == adopted)
+    split_plan_audit: dict[str, object] = {}
+    if candidate_group == HISTORICAL_MARKET_CANDIDATE_GROUP:
+        split_plan_audit = {
+            "plan_sha256": plan.plan_sha256,
+            "n_sessions": plan.n_sessions,
+            "n_splits": len(plan.folds),
+            "embargo_sessions": plan.inputs.get("embargo_sessions"),
+            "purge_total": plan.purge_total,
+            "embargo_total": plan.embargo_total,
+            "embargo_in_train_total": plan.embargo_in_train_total,
+            "exclusions_are_no_op": plan.exclusions_are_no_op,
+            "per_fold": [
+                {
+                    "index": fold.index,
+                    "purged": len(fold.purged),
+                    "embargoed": len(fold.embargoed),
+                }
+                for fold in plan.folds
+            ],
+        }
     payload = _payload(
         as_of=moment,
         frame=frame,
@@ -909,6 +1055,12 @@ def measure(
         pbo=pbo,
         gate_ok=significance_ok,
         gate_reason=gate_reason,
+        candidate_group=candidate_group,
+        candidate_features=candidates,
+        candidate_matrix_sha256=candidate_matrix_sha256,
+        candidate_audit=candidate_audit,
+        n_candidate_design_rows=union_design.n_sessions,
+        split_plan_audit=split_plan_audit,
     )
     return BudgetReport(
         as_of=moment,
@@ -919,6 +1071,7 @@ def measure(
         verdict=verdict,
         decision=decision,
         adopted=chosen,
+        candidate_group=candidate_group,
     )
 
 
@@ -928,6 +1081,39 @@ def measure(
 def _digest(payload: Mapping[str, object]) -> str:
     """``report_sha256``: sha256 del texto canonico del payload (sin el propio digest)."""
     return "sha256:" + hashlib.sha256(canonical_text(payload).encode("utf-8")).hexdigest()
+
+
+def _candidate_matrix_digest(base_digest: str, candidate_matrix: pl.DataFrame) -> str:
+    """Identidad conjunta de la matriz #73 y los valores de la familia historica opt-in."""
+    return _digest(
+        {
+            "base_matrix_sha256": base_digest,
+            "candidate_matrix": candidate_matrix.with_columns(
+                pl.col("session").cast(pl.String)
+            ).to_dicts(),
+            "candidate_columns": list(HISTORICAL_MARKET_CANDIDATES),
+        }
+    )
+
+
+def _historical_candidate_spec_digest() -> str:
+    """Digest estable del catalogo aislado de #156 (formula, origen y disponibilidad incluidos)."""
+    return _digest(
+        {
+            "feature_set": HISTORICAL_MARKET_CANDIDATE_SET,
+            "catalog": [
+                {
+                    "name": entry.name,
+                    "formula": entry.formula,
+                    "window": entry.window,
+                    "source": entry.source,
+                    "required_as_of": entry.required_as_of,
+                    "design_lag": entry.design_lag,
+                }
+                for entry in HISTORICAL_MARKET_CANDIDATE_CATALOG
+            ],
+        }
+    )
 
 
 def _payload(
@@ -946,18 +1132,35 @@ def _payload(
     pbo: Mapping[str, object],
     gate_ok: bool,
     gate_reason: str,
+    candidate_group: str,
+    candidate_features: Sequence[str],
+    candidate_matrix_sha256: str,
+    candidate_audit: Mapping[str, object] | None,
+    n_candidate_design_rows: int,
+    split_plan_audit: Mapping[str, object],
 ) -> dict[str, object]:
     """El payload del informe: reglas, espacio, medidas, DSR/PBO, decision e identidad (A11)."""
     sessions = window.sessions
-    return {
+    is_historical = candidate_group == HISTORICAL_MARKET_CANDIDATE_GROUP
+    candidate_set = HISTORICAL_MARKET_CANDIDATE_SET if is_historical else CANDIDATE_SET
+    candidate_source = (
+        "cfdtrader.features.historical_market.HISTORICAL_MARKET_CANDIDATE_COLUMNS"
+        if is_historical
+        else "cfdtrader.features.store.COMMODITIES_FEATURE_COLUMNS"
+    )
+    payload: dict[str, object] = {
         "analysis": ANALYSIS,
         "kind": "feature_budget",
-        "title": "Presupuesto de features de #24 y re-medida de la Fase 2 (#146)",
+        "title": (
+            "Medicion de candidatas historicas ES/S&P con el protocolo de #146"
+            if is_historical
+            else "Presupuesto de features de #24 y re-medida de la Fase 2 (#146)"
+        ),
         "as_of": as_of.isoformat(),
         "budget": {
             "min": BUDGET_MIN,
             "max": BUDGET_MAX,
-            "rule": BUDGET_RULE,
+            "rule": HISTORICAL_BUDGET_RULE if is_historical else BUDGET_RULE,
             "interchange_rule": INTERCHANGE_RULE,
             "verdict_rule": VERDICT_RULE,
             "gate_rule": GATE_RULE,
@@ -968,9 +1171,9 @@ def _payload(
                 "source": "cfdtrader.models.baseline.BASELINE_FEATURES",
             },
             "candidates": {
-                "set": CANDIDATE_SET,
-                "columns": list(CANDIDATE_FEATURES),
-                "source": "cfdtrader.features.store.COMMODITIES_FEATURE_COLUMNS",
+                "set": candidate_set,
+                "columns": list(candidate_features),
+                "source": candidate_source,
             },
         },
         "universe": {
@@ -1002,7 +1205,7 @@ def _payload(
             "adopted_set": adopted.name,
             "n_features": adopted.n_features,
             "features": list(adopted.columns),
-            "production_changes": decision != DECISION_KEEP,
+            "production_changes": (decision != DECISION_KEEP and not is_historical),
             "gate": {
                 "passed": gate_ok,
                 "reason": gate_reason,
@@ -1011,9 +1214,18 @@ def _payload(
             "phase2_ready": False,
             "lane": "B",
             "note": (
-                "carril B (`plan.md` §11.6 / §19.7): esta decision **no** desbloquea produccion "
-                "ni cambia `phase2_ready`. La constante de produccion `BASELINE_FEATURES` solo "
-                "cambia, si el veredicto la adopta, con su propio registro"
+                (
+                    "decision del experimento offline: no cambia la produccion, "
+                    "`BASELINE_FEATURES`, `delivery.run_daily`, las recomendaciones publicas ni "
+                    "`phase2_ready`; cualquier adopcion requiere un seguimiento separado"
+                )
+                if is_historical
+                else (
+                    "carril B (`plan.md` §11.6 / §19.7): esta decision **no** "
+                    "desbloquea produccion "
+                    "ni cambia `phase2_ready`. La constante de produccion `BASELINE_FEATURES` solo "
+                    "cambia, si el veredicto la adopta, con su propio registro"
+                )
             ),
         },
         "identity": {
@@ -1036,6 +1248,47 @@ def _payload(
             ),
         },
     }
+    if is_historical:
+        payload["candidate_group"] = candidate_group
+        payload["historical_market_experiment"] = {
+            "candidate_set": HISTORICAL_MARKET_CANDIDATE_SET,
+            "catalog": [
+                {
+                    "name": entry.name,
+                    "formula": entry.formula,
+                    "window_sessions": entry.window,
+                    "source": entry.source,
+                    "required_as_of": entry.required_as_of,
+                    "design_lag": entry.design_lag,
+                }
+                for entry in HISTORICAL_MARKET_CANDIDATE_CATALOG
+            ],
+            "design_lag_by_feature": {
+                name: dict(window.design_lag_by_feature)[name] for name in candidate_features
+            },
+            "candidate_matrix_sha256": candidate_matrix_sha256,
+            "preflight": dict(candidate_audit or {}),
+            "common_complete_case_window": {
+                "design_rows_before_filter": n_candidate_design_rows,
+                "rows_used": window.n_sessions,
+                "rows_excluded": n_candidate_design_rows - window.n_sessions,
+                "first_session_used": sessions[0].isoformat(),
+                "last_session_used": sessions[-1].isoformat(),
+                "rule": (
+                    "control y ambos candidatos usan exactamente las mismas filas completas; "
+                    "no hay imputacion ni relleno de features"
+                ),
+            },
+            "walk_forward_exclusions": dict(split_plan_audit),
+            "scope": (
+                "experimento independiente de commodities_v1; no cambia BASELINE_FEATURES, "
+                "delivery.run_daily, outputs publicos ni phase2_ready; edge no demostrado"
+            ),
+        }
+        identity = cast("dict[str, object]", payload["identity"])
+        identity["historical_candidate_matrix_sha256"] = candidate_matrix_sha256
+        identity["historical_candidate_spec_sha256"] = _historical_candidate_spec_digest()
+    return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -1050,10 +1303,13 @@ class BudgetReport:
     verdict: Verdict
     decision: str
     adopted: SetMeasurement
+    candidate_group: str = COMMODITIES_CANDIDATE_GROUP
 
     @property
     def report_stem(self) -> str:
-        """Nombre base del informe: ``feature_budget_<AAAA-MM-DD>``."""
+        """Nombre base separado por grupo; el default conserva el artefacto de #146."""
+        if self.candidate_group == HISTORICAL_MARKET_CANDIDATE_GROUP:
+            return f"feature_budget_historical_market_{self.report_date.isoformat()}"
         return f"{REPORT_PREFIX}_{self.report_date.isoformat()}"
 
     def json_text(self) -> str:
@@ -1088,7 +1344,11 @@ def _render_markdown(report: BudgetReport) -> str:
     dsr = cast("Mapping[str, object]", payload["deflated_sharpe_ratio"])
     pbo = cast("Mapping[str, object]", payload["probability_of_backtest_overfitting"])
     lines: list[str] = [
-        "# Presupuesto de features de #24 y re-medida de la Fase 2 (#146)",
+        (
+            "# Medicion de candidatas historicas ES/S&P con el protocolo de #146"
+            if report.candidate_group == HISTORICAL_MARKET_CANDIDATE_GROUP
+            else "# Presupuesto de features de #24 y re-medida de la Fase 2 (#146)"
+        ),
         "",
         f"> **Fecha:** {report.report_date.isoformat()} · **Veredicto:** "
         f"**{report.verdict.verdict}** · **Decision:** **{report.decision}** · "
@@ -1133,6 +1393,25 @@ def _render_markdown(report: BudgetReport) -> str:
             "",
         ]
     )
+    if report.candidate_group == HISTORICAL_MARKET_CANDIDATE_GROUP:
+        experiment = cast("Mapping[str, object]", payload["historical_market_experiment"])
+        window = cast("Mapping[str, object]", experiment["common_complete_case_window"])
+        preflight = cast("Mapping[str, object]", experiment["preflight"])
+        exclusions = cast("Mapping[str, object]", experiment["walk_forward_exclusions"])
+        lines.extend(
+            [
+                "## Preflight y ventana común",
+                "",
+                f"- Snapshot de referencia: `{preflight['reference_snapshot_date']}`.",
+                f"- Filas de diseño: {window['rows_used']} usadas / "
+                f"{window['rows_excluded']} excluidas.",
+                f"- Purga real: {exclusions['purge_total']}; embargo total: "
+                f"{exclusions['embargo_total']}; embargo dentro del train: "
+                f"{exclusions['embargo_in_train_total']}.",
+                "- El dato histórico no demuestra edge y no se adopta en producción.",
+                "",
+            ]
+        )
     return "\n".join(lines)
 
 
@@ -1152,8 +1431,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog=CLI_NAME,
         description=(
-            "Re-mide la Fase 2 para el presupuesto de features de #24 con las candidatas de "
-            "commodities/FX (#143) y publica el veredicto mejora/empata/empeora (#146)"
+            "Mide candidatas de features con el protocolo pre-registrado de #146; "
+            "commodities sigue siendo el grupo por defecto"
         ),
     )
     parser.add_argument("--data-root", type=Path, default=None, help="raiz del almacen")
@@ -1164,6 +1443,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="directorio de informes (por defecto <data-root>/derived/reports)",
     )
     parser.add_argument("--settings", type=Path, default=None, help="ruta de settings.yaml")
+    parser.add_argument(
+        "--candidate-group",
+        choices=(COMMODITIES_CANDIDATE_GROUP, HISTORICAL_MARKET_CANDIDATE_GROUP),
+        default=COMMODITIES_CANDIDATE_GROUP,
+        help=(
+            "grupo pre-registrado a medir; historical_market emite un informe independiente y "
+            "solo lee datos locales"
+        ),
+    )
     parser.add_argument(
         "--as-of",
         default=None,
@@ -1183,7 +1471,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         Path(args.reports_dir) if args.reports_dir is not None else data_root / DEFAULT_REPORTS_DIR
     )
     try:
-        report = measure(store=Store(data_root), as_of=moment)
+        report = measure(
+            store=Store(data_root),
+            as_of=moment,
+            candidate_group=args.candidate_group,
+        )
     except (BudgetError, FeatureFrameError) as error:
         print(f"no se puede emitir el presupuesto de features: {error}", file=sys.stderr)
         return 2
