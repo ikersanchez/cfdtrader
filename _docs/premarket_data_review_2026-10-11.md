@@ -232,6 +232,8 @@ Lo que **queda pendiente** es la **promoción**, no la descarga: medir el candid
 #146/#149 y, **solo si pasa**, convertirlo en *feature*. Aquí no se toca nada de eso: `phase2_ready`
 sigue `false` y el carril B sigue bloqueado.
 
+El seguimiento de esta vía, abierto el 2026-10-11, es el **issue #155**.
+
 **Probado contra la fuente** (2026-10-11, **3 peticiones** en total, 30 s aparte): `2024-06-03` →
 `12:44:51Z` = **5 294,132**; `2024-06-04` → `12:44:57Z` = **5 265,376** (fichero `12h`, EDT); y
 `2024-01-03` → `13:44:57Z` = **4 727,506** (fichero `13h`, EST: el DST cambia la hora, no solo el

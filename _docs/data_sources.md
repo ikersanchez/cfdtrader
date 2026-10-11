@@ -292,7 +292,8 @@ entra en `config/data_sources.yaml`: **no se ingiere**.
 - **`robots.txt`.** `datafeed.dukascopy.com/robots.txt` → `404` (no publica reglas);
   `www.dukascopy.com/robots.txt` → `200` con `Allow: /` salvo rutas internas. No es una autorización:
   manda el ToU.
-- **Decisión del propietario (2026-10-11): se procede por el `datafeed`, con mitigación de carga.**
+- **Decisión del propietario (2026-10-11): se procede por el `datafeed`, con mitigación de carga**
+  —seguimiento: **#155**—.
   El propietario asume la decisión —el ToU exige consentimiento escrito y **no se ha pedido**— y fija
   la condición: **no sobrecargar** el servicio. Esa condición está **implementada en el código**
   (`src/cfdtrader/data/sources/dukascopy.py`) y no solo escrita en prosa: **una peticion por sesion**
