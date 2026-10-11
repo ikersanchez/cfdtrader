@@ -214,6 +214,64 @@ y complementario) y **(3.3)** medir las dos candidatas históricas con la puerta
 
 **Sin la puerta legal, el veredicto de #149 no cambia**: no hay serie utilizable **para el código**.
 
+## 5. Diseño de la ingesta tick→barra — por la **puerta legal** (diseño, **no** implementado)
+
+Se escribe aquí porque la medición **sí** lo justifica técnicamente (el dato existe, cubre la ventana
+y trae `bid`/`ask`), pero la **ejecución** espera a §2.1b/§2.1c. **No hay código nuevo**: implementarlo
+antes de tener la puerta sería construir un scraper que el ToU prohíbe.
+
+**Regla primera: el código no habla con `datafeed.dukascopy.com`.** El fichero entra **a mano**, por la
+herramienta oficial; a partir de ahí todo es local.
+
+### 5.1 Qué se reutiliza (no se inventa nada)
+
+- **El contrato de barras ya existe**: `analysis/premarket_gap.py` (#141) define
+  `PremarketBar(instant, price)`, `SNAPSHOT_ET = 08:45 ET`, `save_bars` / `load_bars` y la captura
+  `--capture-dir` / `--bars-dir` que reproduce **sin red**. La ingesta produce **esas** barras.
+- **El criterio ya existe**: `analysis/premarket_history.py` (#149) mide las tres condiciones
+  —point-in-time, frescura ≤ `MAX_STALENESS_MINUTES` (60), ventana ≥ `sessions_required()`—, y
+  `sessions_required()` se lee de `derived.labels` (medido en el almacén, no estimado).
+- **La puerta ya existe**: `analysis/feature_budget.py` (#146) con DSR/PBO.
+
+### 5.2 Dónde vive el dato crudo
+
+`data/raw/dukascopy/<instrumento>/<AAAA>/<MM>/<DD>/<HHh>.{bi5,csv}` — dentro de `data/` (**ignorado por
+git**: el ToU no permite redistribuir) y con un `LICENSE_NOTE.md` al lado que declare fuente, fecha de
+descarga, uso **personal y no comercial** y la prohibición de redistribuir.
+
+### 5.3 Reglas de construcción (las de #141/#149, **no** otras)
+
+1. **La barra del día es la última cotización con instante ≤ 08:45 ET** — 12:45/13:45 UTC según el DST,
+   resuelto con `zoneinfo` (`data/calendar.py::EASTERN`), **nunca** con un offset fijo.
+2. **`as_of` es el instante del snapshot**, no medianoche (la regla de `data/sources/frames.py`).
+3. **Nada de la sesión que se decide.** Sin tick ≤ 08:45 ET el día es una **ausencia declarada** con su
+   motivo, **nunca** un `0` (el contrato de `FetchResult`/`PremarketGap`).
+4. **Frescura**: se mide y se declara; por encima de 60 min el candidato **no** vale sin decirlo.
+5. **`bid`/`ask`**: el `.bi5` los trae (es ask/bid tick a tick) — es la primera fuente que daría
+   `bid`/`ask` de verdad. `PremarketBar` hoy solo lleva `instant` y `price`: añadirlos sería una
+   **extensión declarada** del contrato de #141, no un campo silencioso.
+
+### 5.4 Piezas a escribir cuando haya puerta
+
+1. `src/cfdtrader/data/sources/dukascopy_import.py` — lector **local** (`.bi5` LZMA *alone* → ticks; o
+   el CSV de la herramienta) que devuelve el frame canónico. **Sin `httpx`**, y un test lo comprueba;
+   el *fixture* `.bi5` de los tests lo **generamos nosotros** (nada de dato de terceros en el repo).
+2. `src/cfdtrader/analysis/premarket_dukascopy.py` — tick → `PremarketBar` de las 08:45 ET, con la
+   reutilización de `--bars-dir` para que la re-medida corra **sin red**.
+3. Re-medida por la puerta de #146/#149 y, **solo si pasa**, promoción a *feature* (`features/store.py`
+   + `analysis/feature_frame.py`) con su `design_lag` declarado (la barra existe a las 08:45 ⇒ `0`).
+
+### 5.5 Lo que falta para arrancar (las dos cosas son del propietario)
+
+- **Un export de muestra** de la herramienta oficial: fija el **formato real** (¿tick o CSV de 1 min?
+  ¿UTC o hora local del bróker? ¿un fichero por sesión o uno por rango?). Sin esa muestra, escribir el
+  lector sería **inventar** un formato.
+- **O** el **correo de consentimiento** de Dukascopy, que reabriría la vía del `datafeed` (§2.1.1) y
+  convertiría el punto 1 en un descargador **permitido y declarado**.
+
+**Lo que no se hará, pase lo que pase:** ni un `httpx` contra el `datafeed` sin consentimiento, ni
+versionar el dato crudo, ni redistribuirlo.
+
 ## Cómo se reproduce la sonda
 
 **La sonda de Dukascopy no se reproduce a escala**: su ToU lo prohíbe sin consentimiento escrito
