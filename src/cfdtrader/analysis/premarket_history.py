@@ -246,23 +246,28 @@ def _daily(store: Store) -> pl.DataFrame:
         raise PremarketHistoryError(f"no se puede leer `raw.market_daily`: {error}") from error
 
 
-class _CachedStore(Store):
+class _CachedStore:
     """El almacen con la consulta que **repite** #141 memorizada: una lectura, no cientos.
 
     Medir la ventana de un candidato pide el gap **sesion a sesion**, y ``premarket_gap.analyse``
     vuelve a leer ``raw.market_daily`` entera en cada llamada: con el almacen real son cientos de
     lecturas identicas. Este envoltorio **no** cambia el calculo —devuelve la misma tabla—, solo
-    deja de repetir la lectura (medido: ~35 min -> segundos con el almacen del repositorio).
+    deja de repetir la lectura (medido: ~35 min -> ~30 s con el almacen del repositorio).
+
+    ``Store`` esta marcado ``@final``, asi que **no** se hereda: el envoltorio declara el contrato
+    que #141 usa de verdad (``sql`` y ``root``) y entra con un ``cast`` explicito en el unico punto
+    donde se le pasa a #141. No se le anade ni se le cambia nada al almacen.
     """
 
     def __init__(self, root: Path) -> None:
-        super().__init__(root)
+        self.root = Path(root)
+        self._store = Store(self.root)
         self._frames: dict[str, pl.DataFrame] = {}
 
     def sql(self, query: str) -> pl.DataFrame:
         """La misma consulta, leida una sola vez por ejecucion."""
         if query not in self._frames:
-            self._frames[query] = super().sql(query)
+            self._frames[query] = self._store.sql(query)
         return self._frames[query]
 
 
@@ -626,8 +631,9 @@ def analyse(
         raise PremarketHistoryError(f"`as_of` tiene que declarar zona horaria: {as_of!r}")
     session, snapshot = premarket_gap.snapshot_instant(as_of)
     # Una lectura por consulta: medir cientos de sesiones no puede escanear el almacen cientos de
-    # veces (el calculo es el de #141, que lee `raw.market_daily` en cada `analyse`).
-    source = store if isinstance(store, _CachedStore) else _CachedStore(store.root)
+    # veces (el calculo es el de #141, que lee `raw.market_daily` en cada `analyse`). `Store` es
+    # `@final`, asi que el envoltorio entra con un `cast` declarado: expone lo unico que #141 usa.
+    source = cast("Store", _CachedStore(store.root))
     frame = _daily(source)
     index_instants, index_closes = _series_closes(frame, INDEX_SERIES)
     index_ohlc = _index_ohlc(frame)

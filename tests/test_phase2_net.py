@@ -117,6 +117,9 @@ RETIRED_BY_LATER_DELIVERIES: Final[frozenset[str]] = frozenset(
         # el mismo criterio que #113/#124/#131/#134 aplicaron a los suyos.
         "src/cfdtrader/delivery/bracket.py",
         "src/cfdtrader/delivery/production.py",
+        # #148 (entrega posterior) anade el dato **declarado** del pre-mercado del ES en
+        # `decision/`: es posterior a esta entrega y no toca este modulo, el mismo criterio.
+        "src/cfdtrader/decision/premarket.py",
     }
 )
 
