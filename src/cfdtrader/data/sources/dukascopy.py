@@ -18,8 +18,11 @@ servicio. Todo lo que sigue existe para eso.
 1. **Una peticion por sesion, no veinticuatro.** Solo se pide el fichero de la **hora UTC que
    contiene** las 08:45 ET (`12h` en EDT, `13h` en EST), deducida con ``zoneinfo`` — nunca con un
    offset fijo. Si esa hora no trae tick, se prueba **una** hora antes y se declara.
-2. **Intervalo minimo entre peticiones de red** (``min_interval_seconds``, **30 s** por defecto):
-   el descargador **duerme** lo que falte antes de cada peticion. Es un ritmo de 2 por minuto.
+2. **Intervalo minimo entre peticiones de red** (``min_interval_seconds``, **1 s**; es la **decision
+   del propietario** del 2026-10-11). El descargador **duerme** lo que falte antes de cada peticion:
+   el backfill completo (~3 000 sesiones) baja de ~25 h a **~50 min**. Es el ritmo mas rapido
+   adoptado, y el modulo **no** ofrece concurrencia — subirlo mas es una decision explicita, no un
+   accidente de configuracion.
 3. **Un solo hilo.** No hay concurrencia: la clase no lanza hilos ni procesos.
 4. **Archivo local**: lo descargado se escribe en ``<raw_dir>`` y **nunca se vuelve a pedir**. Una
    re-ejecucion sobre lo ya bajado **no toca la red** (y no duerme: no consume turno).
@@ -35,7 +38,7 @@ declarada** con su motivo, jamas un ``0``. Esto **no** es una *feature* ni una a
 solo el dato.
 
 Sin red en los tests: el cliente HTTP se **inyecta** (``httpx.MockTransport``) y el sueno tambien
-(``sleep``), de modo que el contrato de cortesia se puede comprobar sin esperar 30 s ni pedir nada.
+(``sleep``), de modo que el contrato de cortesia se puede comprobar sin esperar ni pedir nada.
 """
 
 from __future__ import annotations
@@ -101,11 +104,16 @@ TICK_BYTES: Final[int] = 20
 #: Los precios del fichero son enteros con 3 decimales: 1919331 -> 1 919,331 (S&P de junio de 2014).
 PRICE_SCALE: Final[int] = 1000
 
-#: Intervalo minimo **entre peticiones de red**. 30 s = 2 peticiones por minuto.
-MIN_INTERVAL_SECONDS: Final[float] = 30.0
+#: Intervalo minimo **entre peticiones de red**. **1 s** (decision del propietario, 2026-10-11): el
+#: backfill completo (~3 000 sesiones, una peticion cada una) baja de ~25 h a **~50 min**. El limite
+#: practico no es el sueno, es el control de tasa del proveedor (medido: corta la conexion tras una
+#: rafaga), asi que el modulo **para** en vez de insistir.
+MIN_INTERVAL_SECONDS: Final[float] = 1.0
 
-#: Agotado este numero de peticiones, el run para (y se retoma en otra ejecucion).
-DEFAULT_MAX_REQUESTS: Final[int] = 200
+#: Agotado este numero de peticiones, el run para (y se retoma en otra ejecucion). El tope es una
+#: guarda contra un bucle desbocado, **no** un troceador: con el turno de 1 s, 4 000 peticiones son
+#: ~1 h 07 min, asi que **el backfill entero cabe en una sola pasada**.
+DEFAULT_MAX_REQUESTS: Final[int] = 4000
 
 #: El User-Agent se identifica: quien pide, y a que ritmo.
 USER_AGENT: Final[str] = (

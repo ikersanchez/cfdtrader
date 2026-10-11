@@ -129,8 +129,9 @@ existencia, cobertura y formato. Es una comprobación de viabilidad, no una adqu
    contempla («*without the prior express written consent*»). Es un correo: **acción del propietario**.
 3. **Decisión del propietario (2026-10-11): se procede por el `datafeed`, con la condición de no
    sobrecargar el servicio** — y esa condición queda **implementada**, no prometida: una petición por
-   sesión, 30 s entre peticiones de red, un hilo, archivo local (ni una petición repetida), tope por
-   ejecución y parada en seco ante `429`/`503`. El detalle, en
+   sesión, **1 s entre peticiones de red** (el backfill completo de ~3 000 sesiones son **~50 min**,
+   que es la espera que el propietario considera razonable: 25 h no lo eran), un hilo, archivo local
+   (ni una petición repetida), tope por ejecución y parada en seco ante `429`/`503`. El detalle, en
    `src/cfdtrader/data/sources/dukascopy.py` y en `_docs/data_sources.md` §«Dukascopy».
 4. **Nada de esto reabre #107**, que va de la **cotización del CFD del bróker** (cerrada por el
    propietario el 2026-10-09). Aquí se habla de una **serie de pre-mercado para una feature**: otra
@@ -223,7 +224,7 @@ y complementario) y **(3.3)** medir las dos candidatas históricas con la puerta
 
 `src/cfdtrader/data/sources/dukascopy.py` (con `tests/test_dukascopy_source.py`, 22 tests y sin red)
 implementa la descarga y la decodificación **con el contrato de cortesía dentro del código**, no en
-prosa: **una petición por sesión** (la hora UTC que contiene las 08:45 ET, no las 24), **30 s entre
+prosa: **una petición por sesión** (la hora UTC que contiene las 08:45 ET, no las 24), **1 s entre
 peticiones de red**, **un solo hilo**, **archivo local** (una segunda pasada **no toca la red**),
 **tope por ejecución** y **parada en seco** ante `429`/`503` (§2.1.1, decisión del propietario).
 
@@ -285,8 +286,8 @@ salida de este módulo **sin conversión**.
 
 ### 5.5 Lo que falta para arrancar el backfill
 
-- **Ejecutar el backfill por tramos** (`--start`/`--end`) en varias sesiones: ~2 500 peticiones a dos
-  por minuto ≈ 20 h de reloj, **una sola vez** (después, todo sale del archivo local).
+- **Ejecutar el backfill por tramos** (`--start`/`--end`) en varias sesiones: ~3 000 peticiones a una
+  por segundo ≈ **50 min** de reloj, **una sola vez** (después, todo sale del archivo local).
 - **El correo de consentimiento** a Dukascopy sigue mereciendo la pena: es lo que convertiría esto de
   una decisión asumida en algo **autorizado**, y su ToU lo contempla expresamente.
 

@@ -296,12 +296,21 @@ entra en `config/data_sources.yaml`: **no se ingiere**.
   El propietario asume la decisión —el ToU exige consentimiento escrito y **no se ha pedido**— y fija
   la condición: **no sobrecargar** el servicio. Esa condición está **implementada en el código**
   (`src/cfdtrader/data/sources/dukascopy.py`) y no solo escrita en prosa: **una peticion por sesion**
-  (la hora UTC que contiene las 08:45 ET, no las 24), **30 s de intervalo minimo** entre peticiones de
+  (la hora UTC que contiene las 08:45 ET, no las 24), **1 s de intervalo minimo** entre peticiones de
   red, **un solo hilo**, **archivo local** (lo bajado no se vuelve a pedir: una segunda pasada **no
-  toca la red**), **tope por ejecucion** (`--max-requests`, 200 por defecto, para que un backfill sea
-  retomable y nunca un barrido masivo) y **fallo cerrado** ante `429`/`503` (el run **aborta** en vez
-  de insistir). El `User-Agent` se identifica. Para ~2 500 sesiones son ~2 500 peticiones **una sola
-  vez**, a dos por minuto.
+  toca la red**), **tope por ejecucion** (`--max-requests`, 4 000 por defecto, que es una guarda contra
+  un bucle desbocado y no un troceador) y **fallo cerrado** ante `429`/`503` (el run **aborta** en vez
+  de insistir). El `User-Agent` se identifica. Para ~3 000 sesiones son ~3 000 peticiones **una sola
+  vez**, a una por segundo: **~50 min**.
+- **El ritmo se eligió con una medición delante, no a ojo.** El 2026-10-11, con el turno todavía en
+  30 s (≈25 h de backfill), se midió el coste real de ir rápido: **5 de 5 peticiones** devolvieron
+  `HTTP 000` con `connect=0` y timeout de 25 s —es decir, **el host cortó la conexión**— mientras
+  `www.dukascopy.com` contestaba en **0,16 s** y `github.com` en **0,13 s** en el mismo instante. No
+  era latencia ni caída de red: era el **control de tasa del proveedor**, con memoria (antes ya se
+  habían visto `503` intermitentes a 12 s de separación). De ahí la decisión: **1 s** (≈50 min, que el
+  propietario considera espera razonable) y **nunca** concurrencia. La lección útil es que el límite
+  práctico **no** es nuestro `sleep`: es su limitador, y por eso el módulo **para** en seco en vez de
+  reintentar en bucle.
 - **Vías oficiales, que siguen ahí.** (1) La **herramienta oficial**: *Historical Data Export* (web) o
   **JForex → Historical Data Manager**, que la propia FAQ describe como **gratuita** y con descarga
   *«from tick-by-tick to monthly»* — descarga **manual**, dentro del uso personal y no comercial que el

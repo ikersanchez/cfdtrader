@@ -78,7 +78,7 @@ class Harness:
         handler: Handler,
         *,
         raw_dir: Path | None = None,
-        min_interval_seconds: float = 30.0,
+        min_interval_seconds: float = dukascopy.MIN_INTERVAL_SECONDS,
         max_requests: int | None = dukascopy.DEFAULT_MAX_REQUESTS,
     ) -> None:
         self.asked: list[str] = []
@@ -192,14 +192,25 @@ def test_one_request_per_session_and_the_hour_follows_the_dst() -> None:
 
 
 def test_the_turn_is_respected_between_two_network_requests() -> None:
-    """Dos peticiones de red seguidas se separan por el turno: dos por minuto, no dos de golpe."""
+    """Dos peticiones de red seguidas se separan por el turno, sea cual sea su valor por defecto."""
     harness = Harness(lambda request: ticks_response([(0, 100.0, 99.0)]))
 
     harness.client.hour_ticks(SUMMER_DAY, 12, now=NOW)
     harness.client.hour_ticks(SUMMER_DAY, 13, now=NOW)
 
     assert harness.client.requests == 2
-    assert harness.clock.slept == [30.0]
+    assert harness.clock.slept == [dukascopy.MIN_INTERVAL_SECONDS]
+
+
+def test_the_default_turn_is_the_fastest_rate_adopted() -> None:
+    """El turno por defecto es un numero **declarado**, no uno que aparezca por accidente.
+
+    Se fijo en 1 s el 2026-10-11 (decision del propietario): el backfill de ~3 000 sesiones pasa de
+    ~25 h a ~50 min. Si alguien lo sube o lo baja, este test lo dice.
+    """
+    assert dukascopy.MIN_INTERVAL_SECONDS == 1.0
+    assert f"{dukascopy.MIN_INTERVAL_SECONDS:.0f}s" in dukascopy.USER_AGENT
+    assert dukascopy.DEFAULT_MAX_REQUESTS >= 3000
 
 
 def test_the_local_archive_avoids_the_network_and_the_wait(tmp_path: Path) -> None:
