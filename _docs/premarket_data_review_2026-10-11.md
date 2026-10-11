@@ -56,8 +56,18 @@ $ curl 'https://datafeed.dukascopy.com/datafeed/USA500IDXUSD/2014/05/03/12h_tick
 HTTP 200  1 337 bytes  ->    161 ticks (ask/bid), precio ≈ 1 919,331   # el S&P estaba ~1 920
 ```
 
-Los dos precios **cuadran con la realidad** de su fecha. Y `2014-06-03` responde `200`: la cobertura
-llega **al menos a 2014**, es decir **≥ 10 años** — justo la ventana que el modelo necesita.
+Los dos precios **cuadran con la realidad** de su fecha (el S&P estaba ~1 920 en junio de 2014 y
+~5 284 en junio de 2024). Medición del **inicio** de la cobertura (fichero `12h` UTC = 08:00 ET):
+
+| Fecha | Respuesta |
+|---|---|
+| 2009, 2010, 2011 | `404` (sin cobertura) |
+| 2012-06, 2013-06 | `200`, **0 bytes** (hueco) |
+| **2013-12 · 2014-01 · 2014-06 · 2024-06** | `200`, **con datos** (1 280–8 400 bytes) |
+
+⇒ la cobertura arranca a finales de **2013**: **~12,5 años ≈ 3 000 sesiones**, **más** que las
+**2 688** que exige el modelo. (Las peticiones intermitentes `503`/`000` son **throttling** del
+proveedor, no ausencia de dato: el mismo fichero alterna `200` y `503`.)
 
 Es **tick a tick** del propio subyacente, así que **reconstruye la barra de las 08:45 ET** (el
 instante de decisión, 12:45/13:45 UTC) con la granularidad que se quiera. **Es un candidato gratuito
