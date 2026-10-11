@@ -120,14 +120,19 @@ descarga no está permitido sin consentimiento escrito previo**.
 existencia, cobertura y formato. Es una comprobación de viabilidad, no una adquisición sistemática, y
 **se detuvo** en cuanto apareció el ToU; no se descargó ningún histórico.
 
-**Vías que sí son legales (y son las que se proponen):**
+**Vías que sí son legales, y la decisión que se tomó:**
 
 1. **Herramienta oficial** — *Historical Data Export* (web) o **JForex → Historical Data Manager**:
    la casa da ahí el histórico tick/CSV **gratis** (su FAQ lo declara textualmente). Es una descarga
    **manual**, hecha por la persona ⇒ dentro del uso «personal, non-commercial» del ToU.
 2. **Consentimiento escrito** de Dukascopy para automatizar el `datafeed` — el propio ToU lo
    contempla («*without the prior express written consent*»). Es un correo: **acción del propietario**.
-3. **Nada de esto reabre #107**, que va de la **cotización del CFD del bróker** (cerrada por el
+3. **Decisión del propietario (2026-10-11): se procede por el `datafeed`, con la condición de no
+   sobrecargar el servicio** — y esa condición queda **implementada**, no prometida: una petición por
+   sesión, 30 s entre peticiones de red, un hilo, archivo local (ni una petición repetida), tope por
+   ejecución y parada en seco ante `429`/`503`. El detalle, en
+   `src/cfdtrader/data/sources/dukascopy.py` y en `_docs/data_sources.md` §«Dukascopy».
+4. **Nada de esto reabre #107**, que va de la **cotización del CFD del bróker** (cerrada por el
    propietario el 2026-10-09). Aquí se habla de una **serie de pre-mercado para una feature**: otra
    necesidad, otra fuente, otra decisión.
 
@@ -214,14 +219,17 @@ y complementario) y **(3.3)** medir las dos candidatas históricas con la puerta
 
 **Sin la puerta legal, el veredicto de #149 no cambia**: no hay serie utilizable **para el código**.
 
-## 5. Diseño de la ingesta tick→barra — por la **puerta legal** (diseño, **no** implementado)
+## 5. La ingesta tick→barra — **implementada**, con contrato de cortesía
 
-Se escribe aquí porque la medición **sí** lo justifica técnicamente (el dato existe, cubre la ventana
-y trae `bid`/`ask`), pero la **ejecución** espera a §2.1b/§2.1c. **No hay código nuevo**: implementarlo
-antes de tener la puerta sería construir un scraper que el ToU prohíbe.
+`src/cfdtrader/data/sources/dukascopy.py` (con `tests/test_dukascopy_source.py`, 22 tests y sin red)
+implementa la descarga y la decodificación **con el contrato de cortesía dentro del código**, no en
+prosa: **una petición por sesión** (la hora UTC que contiene las 08:45 ET, no las 24), **30 s entre
+peticiones de red**, **un solo hilo**, **archivo local** (una segunda pasada **no toca la red**),
+**tope por ejecución** y **parada en seco** ante `429`/`503` (§2.1.1, decisión del propietario).
 
-**Regla primera: el código no habla con `datafeed.dukascopy.com`.** El fichero entra **a mano**, por la
-herramienta oficial; a partir de ahí todo es local.
+Lo que **queda pendiente** es la **promoción**, no la descarga: medir el candidato por la puerta de
+#146/#149 y, **solo si pasa**, convertirlo en *feature*. Aquí no se toca nada de eso: `phase2_ready`
+sigue `false` y el carril B sigue bloqueado.
 
 ### 5.1 Qué se reutiliza (no se inventa nada)
 
@@ -235,9 +243,9 @@ herramienta oficial; a partir de ahí todo es local.
 
 ### 5.2 Dónde vive el dato crudo
 
-`data/raw/dukascopy/<instrumento>/<AAAA>/<MM>/<DD>/<HHh>.{bi5,csv}` — dentro de `data/` (**ignorado por
-git**: el ToU no permite redistribuir) y con un `LICENSE_NOTE.md` al lado que declare fuente, fecha de
-descarga, uso **personal y no comercial** y la prohibición de redistribuir.
+`data/raw/dukascopy/<instrumento>/<AAAA>/<MM>/<DD>/<HH>h_ticks.bi5` — dentro de `data/` (**ignorado por
+git**: el ToU no permite redistribuir), y la ausencia se archiva como `<HH>h_ticks.empty`, para no
+volver a preguntar por una hora que ya se sabe vacía.
 
 ### 5.3 Reglas de construcción (las de #141/#149, **no** otras)
 
@@ -251,26 +259,34 @@ descarga, uso **personal y no comercial** y la prohibición de redistribuir.
    `bid`/`ask` de verdad. `PremarketBar` hoy solo lleva `instant` y `price`: añadirlos sería una
    **extensión declarada** del contrato de #141, no un campo silencioso.
 
-### 5.4 Piezas a escribir cuando haya puerta
+### 5.4 Piezas: qué está hecho y qué no
 
-1. `src/cfdtrader/data/sources/dukascopy_import.py` — lector **local** (`.bi5` LZMA *alone* → ticks; o
-   el CSV de la herramienta) que devuelve el frame canónico. **Sin `httpx`**, y un test lo comprueba;
-   el *fixture* `.bi5` de los tests lo **generamos nosotros** (nada de dato de terceros en el repo).
-2. `src/cfdtrader/analysis/premarket_dukascopy.py` — tick → `PremarketBar` de las 08:45 ET, con la
-   reutilización de `--bars-dir` para que la re-medida corra **sin red**.
-3. Re-medida por la puerta de #146/#149 y, **solo si pasa**, promoción a *feature* (`features/store.py`
-   + `analysis/feature_frame.py`) con su `design_lag` declarado (la barra existe a las 08:45 ⇒ `0`).
+Hecho (`src/cfdtrader/data/sources/dukascopy.py`, con `tests/test_dukascopy_source.py`):
 
-### 5.5 Lo que falta para arrancar (las dos cosas son del propietario)
+1. **Decodificación** del `.bi5` (LZMA *alone* → ticks), con el **mes a cero** de la ruta comprobado
+   por test y el **recorte point-in-time** (último tick `<=` 08:45 ET, nunca uno de la sesión que se
+   decide).
+2. **Descarga de cortesía** (`DukascopyClient`): turno de 30 s, tope por ejecución, archivo local y
+   parada en seco, **comprobados sin red ni esperas** (cliente y `sleep` inyectados).
+3. **Salida en el formato de #141**: un test de ida y vuelta contra `premarket_gap.load_bars` impide
+   que los dos formatos se separen.
+4. **CLI** (`python -m cfdtrader.data.sources.dukascopy`): backfill por tramos, retomable; en la salida
+   declara sesiones, barras, ausencias, notas, peticiones de red y horas servidas del archivo.
 
-- **Un export de muestra** de la herramienta oficial: fija el **formato real** (¿tick o CSV de 1 min?
-  ¿UTC o hora local del bróker? ¿un fichero por sesión o uno por rango?). Sin esa muestra, escribir el
-  lector sería **inventar** un formato.
-- **O** el **correo de consentimiento** de Dukascopy, que reabriría la vía del `datafeed` (§2.1.1) y
-  convertiría el punto 1 en un descargador **permitido y declarado**.
+Pendiente (y **no** se toca aquí): la **medición** del candidato con la maquinaria de #146/#149 y, si
+la puerta pasa, la promoción a *feature* (`features/store.py` + `analysis/feature_frame.py`) con su
+`design_lag` declarado (la barra existe a las 08:45 ⇒ `0`). El `--bars-dir` de #149 ya puede leer la
+salida de este módulo **sin conversión**.
 
-**Lo que no se hará, pase lo que pase:** ni un `httpx` contra el `datafeed` sin consentimiento, ni
-versionar el dato crudo, ni redistribuirlo.
+### 5.5 Lo que falta para arrancar el backfill
+
+- **Ejecutar el backfill por tramos** (`--start`/`--end`) en varias sesiones: ~2 500 peticiones a dos
+  por minuto ≈ 20 h de reloj, **una sola vez** (después, todo sale del archivo local).
+- **El correo de consentimiento** a Dukascopy sigue mereciendo la pena: es lo que convertiría esto de
+  una decisión asumida en algo **autorizado**, y su ToU lo contempla expresamente.
+
+**Lo que no se hará, pase lo que pase:** bajar el turno por debajo de lo que aguanta el servicio,
+concurrencia, versionar el dato crudo o redistribuirlo.
 
 ## Cómo se reproduce la sonda
 

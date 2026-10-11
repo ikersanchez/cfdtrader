@@ -287,10 +287,21 @@ entra en `config/data_sources.yaml`: **no se ingiere**.
 - **`robots.txt`.** `datafeed.dukascopy.com/robots.txt` → `404` (no publica reglas);
   `www.dukascopy.com/robots.txt` → `200` con `Allow: /` salvo rutas internas. No es una autorización:
   manda el ToU.
-- **Vías permitidas.** (1) La **herramienta oficial**: *Historical Data Export* (web) o **JForex →
-  Historical Data Manager**, que la propia FAQ describe como **gratuita** y con descarga *«from
-  tick-by-tick to monthly»* — descarga **manual**, dentro del uso personal y no comercial que el ToU
-  admite. (2) **Pedir consentimiento escrito** para automatizar; el ToU lo contempla expresamente.
+- **Decisión del propietario (2026-10-11): se procede por el `datafeed`, con mitigación de carga.**
+  El propietario asume la decisión —el ToU exige consentimiento escrito y **no se ha pedido**— y fija
+  la condición: **no sobrecargar** el servicio. Esa condición está **implementada en el código**
+  (`src/cfdtrader/data/sources/dukascopy.py`) y no solo escrita en prosa: **una peticion por sesion**
+  (la hora UTC que contiene las 08:45 ET, no las 24), **30 s de intervalo minimo** entre peticiones de
+  red, **un solo hilo**, **archivo local** (lo bajado no se vuelve a pedir: una segunda pasada **no
+  toca la red**), **tope por ejecucion** (`--max-requests`, 200 por defecto, para que un backfill sea
+  retomable y nunca un barrido masivo) y **fallo cerrado** ante `429`/`503` (el run **aborta** en vez
+  de insistir). El `User-Agent` se identifica. Para ~2 500 sesiones son ~2 500 peticiones **una sola
+  vez**, a dos por minuto.
+- **Vías oficiales, que siguen ahí.** (1) La **herramienta oficial**: *Historical Data Export* (web) o
+  **JForex → Historical Data Manager**, que la propia FAQ describe como **gratuita** y con descarga
+  *«from tick-by-tick to monthly»* — descarga **manual**, dentro del uso personal y no comercial que el
+  ToU admite. (2) **Pedir consentimiento escrito** para automatizar; el ToU lo contempla expresamente,
+  y sería la forma de que lo de arriba deje de ser una decisión asumida y pase a estar autorizado.
 - **Licencia.** Contenido de Dukascopy: uso **personal y no comercial**, sin redistribución, con
   `source` y `fetched_at` declarados como en cualquier otra fuente; el dato crudo **no** se versiona.
 - **Qué NO es.** Esto **no** reabre **#107** —que va de la **cotización del CFD del bróker**, cerrada

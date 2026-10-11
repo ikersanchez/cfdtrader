@@ -50,6 +50,10 @@ __all__ = [
 #: ``text/xml`` y sus variantes ``rss``/``atom`` se admiten porque un RSS/Atom es
 #: dato válido, no una página de bloqueo (#142): sin ellos, el cliente rechazaba
 #: todos los feeds pese a que la red los sirve.
+#: ``application/octet-stream`` se admite porque así sirve Dukascopy el fichero de
+#: **ticks** ``.bi5`` (comprobado el 2026-10-11: `HTTP 200`, 8 400 bytes): es un
+#: binario de datos, no una página de bloqueo, y las páginas HTML se siguen
+#: cazando antes por la firma de bloqueo.
 ACCEPTED_CONTENT_TYPES: tuple[str, ...] = (
     "text/csv",
     "text/plain",
@@ -60,6 +64,7 @@ ACCEPTED_CONTENT_TYPES: tuple[str, ...] = (
     "application/xml",
     "application/rss+xml",
     "application/atom+xml",
+    "application/octet-stream",
 )
 
 #: Firmas de bloqueo conocidas: HTML/doctype, ``<script`` y el *challenge* de Stooq.
