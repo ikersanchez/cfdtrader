@@ -237,8 +237,15 @@ def _garch_variance(frame: pl.DataFrame) -> np.ndarray:
     ``null``: nunca una excepcion ni un numero inventado.
     """
     returns = np.asarray(frame.get_column(_RET_LOG).to_numpy(), dtype=float)
-    if not bool(np.isfinite(returns).all()):
-        return np.full(returns.shape, np.nan)
+    finite = np.isfinite(returns)
+    if not bool(finite.all()):
+        # Un hueco **de cola** es la sesion sin cerrar de una fila pendiente (#153): el ajuste y la
+        # recursion usan solo las sesiones cerradas y la pendiente se pronostica con la informacion
+        # `<= t-1`, que es exactamente la recursion a un paso. Cualquier otro hueco mantiene la
+        # respuesta conservadora de siempre: sin pronostico para nadie.
+        first_gap = int(np.argmin(finite))
+        if bool(finite[first_gap:].any()):
+            return np.full(returns.shape, np.nan)
     bounds = garch_fold_bounds(
         returns.shape[0], min_train=GARCH_MIN_TRAIN, refit_every=GARCH_REFIT_EVERY
     )

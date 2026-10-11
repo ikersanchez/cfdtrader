@@ -407,9 +407,10 @@ class CatalogEntry:
         Cierre de sesion a partir del cual la feature esta completamente definida.
     design_lag:
         Sesiones que la fila de **diseno** de `t` retrocede para leer esta columna
-        (#147): `0` = el dato de la **propia** sesion `t`, ya publicado en el
-        instantaneo de decision (Tokio y Hong Kong cierran a las 06:00 UTC, antes
-        del snapshot de las 08:45 ET, #151); `1` = la fila de `t-1`.
+        (#147): `0` = el dato de la **propia** sesion `t`, ya computable en el
+        instantaneo de decision —Tokio y Hong Kong cierran a las 06:00 UTC, antes del
+        snapshot de las 08:45 ET (#151), o la formula de `t` solo usa sesiones
+        `<= t-1` (#153)—; `1` = la fila de `t-1`.
     """
 
     name: str
@@ -494,7 +495,7 @@ FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         None,
         "raw.market_daily",
         "cierre de la sesion t-1",
-        1,
+        0,
     ),
     CatalogEntry(
         "vix_level",
@@ -511,7 +512,7 @@ FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         VIX_MIN_SESSIONS,
         "raw.market_daily",
         "cierre de la sesion t-1",
-        1,
+        0,
     ),
     CatalogEntry(
         "vix_percentile",
@@ -1045,7 +1046,7 @@ REGIME_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         REGIME_MIN_SESSIONS,
         "raw.market_daily",
         "cierre de la sesion t-1",
-        1,
+        0,
     ),
     CatalogEntry(
         "efficiency_ratio_20",
@@ -1079,7 +1080,7 @@ REGIME_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
         None,
         "raw.market_daily",
         "de antemano",
-        1,
+        0,
     ),
 )
 
@@ -1269,13 +1270,23 @@ def _design_lag_by_feature() -> dict[str, int]:
 #: ``availability``) y el camino diario, de modo que no hay dos reglas.
 #:
 #: Declaran `0` —el dato de la **propia** sesion `t`, ya publicado en el
-#: instantaneo de las 08:45 ET— las cuatro columnas cuyo input es un mercado que
-#: cierra **antes** de esa hora: el overnight asiatico (`^N225` a las 06:00 UTC y
-#: `^HSI` a las 08:00 UTC, #147), el cierre europeo previo y el dolar (los dos a las
-#: 11:30/17:00 ET del dia **anterior**, #150) y la dispersion sectorial (16:00 ET del
-#: anterior, #150). El resto declara `1`: su fila `t` necesita la barra del ancla de
-#: `t`, o una publicacion posterior al instantaneo (la auditoria razonada de las 10
-#: features de #24 esta en #150).
+#: instantaneo de las 08:45 ET— las ocho columnas cuyo input ya es computable en ese
+#: instante:
+#:
+#: - las cuatro cuyo mercado cierra **antes** de esa hora: el overnight asiatico
+#:   (`^N225` a las 06:00 UTC y `^HSI` a las 08:00 UTC, #147), el cierre europeo previo
+#:   y el dolar (los dos a las 11:30/17:00 ET del dia **anterior**, #150) y la
+#:   dispersion sectorial (16:00 ET del anterior, #150);
+#: - las cuatro de las familias ancladas al S&P cuya fila `t` se calcula **solo** con
+#:   sesiones `<= t-1` (#153): `har_forecast` y `vix_zscore` (volatilidad),
+#:   `garch_forecast_z` e `is_es_roll_session` (regimen). No necesitan la barra del
+#:   ancla de `t`: el primer par ajusta/proyecta con el cierre de `t-1` y el segundo
+#:   lee el calendario.
+#:
+#: El resto declara `1`: su fila `t` necesita la barra del ancla de `t`, o una
+#: publicacion posterior al instantaneo (la auditoria razonada de las 10 features de
+#: #24 esta en #150). `dist_sma_20_z` y `ust_10y_chg_5` son de ese grupo: su desfase
+#: es **forzado**, no evitable.
 DESIGN_LAG_BY_FEATURE: Final[dict[str, int]] = _design_lag_by_feature()
 
 

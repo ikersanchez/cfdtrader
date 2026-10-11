@@ -313,11 +313,18 @@ def har_forecast(frame: pl.DataFrame, *, min_train: int = HAR_MIN_TRAIN) -> pl.D
         target = np.where(variance > 0.0, np.log(variance), np.nan)
 
     forecasts = np.full(variance.shape, np.nan)
-    usable = np.isfinite(regressors).all(axis=1) & np.isfinite(target)
+    # El pronostico de `t` solo necesita los **regresores** de `t`: el objetivo es lo que se
+    # predice, no un input. En la matriz cerrada las dos guardias coinciden fila a fila (ninguna
+    # sesion real tiene regresores y le falta el objetivo); en una **fila pendiente** (#153) —la
+    # sesion `t` evaluada antes de que el ancla cierre— hay regresores y **no** objetivo, y el
+    # pronostico de `t` existe igual. Por eso la guardia de prediccion mira solo los regresores y
+    # el entrenamiento sigue exigiendo objetivo (`trainable`).
+    predictable = np.isfinite(regressors).all(axis=1)
+    trainable = predictable & np.isfinite(target)
     for index in range(target.shape[0]):
-        if not usable[index]:
+        if not predictable[index]:
             continue
-        train = np.flatnonzero(usable[:index])
+        train = np.flatnonzero(trainable[:index])
         if train.size < max(min_train, HAR_MIN_TRAIN):
             continue
         fitted = fit_log_har(regressors[train], target[train])

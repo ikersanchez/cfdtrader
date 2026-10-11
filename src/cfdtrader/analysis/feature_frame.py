@@ -59,6 +59,7 @@ __all__ = [
     "FEATURES_LIMITATIONS",
     "MACRO_QUERY",
     "MARKET_QUERY",
+    "PENDING_FAMILY_COLUMNS",
     "SECTORS_QUERY",
     "FamilyFrames",
     "FeatureFrame",
@@ -298,18 +299,105 @@ def missing_context_series(store: Store) -> tuple[str, ...]:
     return tuple(name for name in feature_store.CONTEXT_SERIES if name not in present)
 
 
+#: **Columnas pendientes** de las familias ancladas al S&P (#153): su fila `t` se calcula **solo**
+#: con sesiones `<= t-1`, asi que su valor ya existe en el instantaneo de decision (08:45 ET) aunque
+#: el ancla no haya cerrado. Cada entrada dice de que **familia** sale la columna; el cruce con
+#: `DESIGN_LAG_BY_FEATURE` (`design_lag = 0`) lo fija un test, igual que #147/#150 hacen con las de
+#: :data:`cfdtrader.features.context.PENDING_COLUMNS`.
+PENDING_FAMILY_COLUMNS: Final[dict[str, str]] = {
+    "har_forecast": feature_store.VOLATILITY_FEATURE_SET,
+    "vix_zscore": feature_store.VOLATILITY_FEATURE_SET,
+    "garch_forecast_z": feature_store.REGIME_FEATURE_SET,
+    "is_es_roll_session": feature_store.REGIME_FEATURE_SET,
+}
+
+
+def _pending_bar(session: date) -> pl.DataFrame:
+    """La **fila pendiente**: la sesion `t` con el OHLC a nulo (el ancla aun no ha cerrado).
+
+    No lleva `as_of`: no hay cierre que declarar. Sus formulas de familia leen solo sesiones
+    `<= t-1`, asi que el valor de `t` sale del **mismo** codigo que la matriz.
+    """
+    return pl.DataFrame(
+        {"session": [session], "open": [None], "high": [None], "low": [None], "close": [None]},
+        schema={
+            "session": pl.Date(),
+            "open": pl.Float64(),
+            "high": pl.Float64(),
+            "low": pl.Float64(),
+            "close": pl.Float64(),
+        },
+    )
+
+
+def _pending_value(frame: pl.DataFrame, *, session: date, column: str) -> float | None:
+    """El valor de esa columna en la fila de `session`: ``null`` si no es computable, sin ceros."""
+    selected = frame.filter(pl.col("session") == session)
+    if selected.height != 1:
+        raise FeatureFrameError(
+            f"la fila pendiente de {session.isoformat()} no esta exactamente una vez en la matriz "
+            f"de la familia ({selected.height}): no se puede leer '{column}'"
+        )
+    value = selected.get_column(column).to_list()[0]
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return float(int(value))
+    if isinstance(value, int):
+        return float(value)
+    return float(cast("float", value))
+
+
+def _pending_family_values(
+    store: Store, *, session: date, columns: Sequence[str]
+) -> dict[str, float | None]:
+    """El valor de esas columnas en la **fila pendiente** `t`, con la formula de su familia (#153).
+
+    Se arma el frame del ancla con la fila pendiente al final y se corren las funciones de la
+    familia (:func:`cfdtrader.features.volatility.add_features`,
+    :func:`cfdtrader.features.regime.regime_matrix`): **no** hay una segunda copia de las formulas.
+    La fila pendiente no mueve las sesiones cerradas —todas las formulas son *point-in-time*—, de
+    modo que el valor de `t` es el que publicaria la matriz completa en su fila `t`.
+    """
+    market, _sectors, _macro = _load_raw(store)
+    anchor, vix = _anchor_and_vix(market, series_id=ANCHOR_SERIES)
+    bars = pl.concat(
+        [anchor.select("session", "open", "high", "low", "close"), _pending_bar(session)],
+        how="vertical",
+    )
+    families = {PENDING_FAMILY_COLUMNS[name] for name in columns}
+    frames: dict[str, pl.DataFrame] = {}
+    if feature_store.VOLATILITY_FEATURE_SET in families:
+        vix_bars = pl.concat(
+            [vix.select("session", "close"), _pending_bar(session).select("session", "close")],
+            how="vertical",
+        )
+        frames[feature_store.VOLATILITY_FEATURE_SET] = _volatility_frame(bars, vix_bars)
+    if feature_store.REGIME_FEATURE_SET in families:
+        frames[feature_store.REGIME_FEATURE_SET] = regime_matrix(bars, spec=regime_spec())
+    return {
+        name: _pending_value(frames[PENDING_FAMILY_COLUMNS[name]], session=session, column=name)
+        for name in columns
+    }
+
+
 def pending_session_values(
     store: Store, *, session: date, columns: Sequence[str]
 ) -> dict[str, float | None]:
-    """Los valores de las columnas **pendientes** de la sesion `t`, leidos del almacen (#147).
+    """Los valores de las columnas **pendientes** de la sesion `t`, leidos del almacen (#147/#153).
 
     El camino diario decide `t` a las 08:45 ET, **antes** de que el ancla publique su barra: la
-    matriz de features no tiene fila para `t` y no se puede leer de ahi. Las columnas cuyo mercado
-    ya cerro en el instantaneo (``design_lag = 0`` y declaradas en
-    :data:`cfdtrader.features.context.PENDING_COLUMNS`) si son legibles, y se calculan con la
-    **misma** formula que la matriz
-    (:func:`cfdtrader.features.context.pending_context_values`), de modo que el vector servido y
-    la fila de diseno de la misma sesion no pueden divergir.
+    matriz de features no tiene fila para `t` y no se puede leer de ahi. Las columnas etiquetadas
+    como legibles en el instantaneo (`design_lag = 0`) si se calculan, con la **misma** formula que
+    la matriz, por dos caminos segun su familia:
+
+    - las de **mercado ajeno** (:data:`cfdtrader.features.context.PENDING_COLUMNS`) con
+      :func:`cfdtrader.features.context.pending_context_values`;
+    - las de las familias **ancladas al S&P** (:data:`PENDING_FAMILY_COLUMNS`, #153) con
+      :func:`_pending_family_values`, que corre la familia sobre el ancla mas una fila pendiente.
+
+    Los dos caminos los declara el **mismo** mapa de disponibilidad (`DESIGN_LAG_BY_FEATURE`), de
+    modo que el vector servido y la fila de diseno de la misma sesion no pueden divergir.
 
     Una serie que falte **no** se sustituye por el valor de otra sesion: entra como frame vacio, el
     valor sale ``null`` y el camino diario lo rechaza con la guardia de calidad de fila (§8.4).
@@ -322,12 +410,35 @@ def pending_session_values(
         La sesion pendiente `t`.
     columns:
         Las columnas pendientes pedidas. Una que no este declarada es
-        :class:`cfdtrader.features.store.ContextInputError`, desde el modulo que la conoce.
+        :class:`cfdtrader.features.store.ContextInputError`.
     """
-    available = load_context_inputs(store)
-    needed = tuple(dict.fromkeys(name for column in columns for name in PENDING_COLUMNS[column]))
-    frames = {name: available.get(name, _empty(CONTEXT_MARKET_SCHEMA)) for name in needed}
-    return pending_context_values(frames, session=session, columns=columns)
+    requested = tuple(columns)
+    if not requested:
+        raise feature_store.ContextInputError(
+            "no se pide ninguna columna pendiente: el camino diario solo lee aqui lo que declaran "
+            "PENDING_COLUMNS y PENDING_FAMILY_COLUMNS, y una lista vacia no es una lectura"
+        )
+    context_columns = tuple(name for name in requested if name in PENDING_COLUMNS)
+    family_columns = tuple(
+        name for name in requested if name not in PENDING_COLUMNS and name in PENDING_FAMILY_COLUMNS
+    )
+    unknown = sorted(set(requested) - set(context_columns) - set(family_columns))
+    if unknown:
+        raise feature_store.ContextInputError(
+            f"esas columnas no son legibles en el instantaneo de decision: {unknown}; las "
+            f"declaradas son {sorted({*PENDING_COLUMNS, *PENDING_FAMILY_COLUMNS})}"
+        )
+    values: dict[str, float | None] = {}
+    if context_columns:
+        available = load_context_inputs(store)
+        needed = tuple(
+            dict.fromkeys(name for column in context_columns for name in PENDING_COLUMNS[column])
+        )
+        frames = {name: available.get(name, _empty(CONTEXT_MARKET_SCHEMA)) for name in needed}
+        values.update(pending_context_values(frames, session=session, columns=context_columns))
+    if family_columns:
+        values.update(_pending_family_values(store, session=session, columns=family_columns))
+    return {name: values[name] for name in requested}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
