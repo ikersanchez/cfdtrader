@@ -85,6 +85,29 @@ def _row(frame: pl.DataFrame, session: date) -> Mapping[str, object]:
     return selected.row(0, named=True)
 
 
+def _hide_anchor_session(monkeypatch: pytest.MonkeyPatch, session: date) -> None:
+    """Deja el almacen como en el instantaneo: el **ancla** no tiene la barra de `session`.
+
+    Es lo que pasa a las 08:45 ET: la matriz cerrada llega hasta `t-1` y la barra del ancla de `t`
+    no existe. Solo se oculta el ancla (y el VIX, que ancla la familia de volatilidad): las series
+    de mercado ajeno que ya cerraron **si** tienen su dato (# 150), y ya lo tenian antes de #153.
+    """
+    real = ff._load_raw  # pyright: ignore[reportPrivateUsage]
+    hidden = {ff.ANCHOR_SERIES, ff.VIX_SERIES}
+
+    def truncated(
+        store: Store,
+    ) -> tuple[dict[str, pl.DataFrame], dict[str, pl.DataFrame], dict[str, pl.DataFrame]]:
+        market, sectors, macro = real(store)
+        for name in hidden:
+            frame = market.get(name)
+            if frame is not None:
+                market[name] = frame.filter(pl.col("session") < session)
+        return market, sectors, macro
+
+    monkeypatch.setattr(ff, "_load_raw", truncated)  # pyright: ignore[reportPrivateUsage]
+
+
 def _synthetic(rows: int = 12) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Features con valores que dicen **de que sesion** viene cada celda (como en #147)."""
     days = [date(2024, 1, 2) + timedelta(days=index) for index in range(rows)]
@@ -97,11 +120,19 @@ def _synthetic(rows: int = 12) -> tuple[pl.DataFrame, pl.DataFrame]:
     return pl.DataFrame(data), labels
 
 
-#: La auditoria de #150 (C5): para **cada** feature de #24, el rezago declarado y su motivo. Los
-#: cuatro `0` son las que ya estan publicadas en el snapshot; los seis `1` se justifican uno a uno
-#: —dos **forzados** por el reloj del ancla y cuatro **evitables** pero bloqueados por la
-#: arquitectura de la matriz (seguimiento en #153)—. La tabla es el contrato declarado, no una
-#: medicion de un artefacto regenerable.
+#: Las columnas que #153 mueve: su fila `t` se calcula **solo** con sesiones `<= t-1`, asi que dejan
+#: de tener un desfase evitable cuando la matriz sabe construir una fila pendiente.
+MOVED_BY_153: Final[tuple[str, ...]] = (
+    "har_forecast",
+    "vix_zscore",
+    "garch_forecast_z",
+    "is_es_roll_session",
+)
+
+#: La auditoria de #150 (C5), actualizada por #153: para **cada** feature de #24, el rezago
+#: y su motivo. Los ocho `0` ya estan publicados o son computables en el snapshot (#147/#150/#153);
+#: los dos `1` son **forzados** por el reloj del ancla o por el corte *point-in-time* de la familia
+#: macro. La tabla es el contrato declarado, no una medicion de un artefacto regenerable.
 AUDIT: Final[dict[str, tuple[int, str]]] = {
     "asia_overnight_1": (
         0,
@@ -117,25 +148,24 @@ AUDIT: Final[dict[str, tuple[int, str]]] = {
         "los ETF sectoriales cierran a las 16:00 ET del dia anterior, antes del snapshot (#150)",
     ),
     "vix_zscore": (
-        1,
-        "evitable: la ventana ya esta desplazada (`vix_close` de `t-1`), pero es la familia de "
-        "volatilidad, anclada al calendario del S&P, y su fila `t` no es publicable sin una fila "
-        "pendiente en la matriz (#153)",
+        0,
+        "la ventana ya esta desplazada (`vix_close` de `t-1`): la fila `t` se calcula con "
+        "sesiones `<= t-1` y se sirve desde la fila pendiente (#153)",
     ),
     "har_forecast": (
-        1,
-        "evitable: se ajusta con las sesiones `< t`, pero vive en la familia de volatilidad "
-        "(misma razon que `vix_zscore`, #153)",
+        0,
+        "se ajusta con las sesiones `< t` y proyecta con los regresores de `t`: computable en el "
+        "instantaneo, servida desde la fila pendiente de la familia (#153)",
     ),
     "garch_forecast_z": (
-        1,
-        "evitable: usa `ret_log` hasta `t-1`, pero vive en la familia de regimen (misma razon, "
-        "#153)",
+        0,
+        "usa `ret_log` hasta `t-1`: la recursion a un paso da el pronostico de `t` con la "
+        "informacion ya publicada, servida desde la fila pendiente (#153)",
     ),
     "is_es_roll_session": (
-        1,
-        "evitable: es el calendario (`de antemano`), pero vive en la familia de regimen "
-        "(misma razon, #153)",
+        0,
+        "es el calendario (`de antemano`): no depende de ninguna barra, servida desde la fila "
+        "pendiente (#153)",
     ),
     "dist_sma_20_z": (
         1,
@@ -165,16 +195,19 @@ def test_c5_the_audit_is_declared_column_by_column() -> None:
     for name, (lag, reason) in AUDIT.items():
         assert declared[name] == lag, name
         assert len(reason) > 40, name
-    assert {name for name, (lag, _) in AUDIT.items() if lag == 0} == set(MOVED_COLUMNS) | {
-        "asia_overnight_1"
+    assert {name for name, (lag, _) in AUDIT.items() if lag == 0} == (
+        set(MOVED_COLUMNS) | {"asia_overnight_1"} | set(MOVED_BY_153)
+    )
+    assert {name for name, (lag, _) in AUDIT.items() if lag == 1} == {
+        "dist_sma_20_z",
+        "ust_10y_chg_5",
     }
 
 
-def test_c5_the_avoidable_gaps_are_tracked_and_the_forced_ones_are_not() -> None:
-    """La auditoria separa lo **evitable** de lo **forzado**, y el seguimiento existe."""
-    evitable = (AUDIT["vix_zscore"][1], AUDIT["har_forecast"][1], AUDIT["garch_forecast_z"][1])
-    assert all("#153" in reason for reason in evitable)
-    assert all(AUDIT[name][0] == 1 for name in ("vix_zscore", "har_forecast", "garch_forecast_z"))
+def test_c5_the_avoidable_gaps_are_closed_and_the_forced_ones_are_not() -> None:
+    """La auditoria separa lo **evitable** (cerrado por #153) de lo **forzado** (sigue igual)."""
+    assert all(AUDIT[name][0] == 0 for name in MOVED_BY_153)
+    assert all("#153" in AUDIT[name][1] for name in MOVED_BY_153)
     assert all(AUDIT[name][0] == 1 for name in ("dist_sma_20_z", "ust_10y_chg_5"))
     assert "forzado" in AUDIT["dist_sma_20_z"][1]
     assert "forzado" in AUDIT["ust_10y_chg_5"][1]
@@ -203,11 +236,13 @@ def test_c6_the_columns_without_avoidable_lag_keep_their_value() -> None:
     features, labels = _synthetic()
     before = design_frame(features, labels=labels, availability=BEFORE)
     after = design_frame(features, labels=labels, availability=feature_store.DESIGN_LAG_BY_FEATURE)
-    untouched = [name for name in BASELINE_FEATURES if name not in MOVED_COLUMNS]
+    untouched = [
+        name for name in BASELINE_FEATURES if name not in MOVED_COLUMNS and name not in MOVED_BY_153
+    ]
     assert after.frame.select("session", "y", *untouched).equals(
         before.frame.select("session", "y", *untouched)
     )
-    for name in MOVED_COLUMNS:
+    for name in (*MOVED_COLUMNS, *MOVED_BY_153):
         assert after.frame[name].to_list() != before.frame[name].to_list(), name
     assert after.design_lag_by_feature != before.design_lag_by_feature
 
@@ -276,15 +311,20 @@ def test_c2_every_declared_zero_has_a_pending_reader_and_only_context_columns_do
     """Una columna con `design_lag = 0` **tiene** lector pendiente, y el lector solo lee esas.
 
     Es el cruce que impide que el catalogo diga «disponible en `t`» y el camino diario no sepa
-    calcularla (o al reves). Solo puede declararse `0` una columna de **contexto**: las demas
-    familias se anclan al calendario del S&P y su fila `t` no es publicable (#153).
+    calcularla (o al reves). Hay **dos** caminos declarados —el de mercado ajeno
+    (`context.PENDING_COLUMNS`) y el de las familias ancladas al S&P (`PENDING_FAMILY_COLUMNS`,
+    #153)— y su union es exactamente el conjunto de columnas con `design_lag = 0`.
     """
     declared = feature_store.DESIGN_LAG_BY_FEATURE
     zero = {name for name, lag in declared.items() if lag == 0}
-    assert zero == set(context_features.PENDING_COLUMNS)
-    assert zero <= set(feature_store.CONTEXT_FEATURE_COLUMNS)
+    assert zero == set(context_features.PENDING_COLUMNS) | set(ff.PENDING_FAMILY_COLUMNS)
+    assert set(context_features.PENDING_COLUMNS).isdisjoint(ff.PENDING_FAMILY_COLUMNS)
     formulas = context_features._PENDING_FORMULAS  # pyright: ignore[reportPrivateUsage]
-    assert set(formulas) == zero
+    assert set(formulas) == set(context_features.PENDING_COLUMNS)
+    assert set(ff.PENDING_FAMILY_COLUMNS.values()) <= {
+        feature_store.VOLATILITY_FEATURE_SET,
+        feature_store.REGIME_FEATURE_SET,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -316,13 +356,15 @@ def test_c3_the_golden_case_of_2026_10_09_reads_the_close_of_the_8th(
 
 @needs_store
 def test_c7_the_served_vector_matches_the_design_for_the_moved_columns(
-    real_frame: ff.FeatureFrame,
+    real_frame: ff.FeatureFrame, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """El vector servido y la fila de diseno de `t` coinciden en las tres columnas (C7).
 
     Es el cierre del argumento de #147 aplicado a #150: la regla es **una**, y la lee tanto el
     diseno como el camino diario. Ademas, el valor servido **no** es el de la fila anterior: si
-    fuera el mismo, el desfase de dos sesiones seguiria ahi.
+    fuera el mismo, el desfase de dos sesiones seguiria ahi. Desde #153 el almacen se deja como en
+    el instantaneo (la barra del ancla de `t` no existe), porque el vector servido lee tambien las
+    columnas de volatilidad/regimen de la fila pendiente.
     """
     store = Store(REAL_DATA)
     design = real_frame.design
@@ -330,6 +372,7 @@ def test_c7_the_served_vector_matches_the_design_for_the_moved_columns(
     reference = _row(design.frame, session)
     previous = cast("date", reference[DESIGN_SESSION_COLUMN])
     row = _row(real_frame.matrix.frame, previous)
+    _hide_anchor_session(monkeypatch, session)
     served = run_daily._served_vector(  # pyright: ignore[reportPrivateUsage]
         store, session=session, row=row
     )

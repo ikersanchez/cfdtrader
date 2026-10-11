@@ -97,6 +97,30 @@ def _synthetic(rows: int = 6) -> tuple[pl.DataFrame, pl.DataFrame]:
     return pl.DataFrame(data), labels
 
 
+def _hide_anchor_session(monkeypatch: pytest.MonkeyPatch, session: date) -> None:
+    """Deja el almacen como en el instantaneo: el **ancla** no tiene la barra de `session`.
+
+    A las 08:45 ET la matriz cerrada llega hasta `t-1` y la barra del ancla de `t` no existe. Solo
+    se oculta el ancla (y el VIX, que ancla la familia de volatilidad): las series de mercado ajeno
+    que ya cerraron **si** tienen su dato (#150). Desde #153 el vector servido lee tambien las
+    columnas de volatilidad/regimen de la fila pendiente, asi que hace falta esta vista.
+    """
+    real = ff._load_raw  # pyright: ignore[reportPrivateUsage]
+    hidden = {ff.ANCHOR_SERIES, ff.VIX_SERIES}
+
+    def truncated(
+        store: Store,
+    ) -> tuple[dict[str, pl.DataFrame], dict[str, pl.DataFrame], dict[str, pl.DataFrame]]:
+        market, sectors, macro = real(store)
+        for name in hidden:
+            frame = market.get(name)
+            if frame is not None:
+                market[name] = frame.filter(pl.col("session") < session)
+        return market, sectors, macro
+
+    monkeypatch.setattr(ff, "_load_raw", truncated)  # pyright: ignore[reportPrivateUsage]
+
+
 def _row(frame: pl.DataFrame, session: date) -> Mapping[str, object]:
     """La fila de esa sesion, como `Mapping` (o un fallo claro si no esta)."""
     selected = frame.filter(pl.col("session") == session)
@@ -128,7 +152,9 @@ def test_c2_the_pending_columns_match_the_declared_zero_lag() -> None:
     Es el cruce que impide que el catalogo diga «disponible en `t`» y el codigo no sepa calcularla
     (o al reves): `PENDING_COLUMNS` es la formula y `design_lag`, la declaracion.
     """
-    assert tuple(sorted(context_features.PENDING_COLUMNS)) == ZERO_LAG_COLUMNS
+    readers = set(context_features.PENDING_COLUMNS) | set(ff.PENDING_FAMILY_COLUMNS)
+    assert tuple(sorted(readers)) == ZERO_LAG_COLUMNS
+    assert set(context_features.PENDING_COLUMNS).isdisjoint(ff.PENDING_FAMILY_COLUMNS)
     declared_inputs = set(feature_store.CONTEXT_MARKET_SERIES) | set(
         feature_store.CONTEXT_SECTOR_SERIES
     )
@@ -394,14 +420,15 @@ def test_c3_the_golden_case_of_2026_10_09_reads_the_asia_of_the_9th(
 
 @needs_store
 def test_c6_the_served_vector_is_the_design_row_of_the_same_session(
-    real_frame: ff.FeatureFrame,
+    real_frame: ff.FeatureFrame, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """El vector que sirve el camino diario y la fila de diseno de `t` son **el mismo** (C6).
 
     Es el cierre del argumento: no hay *train/serve skew*. La sesion se elige con etiqueta (la
     ultima del diseno) y el vector se construye como en el camino diario —la fila de la sesion
     anterior para las columnas con `design_lag = 1` y la lectura de la sesion `t` para las de
-    `design_lag = 0`— con la **misma** funcion que usa `run_daily`.
+    `design_lag = 0`— con la **misma** funcion que usa `run_daily`. El almacen se deja como en el
+    instantaneo (la barra del ancla de `t` no existe), que es lo que el camino diario se encuentra.
     """
     store = Store(REAL_DATA)
     design = real_frame.design
@@ -409,6 +436,7 @@ def test_c6_the_served_vector_is_the_design_row_of_the_same_session(
     reference = _row(design.frame, session)
     previous = cast("date", reference[DESIGN_SESSION_COLUMN])
     row = _row(real_frame.matrix.frame, previous)
+    _hide_anchor_session(monkeypatch, session)
 
     served = run_daily._served_vector(  # pyright: ignore[reportPrivateUsage]
         store, session=session, row=row
