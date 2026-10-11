@@ -382,7 +382,14 @@ def _model_document(*, calibration: dict[str, object] | None) -> dict[str, objec
     }
     if calibration is not None:
         fold["calibration"] = calibration
-    return {"model": {"features": list(BASELINE_FEATURES), "folds": [fold]}, "note": ""}
+    return {
+        "model": {
+            "features": list(BASELINE_FEATURES),
+            "design_lag_by_feature": dict(_DESIGN_LAG),
+            "folds": [fold],
+        },
+        "note": "",
+    }
 
 
 _PLATT: Final[dict[str, object]] = {
@@ -410,6 +417,12 @@ _NONE: Final[dict[str, object]] = {
 }
 
 _FEATURES: Final[dict[str, float]] = dict.fromkeys(BASELINE_FEATURES, 3.0)
+
+#: La **alineacion de diseno** vigente del catalogo (#152): un modelo bien formado tiene que
+#: declararla tal cual. Se deriva del catalogo en vez de repetirla, para no quedarse atras.
+_DESIGN_LAG: Final[dict[str, int]] = {
+    name: feature_store.DESIGN_LAG_BY_FEATURE[name] for name in BASELINE_FEATURES
+}
 
 
 def _write_model(root: Path, document: Mapping[str, object], *, run_id: str = RUN_ID) -> Path:
@@ -1479,6 +1492,7 @@ def test_predict_rejects_malformed_documents(tmp_path: Path) -> None:
                     {
                         "model": {
                             "features": list(BASELINE_FEATURES),
+                            "design_lag_by_feature": dict(_DESIGN_LAG),
                             "folds": [
                                 {"mean": [0.0] * 10, "coefficients": [0.0] * 10, "intercept": 0.0}
                             ],
@@ -1498,6 +1512,7 @@ def test_predict_rejects_malformed_documents(tmp_path: Path) -> None:
                     {
                         "model": {
                             "features": list(BASELINE_FEATURES),
+                            "design_lag_by_feature": dict(_DESIGN_LAG),
                             "folds": [
                                 {
                                     "mean": [0.0] * 10,
@@ -1862,6 +1877,7 @@ def _lightgbm_document(
             "hyperparameters": {"objective": "binary", "num_leaves": 3, "seed": 7},
             "seed": 7,
             "design_lag_sessions": 1,
+            "design_lag_by_feature": dict(_DESIGN_LAG),
             "decision_threshold": 0.55,
             "folds": [fold],
         },
