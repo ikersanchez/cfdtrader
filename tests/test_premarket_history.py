@@ -14,6 +14,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Final, cast
 
+import polars as pl
 import pytest
 
 from cfdtrader.analysis import premarket_gap, premarket_history
@@ -228,12 +229,13 @@ def test_c2_a_stale_granularity_declares_its_delay(tmp_path: Path) -> None:
 
 
 def test_c12_the_daily_series_cannot_give_a_point_in_time_datum(tmp_path: Path) -> None:
-    """La diaria: su unica barra antes del snapshot **es** el cierre de referencia del ES."""
+    """La diaria viene sellada al inicio de su ventana: su dato a las 08:45 seria *look-ahead*."""
     payload = report(tmp_path / "store")
     diaria = by_key(payload, "es_1d")
     assert diaria["state"] == "unavailable"
     assert diaria["sessions_with_datum"] == 0
-    assert "cierre de referencia" in str(diaria["reason"])
+    assert diaria["example"] is None, "no puede haber un ejemplo con una barra de la propia sesion"
+    assert "look-ahead" in str(diaria["reason"])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -333,6 +335,21 @@ def test_c6_the_report_is_built_without_network(
     payload = cast("dict[str, object]", json.loads(json_path.read_text(encoding="utf-8")))
     assert verdict(payload)["decision"] == "no_series"
     assert "Valla de honestidad" in markdown_path.read_text(encoding="utf-8")
+
+
+def test_the_store_is_read_once_per_query(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Medir N sesiones **no** escanea el almacen N veces: cada consulta se lee una sola vez."""
+    calls: list[str] = []
+    original = Store.sql
+
+    def spy(self: Store, query: str) -> pl.DataFrame:
+        calls.append(query)
+        return original(self, query)
+
+    monkeypatch.setattr(Store, "sql", spy)
+    report(tmp_path / "store")
+    assert calls == list(dict.fromkeys(calls)), "la misma consulta se leyo mas de una vez"
+    assert len(calls) >= 2, "el almacen tiene que leerse: el contador no puede estar vacio"
 
 
 def test_c7_the_gap_is_measured_by_141(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

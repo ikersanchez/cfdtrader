@@ -110,6 +110,13 @@ class CandidateSpec:
     period: str
     extended_hours: bool
     note: str
+    stamp_at_window_start: bool = False
+    """Si la barra viene sellada al **inicio** de su ventana en vez de a su cierre.
+
+    La barra **diaria** del proveedor llega sellada a las 00:00 ET de **su propia** sesion aunque su
+    valor sea el cierre de las 16:00: usar esa barra a las 08:45 seria *look-ahead*, asi que el dato
+    **no** se cuenta como point-in-time. El resto de granularidades llevan el sello de su cierre.
+    """
 
 
 #: Los candidatos que se descargan de verdad: la fuente gratuita ya declarada, a cuatro
@@ -145,7 +152,11 @@ CANDIDATES: Final[tuple[CandidateSpec, ...]] = (
         interval="1d",
         period="max",
         extended_hours=False,
-        note="la barra diaria es una ventana de 24 h: su dato a las 08:45 es el cierre de ayer",
+        note=(
+            "la barra diaria es una ventana de 24 h sellada al inicio del dia: leerla a las 08:45 "
+            "seria *look-ahead*, y su `open(t) ~= close(t-1)` la hace redundante"
+        ),
+        stamp_at_window_start=True,
     ),
 )
 
@@ -233,6 +244,26 @@ def _daily(store: Store) -> pl.DataFrame:
         return store.sql("SELECT series_id, as_of, open, close FROM raw.market_daily")
     except (UnknownDatasetError, OSError, ValueError) as error:
         raise PremarketHistoryError(f"no se puede leer `raw.market_daily`: {error}") from error
+
+
+class _CachedStore(Store):
+    """El almacen con la consulta que **repite** #141 memorizada: una lectura, no cientos.
+
+    Medir la ventana de un candidato pide el gap **sesion a sesion**, y ``premarket_gap.analyse``
+    vuelve a leer ``raw.market_daily`` entera en cada llamada: con el almacen real son cientos de
+    lecturas identicas. Este envoltorio **no** cambia el calculo —devuelve la misma tabla—, solo
+    deja de repetir la lectura (medido: ~35 min -> segundos con el almacen del repositorio).
+    """
+
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        self._frames: dict[str, pl.DataFrame] = {}
+
+    def sql(self, query: str) -> pl.DataFrame:
+        """La misma consulta, leida una sola vez por ejecucion."""
+        if query not in self._frames:
+            self._frames[query] = super().sql(query)
+        return self._frames[query]
 
 
 def sessions_required(store: Store) -> int:
@@ -355,7 +386,11 @@ def measure_candidate(
     for day in sorted(buckets):
         snapshot = _snapshot(day)
         bucket = buckets[day]
-        if bucket[0].instant > snapshot:
+        if spec.stamp_at_window_start:
+            # Su sello es el inicio de la ventana, no su cierre: la barra de la propia sesion no
+            # esta disponible a las 08:45 y no se cuenta (seria *look-ahead*).
+            bucket = [bar for bar in bucket if bar.instant.astimezone(EASTERN).date() != day]
+        if not bucket or bucket[0].instant > snapshot:
             # Ninguna barra de ese dia existe antes del snapshot: el dia no aporta dato, asi que
             # **no** se le pide el gap a #141 (la diaria trae una sola barra, la de las 16:00).
             continue
@@ -391,14 +426,21 @@ def measure_candidate(
         close_close.append((closed / index_reference[1] - 1.0) * 100.0)
     window_days = (ordered[-1].instant.date() - ordered[0].instant.date()).days
     if with_datum == 0:
+        reason = (
+            "ninguna sesion tiene una barra con instante <= 08:45 ET posterior al cierre de "
+            "referencia del ES: la unica barra anterior al snapshot **es** ese cierre y no aporta "
+            "dato nuevo"
+        )
+        if spec.stamp_at_window_start:
+            reason = (
+                "la barra diaria viene sellada al **inicio** de su ventana (00:00 ET) aunque su "
+                "valor sea el cierre de las 16:00: leerla a las 08:45 seria *look-ahead*, asi que "
+                "**no** se cuenta como dato point-in-time"
+            )
         resultado = CandidateResult(
             spec=spec,
             state="unavailable",
-            reason=(
-                "ninguna sesion tiene una barra con instante <= 08:45 ET posterior al cierre de "
-                "referencia del ES: la unica barra anterior al snapshot **es** ese cierre y no "
-                "aporta dato nuevo"
-            ),
+            reason=reason,
             bars=len(ordered),
             window_start=ordered[0].instant,
             window_end=ordered[-1].instant,
@@ -540,6 +582,7 @@ def _candidate_payload(item: CandidateResult) -> dict[str, Any]:
         "period_requested": item.spec.period,
         "extended_hours_requested": item.spec.extended_hours,
         "extended_hours_seen": item.extended_hours_seen,
+        "stamp_at_window_start": item.spec.stamp_at_window_start,
         "license": FREE_LICENSE,
         "note": item.spec.note,
         "state": item.state,
@@ -582,10 +625,13 @@ def analyse(
     if as_of.tzinfo is None or as_of.utcoffset() is None:
         raise PremarketHistoryError(f"`as_of` tiene que declarar zona horaria: {as_of!r}")
     session, snapshot = premarket_gap.snapshot_instant(as_of)
-    frame = _daily(store)
+    # Una lectura por consulta: medir cientos de sesiones no puede escanear el almacen cientos de
+    # veces (el calculo es el de #141, que lee `raw.market_daily` en cada `analyse`).
+    source = store if isinstance(store, _CachedStore) else _CachedStore(store.root)
+    frame = _daily(source)
     index_instants, index_closes = _series_closes(frame, INDEX_SERIES)
     index_ohlc = _index_ohlc(frame)
-    required = sessions_required(store)
+    required = sessions_required(source)
     fetch = _yfinance_bars if provider is None else provider
     results: list[CandidateResult] = []
     redundancies: list[Redundancy] = []
@@ -598,7 +644,7 @@ def analyse(
         result, redundancy = measure_candidate(
             spec,
             bars,
-            store=store,
+            store=source,
             index_instants=index_instants,
             index_closes=index_closes,
             index_ohlc=index_ohlc,
