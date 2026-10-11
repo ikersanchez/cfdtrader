@@ -52,6 +52,30 @@ series:
     min_start: 2005-01-01
     volume_expected: false
 
+  # ── Term structure del VIX (tarea #58) ────────────────────────────────────
+  # Los dos vértices corto y medio del VIX, como regresor exógeno del forecast
+  # de volatilidad. El `min_start` declara lo que la fuente **tiene**, no lo que
+  # se querría: ^VIX9D empieza en 2011 y declarar 2005 marcaría la serie como
+  # incompleta para siempre en el informe de cobertura (A2 de #58).
+  - series_id: "^VIX9D"
+    dataset: market_daily
+    asset_class: index
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: []
+    min_start: 2011-01-01
+    volume_expected: false
+  - series_id: "^VIX3M"
+    dataset: market_daily
+    asset_class: index
+    granularity: daily
+    interval: "1d"
+    primary: yfinance
+    fallbacks: []
+    min_start: 2006-07-01
+    volume_expected: false
+
   # ── Sectores: 11 ETFs SPDR contra el sesgo de supervivencia (plan.md §7.1) ─
   - series_id: "XLK"
     dataset: sectors

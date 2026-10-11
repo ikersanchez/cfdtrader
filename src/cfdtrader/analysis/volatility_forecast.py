@@ -122,6 +122,7 @@ __all__ = [
     "VolatilityStudy",
     "analyse",
     "declaration_payload",
+    "evaluate_forecast",
     "garch_one_step_forecast",
     "main",
     "relative_qlike_gap",
@@ -656,6 +657,19 @@ def _metrics(
     qlike = float(np.mean(np.log(predicted) + observed / predicted))
     mse_log = float(np.mean((np.log(predicted) - np.log(observed)) ** 2))
     return Metrics(qlike=qlike, mse_log=mse_log, sessions=int(predicted.size))
+
+
+def evaluate_forecast(
+    forecast: np.ndarray, target: np.ndarray, *, mask: np.ndarray | None = None
+) -> Metrics | None:
+    """Alias **público** de :func:`_metrics` para quien compara especificaciones nuevas (#58).
+
+    Es la **misma** función —delega en :func:`_metrics` y no añade ni una operación—, expuesta
+    para que la búsqueda de especificaciones de #58 use la métrica de #7 **sin** tocar un
+    símbolo privado y sin poder desviarse de ella. La métrica, sus unidades y su máscara no
+    cambian aquí: si cambiaran, las cuatro filas de #7 de esa tabla dejarían de reproducirse.
+    """
+    return _metrics(forecast, target, mask=mask)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
