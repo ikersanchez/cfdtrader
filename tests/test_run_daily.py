@@ -3358,18 +3358,18 @@ def _captured_bars(moment: str, *, move_pct: float, reference: float = 5000.0) -
     return json.dumps([{"instant": instant, "price": round(price, 6)}])
 
 
-def test_21_the_premarket_gap_degrades_the_session(
+def test_21_the_premarket_gap_advises_without_changing_the_decision(
     store_root: Path,
     runs_root: Path,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """#148: con el ES en contra y por encima del umbral, el gate bloquea el dia (regla 21)."""
+    """#148: el aviso **no** bloquea ni cambia la decision; la decide el operador."""
     root = tmp_path / "store_con_es"
     shutil.copytree(store_root, root)
     _add_es_closes(root)
 
-    # 1) Sin fichero de barras: la regla 21 no tiene dato, lo declara y la sesion sigue su curso.
+    # 1) Sin fichero de barras: la regla 21 no tiene dato, lo declara y no avisa de nada.
     limpio = tmp_path / "journal_limpio"
     assert _daily_run(root, runs_root, limpio, "--as-of", AS_OF_GAP) == 0
     sin_dato = capsys.readouterr().out
@@ -3377,26 +3377,29 @@ def test_21_the_premarket_gap_degrades_the_session(
     assert direction in ("long", "short")
     assert "regla_21: pass" in sin_dato
     assert "sin dato de pre-mercado" in sin_dato
-    assert "bloqueo: 21" not in sin_dato
+    assert "aviso: 21" not in sin_dato
 
-    # 2) Con el ES moviendose **en contra** del modelo, por encima del umbral del propietario.
+    # 2) Con el ES moviendose **en contra** del modelo, por encima del umbral del propietario: el
+    #    informe publica el aviso y la recomendacion **sigue siendo la del modelo**.
     move = 3.0 if direction == "short" else -3.0
     bars = tmp_path / "premarket_bars.json"
     bars.write_text(_captured_bars(AS_OF_GAP, move_pct=move), encoding="utf-8")
-    bloqueado = tmp_path / "journal_bloqueado"
+    avisado = tmp_path / "journal_avisado"
     assert (
-        _daily_run(root, runs_root, bloqueado, "--as-of", AS_OF_GAP, "--premarket-bars", str(bars))
+        _daily_run(root, runs_root, avisado, "--as-of", AS_OF_GAP, "--premarket-bars", str(bars))
         == 0
     )
     out = capsys.readouterr().out
     assert "premarket_es: measured" in out
-    assert "bloqueo: 21:contradiccion_premercado" in out
-    assert "regla_21: blocked" in out
+    assert "aviso: 21:contradiccion_premercado" in out
+    assert "regla_21: advised" in out
+    assert "habria sido un bloqueo" in out
+    assert "operador" in out
 
-    row = _journal_row(bloqueado)
-    assert row["direction"] == "nothing", "solo degrada: nunca emite la direccion contraria"
-    assert row["direction"] != ("short" if direction == "long" else "long")
-    assert "contradiccion_premercado" in cast("list[str]", row["blocking_events"])
+    row = _journal_row(avisado)
+    assert row["direction"] == direction, "el aviso no cambia la recomendacion del modelo"
+    assert cast("list[str]", row["blocking_events"]) == [], "un aviso no es un bloqueo"
+    assert "aviso: 21:contradiccion_premercado" in cast("str", row["report_text"])
 
 
 # ─────────────────────────────────────────────────────────────────────────────

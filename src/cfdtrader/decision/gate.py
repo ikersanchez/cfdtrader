@@ -239,6 +239,9 @@ _RULE_OK: Final[str] = "pass"
 _RULE_BLOCKED: Final[str] = "blocked"
 _RULE_DELEGATED: Final[str] = "delegated"
 _RULE_NOT_EVALUATED: Final[str] = "not_evaluated"
+#: La regla se evaluo y **avisa** sin bloquear: la sesion sigue su curso y decide el operador
+#: (regla 21, §19.23: el pre-mercado informa, no autoriza).
+_RULE_ADVISED: Final[str] = "advised"
 
 #: Codigos de bloqueo (estables). Cada uno nombra la regla que lo produce.
 CODE_AS_OF_NOT_TODAY: Final[str] = "as_of_no_es_de_hoy"
@@ -452,14 +455,16 @@ RULES: Final[tuple[dict[str, str], ...]] = (
     },
     {
         "rule": "21",
-        "title": "Contradiccion con el pre-mercado del ES: NOTHING",
+        "title": "Contradiccion con el pre-mercado del ES: aviso declarado",
         "owner": "gate",
         "issue": "#148",
         "note": (
             "dato **declarado** de #141 (no una feature): si el ES ya se movio al menos "
             "`CONFLICT_THRESHOLD_PCT` (0,25 %, §19.23) **en contra** de la direccion del modelo, "
-            "la sesion pasa a NOTHING. Solo degrada: nunca crea ni invierte una direccion. Un "
-            "`unavailable`, un dato de otra sesion o la ausencia del dato **no** bloquean"
+            "la sesion publica un **aviso** con ese numero y la recomendacion sigue su curso. "
+            "**No** bloquea y **no** crea ni invierte una direccion: la decision final es del "
+            "operador (§19.23). Un `unavailable`, un dato de otra sesion o la ausencia del dato no "
+            "avisan de nada"
         ),
     },
 )
@@ -568,8 +573,8 @@ LIMITATIONS: Final[tuple[dict[str, str], ...]] = (
         "statement": (
             "la regla 21 compara contra el pre-mercado **del dia** que mide #141: el backtest no "
             "tiene serie historica de pre-mercado, asi que la regla no se aplica alli y la Fase 2 "
-            "sigue sin poder medirla (#149). El dato entra **ya calculado** y sin el la regla no "
-            "actua, sin inventar un 0"
+            "sigue sin poder medirla (#149). El dato entra **ya calculado**; sin el la regla no "
+            "actua, sin inventar un 0, y cuando avisa **no** bloquea: la decision es del operador"
         ),
     },
 )
@@ -902,6 +907,13 @@ class GateOutput(BaseModel):
     rules: tuple[dict[str, str], ...] = Field(
         default=(), description="resultado de cada una de las 21 reglas declaradas en `RULES`"
     )
+    advisories: tuple[dict[str, str], ...] = Field(
+        default=(),
+        description=(
+            "avisos declarados que **no** bloquean la sesion (`rule`, `code`, `detail`): la "
+            "recomendacion sigue su curso y el operador decide (regla 21, §19.23)"
+        ),
+    )
     gate_sha256: str = Field(description=f"{GATE_HASH_PREFIX}<64 hex>; ver GATE_HASH_FORMAT")
 
     def to_engine_decision(self, *, entry_px: float | None = None) -> Decision:
@@ -961,6 +973,7 @@ def _json_payload(output: GateOutput) -> dict[str, object]:
         "fomc_dates_count": output.fomc_dates_count,
         "params": {name: output.params[name] for name, _issue, _note in PARAMETER_ISSUES},
         "blockers": [dict(entry) for entry in output.blockers],
+        "advisories": [dict(entry) for entry in output.advisories],
         "undecided": [dict(entry) for entry in output.undecided],
         "rules": [dict(entry) for entry in output.rules],
     }
@@ -1163,6 +1176,7 @@ class _Context:
     closure_reason: str | None
     fomc_dates_count: int
     premarket: PremarketDecision | None = None
+    advisories: tuple[dict[str, str], ...] = ()
     overlay: OverlayDecision | None = None
     ledger: _RuleLedger = field(default_factory=_RuleLedger)
 
@@ -1457,6 +1471,11 @@ def _context(
     # La clausura (regla 19) se pregunta al calendario una sola vez; la media sesion (regla 18)
     # sigue consultando `is_half_day`, que es el metodo que la prueba de reuso espia.
     info = calendar.session(day)
+    # El registro de las 21 reglas vive dentro de la llamada (el gate sigue siendo puro). La regla
+    # 21 se evalua **aqui**: es un aviso sobre el dato declarado, no un bloqueo, asi que no depende
+    # de ninguna otra regla y se publica en las cuatro salidas.
+    ledger = _RuleLedger()
+    advisory = _premarket_advisory(day, direction, declared_premarket, ledger)
     return _Context(
         session=day,
         as_of=instant,
@@ -1489,7 +1508,9 @@ def _context(
         closure_reason=info.reason,
         fomc_dates_count=len(declared_fomc),
         premarket=declared_premarket,
+        advisories=() if advisory is None else (advisory,),
         overlay=declared_overlay,
+        ledger=ledger,
     )
 
 
@@ -1523,25 +1544,29 @@ def _loss_blocker(
     return None
 
 
-def _premarket_blocker(context: _Context) -> dict[str, str] | None:
-    """Regla 21 (§19.23): el modelo y el pre-mercado del ES se contradicen ⇒ ``NOTHING``.
+def _premarket_advisory(
+    session: date,
+    direction: Direction,
+    datum: PremarketDecision | None,
+    ledger: _RuleLedger,
+) -> dict[str, str] | None:
+    """Regla 21 (§19.23): el pre-mercado del ES **avisa**, no bloquea. Devuelve el aviso o ``None``.
 
     El dato es el de #141 y entra **ya calculado**; se compara **solo** ``overnight_move_pct``
     contra el umbral del propietario. Un ``unavailable``, un dato de **otra sesion** o su ausencia
-    **no** bloquean: son ausencias declaradas, no un ``0``. La regla solo **degrada** la sesion:
-    no crea ni invierte la direccion del modelo.
+    **no** avisan de nada: son ausencias declaradas, no un ``0``. Cuando el ES va en contra con
+    magnitud suficiente, la sesion publica el aviso **y la recomendacion sigue su curso**: ni se
+    degrada a ``NOTHING`` ni se invierte (la decision final es del operador).
     """
-    ledger = context.ledger
-    datum = context.premarket
     if datum is None:
         ledger.mark("21", _RULE_OK, "sin dato de pre-mercado en esta llamada: la regla no actua")
         return None
-    if datum.session != context.session:
+    if datum.session != session:
         ledger.mark(
             "21",
             _RULE_OK,
             f"el dato de pre-mercado es de {datum.session.isoformat()} y la sesion evaluada es "
-            f"{context.session.isoformat()}: no se compara un dato de otra sesion",
+            f"{session.isoformat()}: no se compara un dato de otra sesion",
         )
         return None
     if not datum.measured:
@@ -1549,7 +1574,7 @@ def _premarket_blocker(context: _Context) -> dict[str, str] | None:
             "21",
             _RULE_OK,
             f"el pre-mercado esta `{datum.state.value}` ({datum.reason}): una ausencia declarada "
-            "no bloquea, y no se sustituye por un 0",
+            "no avisa de nada, y no se sustituye por un 0",
         )
         return None
     move = datum.overnight_move_pct
@@ -1558,21 +1583,21 @@ def _premarket_blocker(context: _Context) -> dict[str, str] | None:
             "21", _RULE_OK, "el dato no trae `overnight_move_pct`: no hay nada que comparar"
         )
         return None
-    if not datum.conflicts_with(context.direction):
+    if not datum.conflicts_with(direction):
         ledger.mark(
             "21",
             _RULE_OK,
             f"overnight_move_pct = {_num(move)} % no contradice la direccion del modelo "
-            f"({context.direction.name}) con el umbral {_num(CONFLICT_THRESHOLD_PCT)} % (§19.23)",
+            f"({direction.name}) con el umbral {_num(CONFLICT_THRESHOLD_PCT)} % (§19.23)",
         )
         return None
     detail = (
-        f"el modelo propone {context.direction.name} y el ES ya se movio {_num(move)} % en el "
-        f"pre-mercado, en contra y por encima del umbral declarado "
-        f"{_num(CONFLICT_THRESHOLD_PCT)} % (§19.23): la regla 21 degrada la sesion a NOTHING "
-        "(solo degrada: no crea ni invierte la direccion)"
+        f"el modelo propone {direction.name} y el ES ya se movio {_num(move)} % en el pre-mercado, "
+        f"en contra y por encima del umbral declarado {_num(CONFLICT_THRESHOLD_PCT)} % (§19.23): "
+        "por la regla 21 esto **habria sido un bloqueo**. La recomendacion se publica igual (el "
+        "aviso no la degrada a NOTHING ni la invierte) y la decision final es del operador"
     )
-    ledger.block("21", detail)
+    ledger.mark("21", _RULE_ADVISED, detail)
     return {"rule": "21", "code": CODE_PREMARKET_CONTRADICTION, "detail": detail}
 
 
@@ -1644,9 +1669,6 @@ def _blockers(context: _Context, decided: _Decided) -> tuple[dict[str, str], ...
         blockers.append({"rule": "18", "code": CODE_HALF_SESSION, "detail": detail})
     else:
         ledger.mark("18", _RULE_OK, "la sesion no es media sesion segun el calendario")
-    premarket = _premarket_blocker(context)
-    if premarket is not None:
-        blockers.append(premarket)
     return tuple(blockers)
 
 
@@ -1836,6 +1858,7 @@ def _output(
         is_fomc_session=context.is_fomc_session,
         is_half_session=context.is_half_session,
         fomc_dates_count=context.fomc_dates_count,
+        advisories=context.advisories,
         overlay_state=context.overlay_state,
         overlay_adjustment_pct=context.overlay_adjustment_pct,
         params=_parameters_payload(context.params),
@@ -2018,7 +2041,9 @@ def evaluate_gate(
     3. Decisiones abiertas (#59/#60, ``GateParameters`` con ``None``) ⇒ ``undecided``.
     4. Veto del overlay (regla 20) ⇒ ``NOTHING`` justificado; el ajuste de ±10 pp ya se aplicó a la
        probabilidad al construir el contexto.
-    5. Bloqueos de sesion: reglas 1, 3, 4, 5, 15, 17, 18 y 21 (§19.23: el pre-mercado del ES).
+    5. Bloqueos de sesion: reglas 1, 3, 4, 5, 15, 17 y 18. La regla **21** (el pre-mercado del ES,
+       §19.23) se evalua **siempre** y **no** bloquea: publica un **aviso** y la recomendacion sigue
+       su curso.
     6. Reglas 16, 8, 9 y 10 y, si nada bloquea, el *sizing* (regla 2).
 
     Una entrada inadmisible (un porcentaje en ``float``, un coste con ``nights > 0``, un stop de

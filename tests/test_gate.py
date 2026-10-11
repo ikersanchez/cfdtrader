@@ -1059,6 +1059,7 @@ def test_apoyo_payload_y_detalles() -> None:
         "overlay_adjustment_pct",
         "params",
         "blockers",
+        "advisories",
         "undecided",
         "rules",
         "gate_sha256",
@@ -1089,35 +1090,45 @@ def premarket_detail(output: GateOutput) -> str:
     return next(entry["detail"] for entry in output.rules if entry["rule"] == "21")
 
 
+def avisos(output: GateOutput) -> tuple[dict[str, str], ...]:
+    """Los avisos declarados de la salida (los que **no** bloquean)."""
+    return output.advisories
+
+
 def test_a15_sin_dato_la_regla_no_actua() -> None:
-    """Sin dato declarado la regla se declara y no bloquea: la sesion sigue su curso."""
+    """Sin dato declarado la regla se declara y no avisa de nada: la sesion sigue su curso."""
     output = call()
     assert output.direction is Direction.LONG
     assert codes(output) == {}
+    assert avisos(output) == ()
     assert rule_outcomes(output)["21"] == "pass"
     assert "no actua" in premarket_detail(output)
 
 
-def test_a15_la_contradiccion_degrada_la_sesion() -> None:
-    """LONG con el ES ya en rojo por encima del umbral ⇒ NOTHING; nunca la direccion contraria."""
+def test_a15_la_contradiccion_avisa_y_no_bloquea() -> None:
+    """LONG con el ES en rojo por encima del umbral: **aviso**, y la recomendacion sigue igual."""
     output = call(premarket=premarket(overnight_move_pct=Decimal("-0.291")))
     assert output.status is GateStatus.RECOMMENDATION
-    assert output.direction is Direction.NOTHING
-    assert output.direction is not Direction.SHORT
-    assert codes(output) == {"contradiccion_premercado": "21"}
-    assert rule_outcomes(output)["21"] == "blocked"
+    assert output.direction is Direction.LONG, "el aviso no degrada ni invierte la recomendacion"
+    assert codes(output) == {}, "un aviso no es un bloqueo"
+    assert rule_outcomes(output)["21"] == "advised"
+    assert [entry["code"] for entry in avisos(output)] == ["contradiccion_premercado"]
+    assert [entry["rule"] for entry in avisos(output)] == ["21"]
     detail = premarket_detail(output)
     assert "LONG" in detail and "-0.291" in detail and "0.25" in detail
+    assert "habria sido un bloqueo" in detail
+    assert "operador" in detail
 
 
 def test_a15_el_caso_del_2026_10_09() -> None:
     """El caso que motivo la regla: `SHORT` con `prob_up = 0,41` y el ES a +0,291 %."""
     output = call(prob_up_calibrated=0.41, premarket=premarket())
-    assert output.direction is Direction.NOTHING
-    assert codes(output) == {"contradiccion_premercado": "21"}
+    assert output.direction is Direction.SHORT, "la decision es del modelo; la regla solo informa"
+    assert codes(output) == {}
+    assert [entry["code"] for entry in avisos(output)] == ["contradiccion_premercado"]
     detail = premarket_detail(output)
     assert "SHORT" in detail and "0.291" in detail
-    # El mismo dia **sin** el dato: el modelo emitia SHORT (lo que §19.23 cierra).
+    # El mismo dia **sin** el dato: el modelo emitia SHORT, igual que con el aviso.
     assert call(prob_up_calibrated=0.41).direction is Direction.SHORT
 
 
@@ -1126,15 +1137,15 @@ def test_a15_el_umbral_es_el_declarado_en_el_plan() -> None:
     assert Decimal("0.25") == CONFLICT_THRESHOLD_PCT
     assert "19.23" in (inspect.getdoc(gate) or "")
     borde = call(premarket=premarket(overnight_move_pct=Decimal("-0.25")))
-    assert codes(borde) == {"contradiccion_premercado": "21"}
+    assert [entry["code"] for entry in avisos(borde)] == ["contradiccion_premercado"]
     por_debajo = call(premarket=premarket(overnight_move_pct=Decimal("-0.24")))
-    assert por_debajo.direction is Direction.LONG
-    assert codes(por_debajo) == {}
+    assert avisos(por_debajo) == ()
+    assert rule_outcomes(por_debajo)["21"] == "pass"
     assert "no contradice" in premarket_detail(por_debajo)
 
 
-def test_a15_una_ausencia_declarada_no_bloquea() -> None:
-    """`unavailable` y `not_a_session` no bloquean ni se sustituyen por un 0."""
+def test_a15_una_ausencia_declarada_no_avisa() -> None:
+    """`unavailable` y `not_a_session` no avisan ni se sustituyen por un 0."""
     sin_dato = premarket(
         state=PremarketState.UNAVAILABLE,
         overnight_move_pct=None,
@@ -1144,7 +1155,7 @@ def test_a15_una_ausencia_declarada_no_bloquea() -> None:
     )
     output = call(prob_up_calibrated=0.41, premarket=sin_dato)
     assert output.direction is Direction.SHORT
-    assert codes(output) == {}
+    assert avisos(output) == ()
     assert rule_outcomes(output)["21"] == "pass"
     assert "unavailable" in premarket_detail(output)
     no_sesion = premarket(
@@ -1154,25 +1165,25 @@ def test_a15_una_ausencia_declarada_no_bloquea() -> None:
         basis_pct=None,
         reason="el dia no es sesion del mercado",
     )
-    assert call(prob_up_calibrated=0.41, premarket=no_sesion).direction is Direction.SHORT
+    assert avisos(call(prob_up_calibrated=0.41, premarket=no_sesion)) == ()
 
 
-def test_a15_el_dato_de_otra_sesion_no_bloquea() -> None:
+def test_a15_el_dato_de_otra_sesion_no_avisa() -> None:
     """Un dato de otra sesion no se compara: la regla es del dia que se decide."""
     ayer = premarket(session=date(2026, 9, 22))
     output = call(prob_up_calibrated=0.41, premarket=ayer)
     assert output.direction is Direction.SHORT
-    assert codes(output) == {}
+    assert avisos(output) == ()
     assert "otra sesion" in premarket_detail(output)
 
 
 def test_a15_solo_compara_overnight_move_pct() -> None:
-    """Los tres numeros **no** se suman: un `gap_vs_index_pct` en contra no dispara la regla."""
+    """Los tres numeros **no** se suman: un `gap_vs_index_pct` en contra no dispara el aviso."""
     output = call(
         premarket=premarket(overnight_move_pct=Decimal("-0.05"), gap_vs_index_pct=Decimal("-1.500"))
     )
     assert output.direction is Direction.LONG
-    assert codes(output) == {}
+    assert avisos(output) == ()
     assert "-0.05" in premarket_detail(output)
 
 
@@ -1201,9 +1212,9 @@ def test_a15_el_payload_de_141_se_convierte_en_dato_declarado() -> None:
     assert datum.measured is True
     assert isinstance(datum.overnight_move_pct, Decimal)
     assert datum.overnight_move_pct == Decimal("0.291")
-    assert codes(call(prob_up_calibrated=0.41, premarket=datum)) == {
-        "contradiccion_premercado": "21"
-    }
+    avisado = call(prob_up_calibrated=0.41, premarket=datum)
+    assert avisado.direction is Direction.SHORT
+    assert [entry["code"] for entry in avisos(avisado)] == ["contradiccion_premercado"]
     ausente = PremarketDecision.from_payload(
         {
             "session": SESSION.isoformat(),
@@ -1215,15 +1226,15 @@ def test_a15_el_payload_de_141_se_convierte_en_dato_declarado() -> None:
         }
     )
     assert ausente.overnight_move_pct is None
-    assert call(prob_up_calibrated=0.41, premarket=ausente).direction is Direction.SHORT
+    assert avisos(call(prob_up_calibrated=0.41, premarket=ausente)) == ()
 
 
-def test_a15_el_bloqueo_es_determinista() -> None:
-    """El dato no trae reloj ni azar: mismos argumentos, mismo hash y mismos bloqueos."""
+def test_a15_el_aviso_es_determinista() -> None:
+    """El dato no trae reloj ni azar: mismos argumentos, mismo hash y mismos avisos."""
     primero = call(prob_up_calibrated=0.41, premarket=premarket())
     segundo = call(prob_up_calibrated=0.41, premarket=premarket())
     assert primero.gate_sha256 == segundo.gate_sha256
-    assert primero.blockers == segundo.blockers
+    assert primero.advisories == segundo.advisories
     distinto = call(
         prob_up_calibrated=0.41, premarket=premarket(overnight_move_pct=Decimal("0.30"))
     )
@@ -1238,14 +1249,13 @@ def test_a15_el_umbral_no_es_un_parametro_sin_decidir() -> None:
 
 
 def test_a15_la_regla_21_esta_declarada_en_rules() -> None:
-    """La regla 21 entra en `RULES` con su issue, y su limite vive en `LIMITATIONS` (#149)."""
+    """La regla 21 entra en `RULES` como **aviso**, y su limite vive en `LIMITATIONS` (#149)."""
     reglas = {entry["rule"]: entry for entry in gate.RULES}
     assert set(reglas) == {str(number) for number in range(1, 22)}
     assert reglas["21"]["owner"] == "gate"
     assert reglas["21"]["issue"] == "#148"
     assert "19.23" in reglas["21"]["note"]
+    assert "aviso" in reglas["21"]["title"] or "aviso" in reglas["21"]["note"]
     limitations = {entry["id"]: entry for entry in gate.LIMITATIONS}
     assert limitations["regla_21_premercado"]["issue"] == "#149"
     assert "#149" in gate.FOLLOW_UPS
-    assert gate.FOLLOW_UPS, "las fronteras declaradas no pueden estar vacias"
-    assert gate.LIMITATIONS

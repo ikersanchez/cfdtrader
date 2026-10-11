@@ -227,7 +227,8 @@ SCENARIO_LABEL: Final[str] = "S1"
 NEWS_OVERLAY_AGENT: Final[str] = "news"
 
 #: La regla de §12 que consume el gap de pre-mercado del ES **como dato declarado** (§19.23, #148):
-#: solo degrada la sesion a NOTHING, nunca crea ni invierte una direccion.
+#: **avisa** cuando el ES va en contra del modelo y **no** bloquea. La recomendacion sigue su curso
+#: (no se degrada a NOTHING ni se invierte) y la decision final es del operador.
 PREMARKET_RULE: Final[str] = "21"
 
 #: Valla de honestidad (#109): viaja en **las cuatro** salidas, sin excepcion.
@@ -797,6 +798,7 @@ def render(
     if output is not None:
         lines.extend(_recommendation_lines(output))
         lines.extend(_blocker_lines(output))
+        lines.extend(_advisory_lines(output))
         lines.extend(_premarket_rule_lines(output))
     if calendar_events is not None:
         lines.extend(_calendar_lines(calendar_events))
@@ -839,13 +841,23 @@ def _blocker_lines(output: GateOutput) -> list[str]:
     return [f"bloqueo: {entry['rule']}:{entry['code']}" for entry in output.blockers]
 
 
-def _premarket_rule_lines(output: GateOutput) -> list[str]:
-    """La regla 21 (§19.23) **siempre** en el informe: si bloqueo y, si no, por que no.
+def _advisory_lines(output: GateOutput) -> list[str]:
+    """Un aviso por cada regla que **avisa** sin bloquear (`aviso: {regla}:{codigo}`).
 
-    Un bloqueo ya sale en `bloqueo: 21:...`, pero la regla tambien tiene que **declararse** cuando
-    no actua (dato `unavailable`, ausencia del dato, otra sesion o movimiento por debajo del
-    umbral): si no, un pre-mercado en contra que no bloquea seria indistinguible de una regla que
-    nadie evaluo.
+    La regla 21 (§19.23) publica aqui el pre-mercado en contra: la recomendacion **sigue su curso**
+    (no se degrada a NOTHING ni se invierte) y la decision final es del operador. Un aviso **no** es
+    un bloqueo, asi que no viaja en `blocking_events`: viaja en el informe, y con el, en el
+    `report_text` que guarda el diario.
+    """
+    return [f"aviso: {entry['rule']}:{entry['code']}" for entry in output.advisories]
+
+
+def _premarket_rule_lines(output: GateOutput) -> list[str]:
+    """La regla 21 (§19.23) **siempre** en el informe: si avisa y, si no, por que no.
+
+    Un aviso ya sale en `aviso: 21:...`, pero la regla tambien tiene que **declararse** cuando no
+    actua (dato `unavailable`, ausencia del dato, otra sesion o movimiento por debajo del umbral):
+    si no, un pre-mercado en contra que no avisa seria indistinguible de una regla que nadie evaluo.
     """
     entry = next((item for item in output.rules if item["rule"] == PREMARKET_RULE), None)
     if entry is None:
@@ -1605,7 +1617,8 @@ def _deliver(
                     print(f"no se puede medir el gap de pre-mercado: {error}", file=sys.stderr)
         if premarket is not None:
             # La regla 21 (§19.23) consume el gap como **dato declarado**: el gate no lo mide ni
-            # lee el disco. Un payload inadmisible se declara y la sesion sigue su curso.
+            # lee el disco. **Avisa**, no bloquea: la recomendacion sigue su curso y decide el
+            # operador. Un payload inadmisible se declara y la sesion sigue su curso igual.
             try:
                 premarket_datum = PremarketDecision.from_payload(premarket)
             except PremarketError as error:
