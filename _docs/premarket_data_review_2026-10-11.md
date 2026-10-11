@@ -310,8 +310,9 @@ uv run python -c "import lzma; d=lzma.decompress(open('/tmp/duka.bi5','rb').read
 
 El `.bi5` es LZMA (*alone*); cada tick son 20 bytes big-endian
 (`uint32` ms de la hora, `uint32` ask, `uint32` bid, `float32` askvol, `float32` bidvol), con el
-precio escalado por los decimales del instrumento. La sonda que lo decodifica está en
-`.scratch/probe_dukascopy.py`.
+precio escalado por los decimales del instrumento. La decodificación durable vive en
+`src/cfdtrader/data/sources/dukascopy.py::decode_ticks` (con sus tests), que es la versión de
+producción de la sonda que se usó aquel día.
 
 ## Referencias
 
