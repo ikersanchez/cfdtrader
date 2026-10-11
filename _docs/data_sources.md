@@ -284,6 +284,11 @@ entra en `config/data_sources.yaml`: **no se ingiere**.
   feed vive en otro host; pero el mismo documento **reserva todos los derechos** sobre el contenido y
   la vía gratuita que la casa **ofrece** es la **herramienta**, no el feed por script. Se aplica la
   lectura prudente: **nada de automatizar sin consentimiento escrito**.
+- **Verificado contra el servicio (2026-10-11), con el backfill real y **3 peticiones** en total:**
+  `2024-06-03` → ultimo tick `12:44:51Z` (**5 294,132**) y `2024-06-04` → `12:44:57Z` (**5 265,376**),
+  los dos con el fichero `12h` (EDT); `2024-01-03` → `13:44:57Z` (**4 727,506**) con el fichero `13h`
+  (EST). Los tres son el **ultimo tick antes** de las 08:45 ET y los precios cuadran con su fecha: el
+  modulo queda probado contra la fuente, no solo contra sus tests.
 - **`robots.txt`.** `datafeed.dukascopy.com/robots.txt` → `404` (no publica reglas);
   `www.dukascopy.com/robots.txt` → `200` con `Allow: /` salvo rutas internas. No es una autorización:
   manda el ToU.
