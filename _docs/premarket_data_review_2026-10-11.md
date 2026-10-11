@@ -4,7 +4,7 @@
 |---|---|
 | **Fecha** | 2026-10-11 |
 | **Origen** | seguimiento de #141 / #148 / #149 / #107 |
-| **Estado** | Revisión medida. **No** adopta nada: `phase2_ready = false`, carril B bloqueado. |
+| **Estado** | Revisión medida **y corregida** (§0/§2.1: **sí** hay candidata gratuita). **No** adopta nada: `phase2_ready = false`, carril B bloqueado. |
 | **Aval de honestidad** | esto **no** afirma *edge*. Un «no hay serie» medido vale más que una feature prometida. |
 
 ## La pregunta
@@ -13,7 +13,20 @@
 barra de las 08:45 ET) para promoverla a **feature** del modelo? Y si no, ¿qué se puede adaptar
 **hoy** con lo que ya hay, tocando el modelo o la decisión final?
 
-## 1. Lo medido hoy (sonda directa sobre la fuente gratuita, 2026-10-11)
+## 0. Qué está comprobado y qué no (corrección)
+
+**Corrección de una exageración de la primera versión de esta nota.** Escribí «no hay fuente
+gratuita». Eso **no estaba comprobado** y, medido, es **falso** (ver §2.1: **Dukascopy**). Lo que
+está comprobado es mucho más estrecho:
+
+| Afirmación | ¿Comprobada? |
+|---|---|
+| `yfinance` no da más de ~2 años a 1h ni ~60 días a 5m | **Sí**, medido (§1) |
+| #149 midió **4** granularidades (`5m/30m/1h/1d`, todas de `yfinance`) y la mejor cubre **604** sesiones frescas frente a **2 688** | **Sí** (`premarket_history.json`) |
+| **Ninguna** fuente gratuita tiene la serie histórica | **No** — era una inferencia, y §2.1 la desmiente |
+| #107 «bloquea» el dato | **Impreciso**: #107 lo cerró el **propietario** por su criterio (b) —**no adquirir la cotización del CFD del bróker**, que es de pago y es acción suya—, **no** por «no hay fuente gratuita». Son cosas distintas |
+
+## 1. Lo medido hoy (sonda directa sobre `yfinance`, 2026-10-11)
 
 `yfinance`, `history(period="max")`, con y sin horas extendidas (`prepost`):
 
@@ -29,7 +42,45 @@ barra de las 08:45 ET) para promoverla a **feature** del modelo? Y si no, ¿qué
 - **Lo máximo gratis son ~2 años a 1h** (y 60 días a 5m). La ventana de entrenamiento del modelo son
   **2 688 sesiones (~10,6 años)**: **no cabe**. Es la misma conclusión que midió #149.
 
-## 2. Fuentes de pago revisadas (declaradas, **sin contratar**)
+## 2. Fuentes gratuitas **no probadas antes** — y una que sí sirve
+
+### 2.1 Dukascopy: histórico **tick gratuito** del S&P 500 CFD (medido hoy)
+
+`datafeed.dukascopy.com` sirve ficheros `.bi5` (LZMA) con **ticks** gratuitos, por hora, de sus
+instrumentos — incluido el índice **`USA500IDXUSD`** (el S&P 500, sesión de 24 h). Medido hoy:
+
+```console
+$ curl 'https://datafeed.dukascopy.com/datafeed/USA500IDXUSD/2024/05/03/08h_ticks.bi5'
+HTTP 200  8 400 bytes  ->  1 706 ticks (ask/bid), precio ≈ 5 284,269
+$ curl 'https://datafeed.dukascopy.com/datafeed/USA500IDXUSD/2014/05/03/12h_ticks.bi5'
+HTTP 200  1 337 bytes  ->    161 ticks (ask/bid), precio ≈ 1 919,331   # el S&P estaba ~1 920
+```
+
+Los dos precios **cuadran con la realidad** de su fecha. Y `2014-06-03` responde `200`: la cobertura
+llega **al menos a 2014**, es decir **≥ 10 años** — justo la ventana que el modelo necesita.
+
+Es **tick a tick** del propio subyacente, así que **reconstruye la barra de las 08:45 ET** (el
+instante de decisión, 12:45/13:45 UTC) con la granularidad que se quiera. **Es un candidato gratuito
+real que #149 no probó**: sus cuatro candidatas eran **todas** `yfinance`.
+
+Lo que **queda por medir** (no concluido en esta nota):
+
+- **Fecha de inicio exacta y continuidad**: la sonda se topó con un **límite de peticiones** (el
+  mismo fichero pasó de `200` a `503`/`000` al insistir), así que el alcance fino quedó incompleto.
+  Hay que repetirlo **despacio** (una petición cada varios segundos) y comprobar que una sesión
+  completa tiene sus 24 ficheros.
+- **Licencia / ToS** de Dukascopy y **coste de ingeniería** (descarga masiva: ~24 ficheros/día ×
+  ~250 días × ~12 años ≈ 70 000 ficheros).
+- **Coherencia de instrumento**: es el CFD de **otro** bróker, no el del usuario (`SPX500:CFD`), pero
+  **sí** es una cotización de CFD del S&P en sesión de 24 h — más parecida al instrumento operado que
+  el futuro `ES=F`.
+
+### 2.2 Stooq (probado, no usable)
+
+Diario e intradía devuelven un *challenge* de JavaScript («*This site requires JavaScript to verify
+your browser*»): **no** es usable por API, como ya declaraba `data_sources.md`.
+
+### 2.3 Proveedores de pago revisados (declarados, **sin contratar**)
 
 | Proveedor | Plan gratuito | ¿Sirve? |
 |---|---|---|
@@ -37,8 +88,10 @@ barra de las 08:45 ET) para promoverla a **feature** del modelo? Y si no, ¿qué
 | Alpha Vantage | **25 llamadas/día**; el intradía histórico (parámetro `month`) es **premium** | No (el histórico de intraday no es gratis) |
 | Twelve Data | Plan gratuito con pocas *credits*/min; histórico intradía amplio y **datos de horas extendidas** son de pago ($29–$999/mes) | No en el tramo gratuito |
 
-**Veredicto (datos):** **no hay** fuente gratuita con la serie histórica que exige un *feature* del
-modelo. La cotización **en vivo** a las 08:45 sí está disponible; lo que falta es el **pasado**.
+**Veredicto corregido (datos):** está **medido** que `yfinance` no llega y que Stooq no es usable.
+**No** está probado que no exista una fuente gratuita: **Dukascopy sí sirve ticks gratuitos** del
+subyacente, y su **antigüedad** (el dato que decidiría) **está pendiente de medir**. La cotización
+**en vivo** a las 08:45 está disponible; lo que se discute es cuánto **pasado** hay.
 
 ## 3. Qué **sí** se puede hacer con lo disponible (gratis)
 
@@ -73,33 +126,46 @@ Ninguna de las dos se adopta aquí: se **miden** con la maquinaria de `feature_b
 puerta de honestidad (DSR/PBO). La expectativa es **baja** (el basis es casi estructural; el `open`
 diario arrastra el artefacto de #52), pero es gratis medirlo.
 
-### 3.4 Lo que **no** se puede
+### 3.4 Lo que **no** se puede (con lo verificado)
 
-- **Un feature entrenado del pre-mercado** con datos gratuitos: bloqueado por #107/#149 (no hay
-  historia). Solo cambia si se **contrata** una fuente con histórico point-in-time (decisión de
-  gasto, `tech_stack.md` §11 bis).
 - **Sustituir la barra de 24 h del ES por el pre-mercado**: su barra `t` cierra a las 16:00 ET y a
   las 08:45 **aún no existe**: usarla sería *look-ahead* (lo mide #141).
+- **Un feature entrenado con `yfinance`**: medido, su ventana no llega (#149).
+- **⚠️ NO se puede afirmar** que no exista fuente gratuita. **Dukascopy (§2.1) está pendiente de
+  medir** y es la vía que puede reabrir la promoción a *feature*: si su histórico tick alcanza los
+  ~10 años, la tarea deja de ser «contratar» y pasa a ser **ingerir un tick gratuito**.
 
-## 4. Recomendación
+## 4. Recomendación (revisada a la luz de §2.1)
 
 | Opción | Coste | Cuándo sirve | Riesgo |
 |---|---|---|---|
+| **2.1 Medir la cobertura de Dukascopy** (fecha de inicio + continuidad, despacio) | bajo | inmediato | ninguno; es una medición |
+| **2.1b Ingerir Dukascopy** *si la cobertura llega a ~10 años* | medio | al cerrar la medición | ToS y coste de ingeniería (tick a barra) |
 | **3.1 Persistir el snapshot (acumular)** | bajo | a partir de ~1 año (medir) / ~10 (entrenar) | ninguno; es solo acumular |
+| **3.3 Medir basis y retorno nocturno** | bajo | inmediato | expectativa baja; no adopta nada |
 | **3.2 Más datos declarados + avisos** | bajo | inmediato | un aviso que no decide (carril A) |
-| **3.3 Medir basis y retorno nocturno** | bajo | inmediato (medición) | expectativa baja; no adopta nada |
 | **Contratar histórico point-in-time** | de pago | inmediato | decisión del propietario |
 
-Orden propuesto: **(3.1)** montar la persistencia del snapshot (es la única vía gratuita a un
-*feature* real, y empieza a acumular hoy) y **(3.3)** medir las dos candidatas históricas con la
-puerta de #146. **(3.2)** es una extensión barata de la regla 21 si se quiere más contexto en la
-decisión.
+**Orden propuesto, corregido:** **(2.1)** cerrar la medición de Dukascopy — es lo único que puede
+convertir un «no hay serie» en un **feature entrenable gratis**, y ya está demostrado que el
+proveedor sirve datos reales de ≥10 años. Si la cobertura se confirma, la tarea deja de ser
+«contratar» y pasa a ser **ingerir**. En paralelo, **(3.1)** acumular el snapshot propio (barato y
+complementario) y **(3.3)** medir las dos candidatas históricas con la puerta de #146.
 
 ## Cómo se reproduce la sonda
 
 ```bash
-uv run python .scratch/probe_free_sources.py     # la tabla de la seccion 1 (necesita red)
+uv run python .scratch/probe_free_sources.py            # la tabla de la seccion 1 (yfinance)
+
+# Dukascopy: un fichero tick (respetar el limite de peticiones: una cada varios segundos)
+curl -s -o /tmp/duka.bi5 'https://datafeed.dukascopy.com/datafeed/USA500IDXUSD/2024/05/03/08h_ticks.bi5'
+uv run python -c "import lzma; d=lzma.decompress(open('/tmp/duka.bi5','rb').read(), format=lzma.FORMAT_ALONE); print(len(d)//20, 'ticks')"
 ```
+
+El `.bi5` es LZMA (*alone*); cada tick son 20 bytes big-endian
+(`uint32` ms de la hora, `uint32` ask, `uint32` bid, `float32` askvol, `float32` bidvol), con el
+precio escalado por los decimales del instrumento. La sonda que lo decodifica está en
+`.scratch/probe_dukascopy.py`.
 
 ## Referencias
 
