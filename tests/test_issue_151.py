@@ -172,7 +172,9 @@ def test_the_adapter_stamps_a_foreign_daily_bar_with_its_own_close() -> None:
         close_local=time(15, 0),
         close_timezone="Asia/Tokyo",
     )
-    stamp = yfinance_adapter._as_of(pd.Timestamp("2026-10-09"), daily=True, spec=spec)
+    stamp = yfinance_adapter._as_of(  # pyright: ignore[reportPrivateUsage]
+        pd.Timestamp("2026-10-09"), daily=True, spec=spec
+    )
     assert stamp == datetime(2026, 10, 9, 6, 0, tzinfo=UTC)
 
 
@@ -186,5 +188,7 @@ def test_the_adapter_leaves_the_us_series_at_the_us_close() -> None:
         interval="1d",
         primary="yfinance",
     )
-    stamp = yfinance_adapter._as_of(pd.Timestamp("2026-10-09"), daily=True, spec=spec)
+    stamp = yfinance_adapter._as_of(  # pyright: ignore[reportPrivateUsage]
+        pd.Timestamp("2026-10-09"), daily=True, spec=spec
+    )
     assert stamp == datetime(2026, 10, 9, 20, 0, tzinfo=UTC)
