@@ -458,12 +458,19 @@ class BaselineModel:
     intercepto y el escalado, y la probabilidad se recalcula con :func:`sigmoid`. Asi el
     ``model.json`` es suficiente para reproducir las predicciones (A12) y no hace falta
     `pickle`.
+
+    ``design_lag_by_feature`` es la **alineacion de diseno** con la que se entreno (#152): la
+    disponibilidad **por columna** del :class:`DesignFrame` que lo ajusto. Viaja en el payload
+    para que el camino diario pueda comprobar que la declaracion **vigente del catalogo** es la
+    misma con la que se entreno; sin ese campo, una redeclaracion del catalogo se serviria en
+    silencio con otra alineacion (*train/serve skew*).
     """
 
     features: tuple[str, ...]
     hyperparameters: Mapping[str, object]
     seed: int
     folds: tuple[FoldFit, ...]
+    design_lag_by_feature: tuple[tuple[str, int], ...] = ()
 
     def fold_for(self, position: int) -> FoldFit | None:
         """El fold cuyo *test* contiene esa posicion, o ``None`` si esta fuera de todo test."""
@@ -479,6 +486,7 @@ class BaselineModel:
             "hyperparameters": dict(self.hyperparameters),
             "seed": self.seed,
             "design_lag_sessions": DESIGN_LAG_SESSIONS,
+            "design_lag_by_feature": dict(self.design_lag_by_feature),
             "decision_threshold": DECISION_THRESHOLD,
             "folds": [fold.to_payload() for fold in self.folds],
         }
@@ -601,6 +609,7 @@ def fit_baseline(
         hyperparameters=parameters,
         seed=seed,
         folds=tuple(folds),
+        design_lag_by_feature=design.design_lag_by_feature,
     )
 
 

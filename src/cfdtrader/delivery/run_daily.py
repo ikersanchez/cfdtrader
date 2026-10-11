@@ -204,6 +204,7 @@ from cfdtrader.orchestration.observability import RunObserver
 
 __all__ = [
     "DeliveryError",
+    "DesignAlignmentError",
     "MissingModelError",
     "RegistrySelectionError",
     "UnsupportedModelError",
@@ -288,6 +289,16 @@ class RegistrySelectionError(DeliveryError):
     """El `variant_id` declarado no se pudo resolver contra el registro de `runs/`."""
 
 
+class DesignAlignmentError(DeliveryError):
+    """La alineacion de diseno del modelo no es la vigente del catalogo (#152).
+
+    El vector servido se construye con ``features.store.DESIGN_LAG_BY_FEATURE``. Un modelo que
+    no la declara, o que la declara distinta de la vigente (catalogo redeclarado sin
+    re-entrenar), se rechaza: nunca se sirve una fila distinta a la del entrenamiento en
+    silencio.
+    """
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Prediccion: el ultimo fold aplicado a la fila nueva, con su calibrador
 # ─────────────────────────────────────────────────────────────────────────────
@@ -302,6 +313,46 @@ def predict(model_path: Path, features: Mapping[str, float]) -> float:
     ``BASELINE_FEATURES``, es :class:`UnsupportedModelError`.
     """
     return _predictions(model_path, features)[1]
+
+
+def _require_design_alignment(model: Mapping[str, object], *, model_path: Path) -> None:
+    """La alineacion de diseno del modelo tiene que ser la **vigente** del catalogo (#152).
+
+    El vector servido (:func:`_served_vector`) se construye con
+    :data:`cfdtrader.features.store.DESIGN_LAG_BY_FEATURE`, la declaracion **vigente** del
+    catalogo. Si el modelo se entreno con otra —porque el catalogo se redeclaro y el modelo no se
+    re-entreno— puntuar la fila nueva seria servir una alineacion distinta a la del
+    entrenamiento, en silencio. Aqui es un :class:`DesignAlignmentError`: el camino diario lo
+    captura y lo publica como estado ``error`` con su fila en el diario, nunca un servicio
+    silencioso con otra alineacion.
+    """
+    declared = model.get("design_lag_by_feature")
+    if not isinstance(declared, Mapping):
+        raise DesignAlignmentError(
+            f"{model_path}: el modelo no declara `design_lag_by_feature`: no se puede verificar "
+            "que la alineacion con la que se sirve es la del entrenamiento (#152) y no se sirve "
+            "una fila distinta en silencio"
+        )
+    published: dict[str, int] = {}
+    for name, value in cast("Mapping[str, object]", declared).items():
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise DesignAlignmentError(
+                f"{model_path}: `design_lag_by_feature` tiene un rezago no entero en "
+                f"{str(name)!r}: {value!r}"
+            )
+        published[str(name)] = value
+    expected = {name: DESIGN_LAG_BY_FEATURE[name] for name in BASELINE_FEATURES}
+    if published != expected:
+        differences = sorted(
+            f"{name}: modelo={published.get(name)!r} catalogo={expected.get(name)!r}"
+            for name in set(expected) | set(published)
+            if published.get(name) != expected.get(name)
+        )
+        raise DesignAlignmentError(
+            f"{model_path}: la alineacion de diseno del modelo no es la vigente del catalogo "
+            f"(#152); difieren en {differences}. Re-entrena el modelo (cadena §2) antes de "
+            "servirlo: nunca se sirve una fila distinta en silencio"
+        )
 
 
 def _predictions(model_path: Path, features: Mapping[str, float]) -> tuple[float, float]:
@@ -327,6 +378,10 @@ def _predictions(model_path: Path, features: Mapping[str, float]) -> tuple[float
     folds = cast("Sequence[object]", model["folds"])
     if not folds:
         raise UnsupportedModelError(f"{model_path}: el modelo no publica ningun fold")
+    # #152: la alineacion con la que se sirve tiene que ser la del entrenamiento. Va despues de
+    # las guardias estructurales (familia, features, folds) y antes de puntuar: nunca se puntua
+    # una fila con otra alineacion.
+    _require_design_alignment(model, model_path=model_path)
     fold = cast("Mapping[str, object]", folds[-1])
     if family == _LIGHTGBM_FAMILY:
         return _lightgbm_probabilities(fold, features, declared, model_path=model_path)

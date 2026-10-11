@@ -226,12 +226,17 @@ class LightGBMModel:
     No guarda el objeto de LightGBM en memoria mas alla del texto: lo serializable es
     ``booster_model`` y las predicciones de *test*, y el ``model.json`` es suficiente para
     reproducirlas (A5) sin `pickle`.
+
+    ``design_lag_by_feature`` es la **alineacion de diseno** con la que se entreno (#152): la
+    disponibilidad por columna del :class:`DesignFrame` que lo ajusto, publicada para que el
+    camino diario verifique que sirve la misma con la que se entreno.
     """
 
     features: tuple[str, ...]
     hyperparameters: Mapping[str, object]
     seed: int
     folds: tuple[LightGBMFoldFit, ...]
+    design_lag_by_feature: tuple[tuple[str, int], ...] = ()
 
     def fold_for(self, position: int) -> LightGBMFoldFit | None:
         """El fold cuyo *test* contiene esa posicion, o ``None`` si esta fuera de todo test."""
@@ -248,6 +253,7 @@ class LightGBMModel:
             "hyperparameters": dict(self.hyperparameters),
             "seed": self.seed,
             "design_lag_sessions": DESIGN_LAG_SESSIONS,
+            "design_lag_by_feature": dict(self.design_lag_by_feature),
             "decision_threshold": DECISION_THRESHOLD,
             "folds": [fold.to_payload() for fold in self.folds],
         }
@@ -452,6 +458,7 @@ def fit_lightgbm(
         hyperparameters=parameters,
         seed=seed,
         folds=tuple(folds),
+        design_lag_by_feature=design.design_lag_by_feature,
     )
 
 
