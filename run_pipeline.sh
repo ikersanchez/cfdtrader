@@ -209,26 +209,12 @@ side = "null"
 if p is not None:
     side = "LONG" if p >= DIRECTION_CUT else "SHORT"
 
-print()
-print(f"  Estado del informe ......... {status}")
-print(f"  DECISIÓN FINAL (sin overlay)  {decision}")
-print()
-print(f"  p(up) calibrada ............ {'null' if p is None else f'{p:.4f}'}")
-print(f"  p a favor del lado ......... {'null' if fav is None else f'{fav:.4f}'}   (p si p>=0.50, 1-p si no)")
-print(f"  Corte dirección (p) ........ {DIRECTION_CUT:.4f}   -> {side}")
-if fav is None:
-    corte = "null"
-else:
-    corte = "PASA (> 0.58)" if fav > TIER_A_CUT else "NO PASA (<= 0.58)"
-print(f"  Corte tier A (p a favor) ... {TIER_A_CUT:.4f}   -> {corte}")
-print(f"  Tier ....................... {tier}")
-print()
-
-# ── Variante «con overlay» (§19.19 / #149): vive aparte en journal/agent_signals ──
-# La recomendación PUBLICADA se emite SIN overlay; aquí se muestra qué haría el
-# overlay (p. ej. un veto que la convierte en NOTHING).
+# ── Las dos decisiones (§19.19 / #148-#149) ──
+# ORIGEN (sin overlay) = la recomendacion del modelo, la que el sistema REGISTRA y mide (Fase 4).
+# FINAL (con overlay)  = la que resulta de aplicar el veto/ajuste del NewsAgent; informativa, es
+# la que ejecuta el operador. Se muestran **las dos**, siempre, aunque el overlay no haya actuado.
 overlay_state = d.get("llm_overlay")
-overlay_decision = "= sin overlay (no hay señal registrada)"
+overlay_decision = "= origen (sin señal de overlay registrada)"
 overlay_prob = None
 overlay_reason = None
 overlay_reasons = None
@@ -248,16 +234,32 @@ if overlay_file.exists():
         overlay_decision = odir.upper()
     else:
         overlay_decision = "NOTHING"
-print("  ── Overlay de noticias (§19.19) ──")
-print(f"  Estado del overlay ......... {show_raw(overlay_state)}")
-print(f"  Decisión CON overlay ....... {overlay_decision}")
-print(f"  p(up) con overlay .......... {show_raw(overlay_prob)}")
+
+print()
+print(f"  Estado del informe ......... {status}")
+print()
+print("  ── Las dos decisiones ──")
+print(f"  Recomendación de origen (sin overlay)  {decision}")
+print(f"  Decisión final (con overlay)           {overlay_decision}")
+print(f"     · estado del overlay ..... {show_raw(overlay_state)}")
+print(f"     · p(up) con overlay ...... {show_raw(overlay_prob)}")
 if overlay_reason:
-    print(f"  Motivo del veto ............ {overlay_reason}")
+    print(f"     · motivo del veto ........ {overlay_reason}")
 elif overlay_reasons:
     # Estado sin veto (típicamente `disabled_*`): se declara el motivo, no se maquilla.
-    print("  Motivos del overlay ........ " + "; ".join(str(r) for r in overlay_reasons))
-print("  (la recomendación PUBLICADA se emite sin overlay; esta línea es informativa)")
+    print("     · motivos del overlay .... " + "; ".join(str(r) for r in overlay_reasons))
+print("     (la fila que se registra y mide la Fase 4 es la de ORIGEN (sin overlay), §19.19;")
+print("      la decisión final con overlay es informativa: la ejecuta el operador)")
+print()
+print(f"  p(up) calibrada ............ {'null' if p is None else f'{p:.4f}'}")
+print(f"  p a favor del lado ......... {'null' if fav is None else f'{fav:.4f}'}   (p si p>=0.50, 1-p si no)")
+print(f"  Corte dirección (p) ........ {DIRECTION_CUT:.4f}   -> {side}")
+if fav is None:
+    corte = "null"
+else:
+    corte = "PASA (> 0.58)" if fav > TIER_A_CUT else "NO PASA (<= 0.58)"
+print(f"  Corte tier A (p a favor) ... {TIER_A_CUT:.4f}   -> {corte}")
+print(f"  Tier ....................... {tier}")
 print()
 print(f"  EV declarado (%) ........... {show_pct(get('ev_declarado_pct'))}   (regla 9: > {TIER_A_COST_MULT}x coste)")
 print(f"  EV neto · sensibilidad (%) . {show_pct(get('ev_net_pct'))}")

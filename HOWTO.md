@@ -150,20 +150,21 @@ Ejemplo real (sesión 2026-10-09), producido por `run_pipeline.sh`:
 
 ```
   Estado del informe ......... recommendation
-  DECISIÓN FINAL (sin overlay)  SHORT
+
+  ── Las dos decisiones ──
+  Recomendación de origen (sin overlay)  SHORT
+  Decisión final (con overlay)           NOTHING (veto del overlay)
+     · estado del overlay ..... veto
+     · p(up) con overlay ...... 0.4100118532769206
+     · motivo del veto ........ geopolitics/high: …; earnings/high: …
+     (la fila que se registra y mide la Fase 4 es la de ORIGEN (sin overlay), §19.19;
+      la decisión final con overlay es informativa: la ejecuta el operador)
 
   p(up) calibrada ............ 0.4100
   p a favor del lado ......... 0.5900   (p si p>=0.50, 1-p si no)
   Corte dirección (p) ........ 0.5000   -> SHORT
   Corte tier A (p a favor) ... 0.5800   -> PASA (> 0.58)
   Tier ....................... A
-
-  ── Overlay de noticias (§19.19) ──
-  Estado del overlay ......... veto
-  Decisión CON overlay ....... NOTHING (veto del overlay)
-  p(up) con overlay .......... 0.4100118532769206
-  Motivo del veto ............ geopolitics/high: …; earnings/high: …
-  (la recomendación PUBLICADA se emite sin overlay; esta línea es informativa)
 
   EV declarado (%) ........... 0.3247 %   (regla 9: > 3x coste)
   EV neto · sensibilidad (%) . 0.1247 %
@@ -182,7 +183,8 @@ Cómo se interpreta (constantes **reales** del código, escenario declarado **S1
 
 | Campo | Significado |
 |---|---|
-| **DECISIÓN FINAL (sin overlay)** | La que se **publica**: `LONG` / `SHORT` / `NOTHING (no se opera)` / `SIN RECOMENDACIÓN (estado)` |
+| **Recomendación de origen (sin overlay)** | La del modelo: `LONG` / `SHORT` / `NOTHING (no se opera)` / `SIN RECOMENDACIÓN (estado)`. Es la **registrada y medida** (Fase 4) |
+| **Decisión final (con overlay)** | La que resulta de aplicar el veto/ajuste ±10 pp del `NewsAgent`. **Informativa**: la ejecuta el operador. Coincide con la de origen si el overlay no actúa |
 | **p(up) calibrada** | Probabilidad calibrada de que el índice **suba** |
 | **Corte dirección** | `DECISION_THRESHOLD = 0.50` (`decision/gate.py`): `p ≥ 0.50` → LONG; `p < 0.50` → SHORT |
 | **p a favor** | La probabilidad del lado que se opera: `p` si `p ≥ 0.50`, si no `1 − p` |
@@ -192,20 +194,20 @@ Cómo se interpreta (constantes **reales** del código, escenario declarado **S1
 | **EV neto · sensibilidad** | EV bajo el supuesto de *slippage* (20 % de `R`); es **sensibilidad**, no una medición |
 | **Movimiento esperado / Stop / Objetivo** | Del `σ` de GARCH: stop = `1 × σ`, objetivo = `2 × stop` (reglas 7 y 8) |
 | **Tamaño / Nocional** | `null` mientras no haya operación real; el nocional es un **techo** (riesgo 1 %, regla 2) |
-| **Estado del overlay** | `veto` / `applied` / `disabled_*`; bajo §19.19 la recomendación **publicada** se emite **sin** overlay |
-| **Decisión CON overlay** | Qué haría la señal **con** el overlay (ajuste ±10 pp o veto). La variante se registra **siempre** (#149): si el overlay no pudo actuar (`disabled_*`), coincide con la publicada |
+| **Estado del overlay** | `veto` / `applied` / `disabled_*`; la recomendación **registrada** es la de **origen** (sin overlay), §19.19 |
+| **Registro** | La fila «con overlay» se escribe **siempre** en `journal/agent_signals` (#149), también en `disabled_*`; la de origen, en `journal/decisions` |
 | **Motivo del veto** | Los titulares de alta magnitud/confianza que provocan el veto (regla 20 ⇒ `NOTHING`) |
 | **Motivos del overlay** | Por qué el overlay quedó `disabled_*` (fallo del proveedor, presupuesto agotado, tiempo): se publica el motivo, no se omite |
 
-**Las dos decisiones.** El reporte da, en este orden: (1) la **decisión final publicada**
-(**sin** overlay) y (2) la **variante con overlay**, que es la que puede **cambiarla a
-`NOTHING`** por un veto de noticias (§19.19 / #148, #149). La señal con overlay se guarda
-aparte en `journal/agent_signals/<sesión>__news.json`; la publicada, en
-`journal/decisions/<sesión>.json`. La fila «con overlay» se escribe **siempre** (también en
-`disabled_*`): cuando el overlay no pudo actuar, coincide con la publicada y el reporte publica
-sus **Motivos del overlay** (p. ej. `disabled_error` = falló la llamada al proveedor). Para que
-la extracción no se agote por impaciencia están `LLM_TIMEOUT_SECONDS` y `LLM_MAX_RETRIES`
-(opcionales; por defecto 180 s por intento y 1 reintento).
+**Las dos decisiones.** El reporte muestra **siempre** las dos, una debajo de la otra: la
+**recomendación de origen (sin overlay)** —la del modelo, que es la que el sistema **registra y
+mide** (Fase 4)— y la **decisión final (con overlay)**, que resulta de aplicar el veto/ajuste ±10 pp
+del `NewsAgent` (§19.19 / #148, #149). La de origen vive en `journal/decisions/<sesión>.json`; la
+de overlay, en `journal/agent_signals/<sesión>__news.json`. La fila «con overlay» se escribe
+**siempre** (también en `disabled_*`): cuando el overlay no pudo actuar, coincide con la de origen
+y el reporte publica sus **Motivos del overlay** (p. ej. `disabled_error` = falló la llamada al
+proveedor). Para que la extracción no se agote por impaciencia están `LLM_TIMEOUT_SECONDS` y
+`LLM_MAX_RETRIES` (opcionales; por defecto 180 s por intento y 1 reintento).
 
 - `NOTHING (no se opera)` aparece con su motivo: un `bloqueo: <regla>:<código>` por cada
   bloqueo del gate, un día de mercado cerrado (regla 19) o la reincorporación de la regla 15.
