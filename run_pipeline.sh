@@ -231,6 +231,7 @@ overlay_state = d.get("llm_overlay")
 overlay_decision = "= sin overlay (no hay señal registrada)"
 overlay_prob = None
 overlay_reason = None
+overlay_reasons = None
 overlay_file = pathlib.Path("journal/agent_signals") / f"{session}__news.json"
 if overlay_file.exists():
     o = json.loads(overlay_file.read_text(encoding="utf-8"))
@@ -238,6 +239,8 @@ if overlay_file.exists():
     overlay_state = ev.get("state") or overlay_state
     overlay_prob = o.get("prob_up")
     overlay_reason = o.get("veto_reason")
+    # Los motivos del estado (p. ej. por qué quedó `disabled_error`), sin inventar ninguno.
+    overlay_reasons = ev.get("reasons")
     odir = ev.get("direction")
     if odir == "nothing":
         overlay_decision = "NOTHING (veto del overlay)" if o.get("veto") else "NOTHING"
@@ -251,6 +254,9 @@ print(f"  Decisión CON overlay ....... {overlay_decision}")
 print(f"  p(up) con overlay .......... {show_raw(overlay_prob)}")
 if overlay_reason:
     print(f"  Motivo del veto ............ {overlay_reason}")
+elif overlay_reasons:
+    # Estado sin veto (típicamente `disabled_*`): se declara el motivo, no se maquilla.
+    print("  Motivos del overlay ........ " + "; ".join(str(r) for r in overlay_reasons))
 print("  (la recomendación PUBLICADA se emite sin overlay; esta línea es informativa)")
 print()
 print(f"  EV declarado (%) ........... {show_pct(get('ev_declarado_pct'))}   (regla 9: > {TIER_A_COST_MULT}x coste)")

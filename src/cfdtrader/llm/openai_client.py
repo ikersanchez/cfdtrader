@@ -16,19 +16,29 @@ from openai.types.chat import ChatCompletion
 from cfdtrader.llm.base import LLMError, LLMRequest, LLMResponse
 
 __all__ = [
+    "DEFAULT_MAX_RETRIES",
     "DEFAULT_TIMEOUT_SECONDS",
     "OpenAIClient",
 ]
 
-#: Tiempo máximo de una llamada (segundos). El overlay es opcional: si tarda, el pipeline sigue.
-DEFAULT_TIMEOUT_SECONDS: Final[float] = 60.0
+#: Tiempo máximo de **un intento** (segundos). Con ``60`` una extracción de noticias lenta se
+#: agotaba: el SDK reintentaba (2 veces por defecto) y el overlay moría con ``3 x 60 s``. El
+#: overlay es opcional y no debe tumbar el pipeline, pero tampoco rendirse por impaciencia.
+DEFAULT_TIMEOUT_SECONDS: Final[float] = 180.0
+
+#: Reintentos **por debajo** de los 2 del SDK: un único reintento basta y acota el peor caso a
+#: ``(1 + retries) x timeout`` (360 s), en vez de multiplicarlo por tres.
+DEFAULT_MAX_RETRIES: Final[int] = 1
 
 
 class OpenAIClient:
     """Cliente sobre Chat Completions del SDK ``openai`` (sirve OpenAI y DeepSeek).
 
     ``sdk`` permite inyectar un cliente ya construido (o un doble en las pruebas): la
-    construcción normal cubre OpenAI y DeepSeek cambiando solo ``base_url``.
+    construcción normal cubre OpenAI y DeepSeek cambiando solo ``base_url``. ``timeout`` y
+    ``max_retries`` son declarables (``LLM_TIMEOUT_SECONDS`` / ``LLM_MAX_RETRIES``): el overlay de
+    noticias es opcional, así que una llamada lenta no debe tumbar el camino diario, pero tampoco
+    debe rendirse antes de tiempo.
     """
 
     def __init__(
@@ -37,14 +47,26 @@ class OpenAIClient:
         api_key: str,
         base_url: str,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        max_retries: int = DEFAULT_MAX_RETRIES,
         sdk: OpenAI | None = None,
     ) -> None:
         if not api_key or not api_key.strip():
             raise LLMError("OpenAIClient: falta la clave de API")
         if not base_url or not base_url.strip():
             raise LLMError("OpenAIClient: falta la `base_url`")
+        if timeout <= 0:
+            raise LLMError(f"OpenAIClient: `timeout` debe ser > 0 segundos, no {timeout!r}")
+        if max_retries < 0:
+            raise LLMError(f"OpenAIClient: `max_retries` debe ser >= 0, no {max_retries!r}")
         self._sdk = (
-            sdk if sdk is not None else OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
+            sdk
+            if sdk is not None
+            else OpenAI(
+                api_key=api_key,
+                base_url=base_url,
+                timeout=timeout,
+                max_retries=max_retries,
+            )
         )
 
     def complete(self, request: LLMRequest) -> LLMResponse:

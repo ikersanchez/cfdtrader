@@ -193,15 +193,19 @@ Cómo se interpreta (constantes **reales** del código, escenario declarado **S1
 | **Movimiento esperado / Stop / Objetivo** | Del `σ` de GARCH: stop = `1 × σ`, objetivo = `2 × stop` (reglas 7 y 8) |
 | **Tamaño / Nocional** | `null` mientras no haya operación real; el nocional es un **techo** (riesgo 1 %, regla 2) |
 | **Estado del overlay** | `veto` / `applied` / `disabled_*`; bajo §19.19 la recomendación **publicada** se emite **sin** overlay |
-| **Decisión CON overlay** | Qué haría la señal **si el overlay actuara**: p. ej. `NOTHING (veto del overlay)`. `= sin overlay (no hay fila)` si la sesión no registró señal |
+| **Decisión CON overlay** | Qué haría la señal **con** el overlay (ajuste ±10 pp o veto). La variante se registra **siempre** (#149): si el overlay no pudo actuar (`disabled_*`), coincide con la publicada |
 | **Motivo del veto** | Los titulares de alta magnitud/confianza que provocan el veto (regla 20 ⇒ `NOTHING`) |
+| **Motivos del overlay** | Por qué el overlay quedó `disabled_*` (fallo del proveedor, presupuesto agotado, tiempo): se publica el motivo, no se omite |
 
 **Las dos decisiones.** El reporte da, en este orden: (1) la **decisión final publicada**
 (**sin** overlay) y (2) la **variante con overlay**, que es la que puede **cambiarla a
 `NOTHING`** por un veto de noticias (§19.19 / #148, #149). La señal con overlay se guarda
 aparte en `journal/agent_signals/<sesión>__news.json`; la publicada, en
-`journal/decisions/<sesión>.json`. Si el overlay está `disabled_*` o no hay fila, la segunda
-línea sale como `= sin overlay`.
+`journal/decisions/<sesión>.json`. La fila «con overlay» se escribe **siempre** (también en
+`disabled_*`): cuando el overlay no pudo actuar, coincide con la publicada y el reporte publica
+sus **Motivos del overlay** (p. ej. `disabled_error` = falló la llamada al proveedor). Para que
+la extracción no se agote por impaciencia están `LLM_TIMEOUT_SECONDS` y `LLM_MAX_RETRIES`
+(opcionales; por defecto 180 s por intento y 1 reintento).
 
 - `NOTHING (no se opera)` aparece con su motivo: un `bloqueo: <regla>:<código>` por cada
   bloqueo del gate, un día de mercado cerrado (regla 19) o la reincorporación de la regla 15.

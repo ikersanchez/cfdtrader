@@ -1090,6 +1090,42 @@ def test_148_a_veto_no_cambia_la_recomendacion_publicada(
     assert evidence["direction"] == "nothing", "la variante con overlay si da NOTHING"
 
 
+def test_the_overlay_variant_is_recorded_even_when_it_could_not_act(
+    store_root: Path,
+    runs_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """La variante «con overlay» se registra **siempre**, tambien en `disabled_error` (#149).
+
+    Cuando el overlay no pudo actuar (aqui, un fallo del proveedor), la fila de `agent_signals`
+    existe igual, declara su estado y su `evidence.reasons` explica por que no actuo: asi la linea
+    «con overlay» del informe nunca queda vacia ni muda el motivo del fallo.
+    """
+    reason = "falló la llamada al proveedor: timeout"
+    monkeypatch.setattr(
+        run_daily,
+        "_compute_overlay",
+        _stub_overlay(
+            disabled_overlay(OverlayState.DISABLED_ERROR, reasons=(reason,)),
+            {},
+        ),
+    )
+    journal_root = tmp_path / "journal"
+
+    assert _daily_run(store_root, runs_root, journal_root) == 0
+    capsys.readouterr()
+
+    signal = Journal(journal_root).read(
+        "agent_signals", {"trade_date": NEXT_SESSION.isoformat(), "agent": "news"}
+    )
+    evidence = cast("Mapping[str, object]", signal["evidence"])
+    assert evidence["state"] == "disabled_error"
+    assert reason in cast("list[str]", evidence["reasons"])
+    assert signal["veto"] is False
+
+
 def test_a8_without_news_the_recommendation_still_comes_out(
     store_root: Path,
     runs_root: Path,

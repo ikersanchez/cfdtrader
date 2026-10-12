@@ -128,6 +128,12 @@ class LLMClientConfig(BaseSettings):
     model_extract: str | None = None
     model_report: str | None = None
     daily_budget_eur: str | None = None
+    #: Tiempo máximo por intento y reintentos del SDK. Opcionales: `None` deja los valores
+    #: declarados del cliente (`openai_client.DEFAULT_TIMEOUT_SECONDS` / `DEFAULT_MAX_RETRIES`).
+    #: Existen para que una extracción de noticias lenta **no** se agote por impaciencia: con el
+    #: timeout corto el SDK reintentaba y el overlay moría con `3 x 60 s` (`LLM_TIMEOUT_SECONDS`).
+    timeout_seconds: float | None = Field(default=None, gt=0)
+    max_retries: int | None = Field(default=None, ge=0)
 
     def resolved_base_url(self) -> str:
         """La ``base_url`` declarada o, si falta, la del proveedor por defecto (§4.9)."""
@@ -170,6 +176,17 @@ def build_client(config: LLMClientConfig) -> LLMClient:
     if key is None or not key.strip():
         raise LLMConfigError("falta LLM_API_KEY: sin clave no hay capa LLM (ver .env.example)")
     # Import perezoso: el SDK solo entra por aquí, nunca al importar `llm.base`.
-    from cfdtrader.llm.openai_client import OpenAIClient
+    from cfdtrader.llm.openai_client import (
+        DEFAULT_MAX_RETRIES,
+        DEFAULT_TIMEOUT_SECONDS,
+        OpenAIClient,
+    )
 
-    return OpenAIClient(api_key=key, base_url=config.resolved_base_url())
+    timeout = DEFAULT_TIMEOUT_SECONDS if config.timeout_seconds is None else config.timeout_seconds
+    retries = DEFAULT_MAX_RETRIES if config.max_retries is None else config.max_retries
+    return OpenAIClient(
+        api_key=key,
+        base_url=config.resolved_base_url(),
+        timeout=timeout,
+        max_retries=retries,
+    )

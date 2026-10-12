@@ -323,3 +323,43 @@ def test_a9_resolved_base_url_rejects_an_unknown_provider() -> None:
     """Sin `base_url` declarada y con un proveedor desconocido, resolver la URL es error tipado."""
     with pytest.raises(LLMConfigError, match="proveedor"):
         _config(provider="acme").resolved_base_url()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A10 · Tiempo y reintentos del cliente: declarables y reenviados (#155)
+# ─────────────────────────────────────────────────────────────────────────────
+def test_a10_the_client_is_built_with_the_declared_timeout_and_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`build_client` reenvía `timeout`/`max_retries`: los declarados, o los del módulo si no hay.
+
+    Es la palanca de fiabilidad de la extracción de noticias: con el `timeout` corto el SDK
+    reintentaba y el overlay moría con `3 x 60 s` (ver `run_daily`/`openai_client`).
+    """
+    monkeypatch.delenv("LLM_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("LLM_MAX_RETRIES", raising=False)
+    from cfdtrader.llm import openai_client as openai_client_module
+
+    captured: dict[str, object] = {}
+
+    class _Recorder:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(openai_client_module, "OpenAIClient", _Recorder)
+
+    build_client(_config(api_key="k", timeout_seconds=240.0, max_retries=0))
+    assert captured["timeout"] == 240.0
+    assert captured["max_retries"] == 0
+
+    build_client(_config(api_key="k"))
+    assert captured["timeout"] == openai_client_module.DEFAULT_TIMEOUT_SECONDS
+    assert captured["max_retries"] == openai_client_module.DEFAULT_MAX_RETRIES
+
+
+def test_a10_a_non_positive_timeout_or_a_negative_retry_is_a_typed_error() -> None:
+    """Un `timeout` no positivo o un `max_retries` negativo son error tipado, no un fallo de red."""
+    with pytest.raises(LLMError, match="timeout"):
+        OpenAIClient(api_key="k", base_url="https://example.invalid", timeout=0.0)
+    with pytest.raises(LLMError, match="max_retries"):
+        OpenAIClient(api_key="k", base_url="https://example.invalid", max_retries=-1)

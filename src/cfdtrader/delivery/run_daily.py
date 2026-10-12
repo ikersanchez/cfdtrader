@@ -1211,11 +1211,12 @@ def _record_overlay_signal(
 
     Bajo §19.19 (#148) la recomendacion que se **publica** se emite **sin** overlay; esta fila
     conserva el efecto del overlay —estado, `veto`, su motivo y la probabilidad **ajustada**— para
-    el registro prospectivo de la Fase 4 (§19.9). Solo se escribe cuando el overlay produce decision
-    (`applied` o `veto`): en `disabled_*` no hay senal que registrar y basta `llm_overlay`.
+    el registro prospectivo de la Fase 4 (§19.9). Se escribe **siempre**, tambien cuando el overlay
+    quedo `disabled_*` (sin proveedor, con el presupuesto agotado o tras un fallo): asi la variante
+    «con overlay» esta siempre presente —la del dia es `= publicada` cuando no pudo actuar— y su
+    `evidence.reasons` declara **por que** no actuo, en vez de desaparecer y dejar el informe sin
+    la linea «con overlay».
     """
-    if overlay.state not in (OverlayState.APPLIED, OverlayState.VETO):
-        return
     veto = overlay.state is OverlayState.VETO
     Journal(journal_root).write(
         "agent_signals",
