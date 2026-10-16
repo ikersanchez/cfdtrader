@@ -213,10 +213,11 @@ def test_a1_only_the_feature_adapter_calls_store_sql() -> None:
 def test_a4_the_ten_features_are_declared_and_reach_the_configuration() -> None:
     """A4: diez features, en el catalogo, las cinco familias de #24, sin las tres excluidas.
 
-    Desde #143 el catalogo tiene **seis** familias: la de commodities y FX entrega **candidatas** y
-    el conjunto de diez del modelo no la toca, porque decidir si entra —y en que lugar del
-    presupuesto de #24— es #146. Por eso la comparacion excluye esa familia **a proposito**, en
-    vez de exigir que las diez la representen.
+    Desde #143 y #159 el catalogo tiene **siete** familias: la de commodities y FX y la de
+    sobre-extension entregan **candidatas** y el conjunto de diez del modelo no las toca, porque
+    decidir si entra alguna —y en que lugar del presupuesto de #24— es el presupuesto de features
+    (#146/#159). Por eso la comparacion excluye esas dos familias **a proposito**, en vez de
+    exigir que las diez las representen.
     """
     assert len(BASELINE_FEATURES) == 10
     assert len(set(BASELINE_FEATURES)) == 10
@@ -230,15 +231,18 @@ def test_a4_the_ten_features_are_declared_and_reach_the_configuration() -> None:
         for entry in catalog:
             families.setdefault(entry.name, feature_set)
     represented = sorted({families[name] for name in BASELINE_FEATURES})
-    declared = sorted(
-        set(feature_store.CATALOG_BY_FEATURE_SET) - {feature_store.COMMODITIES_FEATURE_SET}
-    )
+    candidate_families = {
+        feature_store.COMMODITIES_FEATURE_SET,
+        feature_store.REVERSION_FEATURE_SET,
+    }
+    declared = sorted(set(feature_store.CATALOG_BY_FEATURE_SET) - candidate_families)
     assert represented == declared, (
         "las cinco familias de #24 tienen que estar representadas y ninguna puede faltar: "
         f"{represented}"
     )
-    # y la sexta queda **fuera** mientras #146 no decida su sitio en el presupuesto
+    # y las familias candidatas quedan **fuera** mientras el presupuesto no decida su sitio
     assert not set(feature_store.COMMODITIES_FEATURE_COLUMNS) & set(BASELINE_FEATURES)
+    assert not set(feature_store.REVERSION_FEATURE_COLUMNS) & set(BASELINE_FEATURES)
 
     design = _design()
     nulls = sum(design.frame.get_column(name).null_count() for name in BASELINE_FEATURES)

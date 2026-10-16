@@ -386,11 +386,16 @@ def test_a_series_without_history_is_declared_not_invented(tmp_path: Path) -> No
     missing = set(matrix.missing_series)
     assert set(feature_store.CONTEXT_SECTOR_SERIES) <= missing
     assert set(feature_store.MACRO_SERIES) <= missing
-    assert len(matrix.missing_series) == 26
+    missing_vertices = set(feature_store.REVERSION_VIX_SERIES) & missing
+    assert missing_vertices == {"^VIX9D", "^VIX3M"}, missing_vertices
+    assert len(matrix.missing_series) == 39, (
+        "17 de contexto + 6 macro + 3 de commodities + 13 de sobre-extension; los 11 sectores "
+        "se repiten porque cada familia declara las series que le faltan"
+    )
     assert matrix.n_sessions == 40
     assert matrix.frame.get_column("ust_10y_chg_5").null_count() == 40
     assert matrix.duplicated_columns == ("atr_norm",)
-    assert matrix.n_columns == 57
+    assert matrix.n_columns == 63
 
 
 def test_72_the_shared_column_is_checked_and_a_divergence_is_a_typed_error() -> None:

@@ -190,7 +190,7 @@ _FEATURE_VERSION_COLUMNS: Final[tuple[ColumnSpec, ...]] = (
 )
 
 #: Columnas de la matriz de features (`features.store.ALL_FEATURE_COLUMNS`): el **catálogo**
-#: lo posee el productor (#73), y aquí se declara su **firma**: los 52 nombres y su tipo.
+#: lo posee el productor (#73), y aquí se declara su **firma**: los 63 nombres y su tipo.
 #: Añadir una feature es cambiar la firma de `derived.features_daily` y por tanto subir su
 #: `layout_version` (§12.10); el test que compara esta lista con el catálogo del productor
 #: es lo que impide que eso pase inadvertido.
@@ -252,6 +252,12 @@ FEATURE_SPEC_COLUMNS: Final[tuple[ColumnSpec, ...]] = (
     ColumnSpec("oil_ret_1_z", "float"),
     ColumnSpec("gold_ret_1", "float"),
     ColumnSpec("eurusd_ret_1", "float"),
+    ColumnSpec("vix_ts_slope", "float"),
+    ColumnSpec("vix_contango", "float"),
+    ColumnSpec("vix9d_vix", "float"),
+    ColumnSpec("breadth", "float"),
+    ColumnSpec("streak_up", "float"),
+    ColumnSpec("ret_5_pct", "float"),
 )
 
 
@@ -316,7 +322,7 @@ LAYOUTS: Final[dict[tuple[str, str], DatasetLayout]] = {
     ("derived", "features_daily"): DatasetLayout(
         layer="derived",
         dataset="features_daily",
-        layout_version=2,
+        layout_version=3,
         payload=(*FEATURE_SPEC_COLUMNS, *_FEATURE_VERSION_COLUMNS),
     ),
     ("derived", "labels"): DatasetLayout(

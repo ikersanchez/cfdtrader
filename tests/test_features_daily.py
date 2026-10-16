@@ -181,7 +181,7 @@ def test_a1_the_loader_needs_the_anchor_and_invents_no_series(tmp_path: Path) ->
 # ─────────────────────────────────────────────────────────────────────────────
 # A2 · Las cinco matrices **por familia**
 # ─────────────────────────────────────────────────────────────────────────────
-def test_a2_the_adapter_exposes_the_six_families_separately(tmp_path: Path) -> None:
+def test_a2_the_adapter_exposes_the_seven_families_separately(tmp_path: Path) -> None:
     store = _build_store(tmp_path / "almacen")
     built = feature_frame.build_family_frames(store)
 
@@ -191,8 +191,9 @@ def test_a2_the_adapter_exposes_the_six_families_separately(tmp_path: Path) -> N
         assert set(feature_frame.COLUMNS_BY_FAMILY[family]) <= set(family_frame.columns)
         assert family_frame.height == HISTORY_DAYS
     assert built.instants.columns == ["session", "as_of"]
-    assert len(built.missing_series) == 26, (
-        "17 de contexto + 6 macro + 3 de commodities: las que no estan"
+    assert len(built.missing_series) == 39, (
+        "17 de contexto + 6 macro + 3 de commodities + 13 de sobre-extension (los 11 sectores se "
+        "repiten): las que no estan"
     )
 
 

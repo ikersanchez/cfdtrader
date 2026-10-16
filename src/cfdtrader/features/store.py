@@ -128,6 +128,7 @@ mismo dia.
 ``macro_v1``           ``cfdtrader.features.macro``      :data:`MACRO_FEATURE_CATALOG`
 ``regime_v1``          ``cfdtrader.features.regime``     :data:`REGIME_FEATURE_CATALOG`
 ``commodities_v1``     ``cfdtrader.features.commodities`` :data:`COMMODITIES_FEATURE_CATALOG`
+``reversion_v1``       ``cfdtrader.features.reversion``  :data:`REVERSION_FEATURE_CATALOG`
 =====================  ================================  ======================
 
 Los valores por defecto de :class:`FeatureSpec` siguen siendo los de
@@ -214,6 +215,8 @@ __all__ = [
     "DEFAULT_CONTEXT_WINDOWS",
     "DEFAULT_MACRO_SOURCES",
     "DEFAULT_MACRO_WINDOWS",
+    "DEFAULT_REVERSION_SOURCES",
+    "DEFAULT_REVERSION_WINDOWS",
     "DEFAULT_TECHNICAL_SOURCES",
     "DEFAULT_TECHNICAL_WINDOWS",
     "DESIGN_LAG_BY_FEATURE",
@@ -241,6 +244,16 @@ __all__ = [
     "REGIME_FEATURE_SET",
     "REGIME_MIN_SESSIONS",
     "RETURN_LAGS",
+    "REVERSION_ANCHOR_SERIES",
+    "REVERSION_FEATURES_SOURCE",
+    "REVERSION_FEATURE_CATALOG",
+    "REVERSION_FEATURE_COLUMNS",
+    "REVERSION_FEATURE_SET",
+    "REVERSION_MIN_SESSIONS",
+    "REVERSION_RETURN_WINDOW",
+    "REVERSION_SECTOR_SERIES",
+    "REVERSION_SERIES",
+    "REVERSION_VIX_SERIES",
     "RSI_WINDOW",
     "SOURCE_BY_FEATURE_SET",
     "TECHNICAL_FEATURES_SOURCE",
@@ -259,6 +272,7 @@ __all__ = [
     "InvalidSeriesIdError",
     "MacroInputError",
     "RegimeInputError",
+    "ReversionInputError",
     "build_matrix",
     "daily_records",
     "feature_spec_sha256",
@@ -382,6 +396,18 @@ class CommoditiesInputError(FeatureStoreError):
     el ``as_of`` del ancla no corresponde a su sesion: todo eso es un error de
     **entrada**, y el mensaje nombra la serie, porque es lo unico que se puede
     arreglar desde fuera.
+    """
+
+
+class ReversionInputError(FeatureStoreError):
+    """El ``Mapping`` de series de la familia de sobre-extension no cumple su contrato.
+
+    La familia ``reversion_v1`` (#159) recibe quince claves (:data:`REVERSION_SERIES`): el ancla
+    (``^GSPC``), los **tres vertices** del VIX (``^VIX``, ``^VIX9D``, ``^VIX3M``) y los once ETF
+    sectoriales. Falta una serie, sobra una clave, falta ``session`` o ``close``, se repite una
+    sesion o el ``as_of`` del ancla no corresponde a su sesion: todo eso es un error de
+    **entrada**, y el mensaje nombra la serie, porque es lo unico que se puede arreglar desde
+    fuera.
     """
 
 
@@ -1195,6 +1221,140 @@ DEFAULT_COMMODITIES_SOURCES: Final[tuple[tuple[str, str], ...]] = tuple(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Catalogo de la familia de sobre-extension y reversion (#159)
+# ─────────────────────────────────────────────────────────────────────────────
+#: Identificador del conjunto de features de sobre-extension y reversion (#159).
+REVERSION_FEATURE_SET: Final[str] = "reversion_v1"
+
+#: ``source`` de las filas de sobre-extension (mismo papel que el de las otras familias).
+REVERSION_FEATURES_SOURCE: Final[str] = "cfdtrader.features.reversion"
+
+#: La serie **ancla** del universo de filas: el calendario de sesiones del indice.
+REVERSION_ANCHOR_SERIES: Final[str] = "^GSPC"
+
+#: Los **tres vertices** de la *term structure* del VIX: el insumo que **ninguna** feature del
+#: catalogo usaba. Se ingieren desde #58 (`^VIX9D` con `min_start: 2011-01-01` y `^VIX3M` con
+#: `min_start: 2006-07-01`) y hasta #159 solo los leia el estudio del forecast de volatilidad.
+REVERSION_VIX_SERIES: Final[tuple[str, ...]] = ("^VIX", "^VIX9D", "^VIX3M")
+
+#: Los once ETF sectoriales del denominador de ``breadth``. Es **la misma** lista que el universo
+#: de la dispersion de ``context_v1`` (#21) —una sola declaracion—, de modo que el denominador de
+#: `breadth` y el `sector_count` que lo acompaña no pueden divergir.
+REVERSION_SECTOR_SERIES: Final[tuple[str, ...]] = CONTEXT_SECTOR_SERIES
+
+#: Las **quince** series de entrada de la familia: el ancla, los tres vertices del VIX y los once
+#: sectores. No es una lista descriptiva: el ``Mapping`` que recibe ``reversion_matrix`` tiene
+#: **exactamente** estas claves.
+REVERSION_SERIES: Final[tuple[str, ...]] = (
+    REVERSION_ANCHOR_SERIES,
+    *REVERSION_VIX_SERIES,
+    *REVERSION_SECTOR_SERIES,
+)
+
+#: Sesiones de la ventana del retorno cuya distribucion expandida lee ``ret_5_pct``.
+REVERSION_RETURN_WINDOW: Final[int] = 5
+
+#: Sesiones minimas de la ventana **expandida** de ``ret_5_pct``.
+REVERSION_MIN_SESSIONS: Final[int] = 250
+
+#: Catalogo completo de la familia de sobre-extension y reversion (6 entradas, #159). Las formulas
+#: viven en ``cfdtrader.features.reversion``; aqui esta la **declaracion** del contrato (ventana,
+#: fuente, el cierre del que depende cada columna y su disponibilidad).
+#:
+#: ``design_lag`` es **1** en las seis, y en cinco de ellas es la opcion **conservadora**
+#: declarada, no una consecuencia del reloj: la fila `t` de `vix_ts_slope`, `vix_contango`,
+#: `vix9d_vix`, `breadth` y `streak_up` solo usa sesiones `<= t-1`, asi que por la regla de #153
+#: podria declarar `0` (su fila `t` ya es computable en el instantaneo de las 08:45 ET); pasa a
+#: `0` el dia en que exista su **lector pendiente**, como en commodities (#143). Hasta entonces
+#: conserva el `1`, la misma decision declarada del resto de candidatas. `ret_5_pct` **no** tiene
+#: eleccion: su base es ``ret_5``, que lee el cierre del ancla de la sesion `t` (mismo
+#: ``required_as_of`` y mismo rezago que ``ret_5`` en ``technical_v1``).
+#:
+#: **Redundancia algebraica declarada.** Los tres vertices cumplen
+#: ``(1 + vix_contango) * (1 + vix9d_vix) * (1 + vix_ts_slope) = 1``, de modo que dos cualesquiera
+#: determinan el tercero: el catalogo publica las tres (son tres candidatas distintas en la tabla
+#: de #159) y la **regla de intercambio** del presupuesto (#146) decide el solape con
+#: ``vix_zscore``/``vix_percentile``. `breadth` se solapa parcialmente con `sector_dispersion_1`
+#: (misma fuente, distinta formula: proporcion de signos frente a desviacion tipica de los
+#: retornos) y `ret_5_pct` normaliza el `ret_5` de ``technical_v1``: la candidata es su percentil,
+#: no el retorno.
+REVERSION_FEATURE_CATALOG: Final[tuple[CatalogEntry, ...]] = (
+    CatalogEntry(
+        "vix_ts_slope",
+        "VIX3M(t-1) / VIX9D(t-1) - 1, con los cierres de '^VIX3M' y '^VIX9D'",
+        1,
+        "raw.market_daily",
+        "cierre de la sesion t-1",
+        1,
+    ),
+    CatalogEntry(
+        "vix_contango",
+        "VIX(t-1) / VIX3M(t-1) - 1, con los cierres de '^VIX' y '^VIX3M'; "
+        "(1 + vix_contango) * (1 + vix9d_vix) = 1 / (1 + vix_ts_slope)",
+        1,
+        "raw.market_daily",
+        "cierre de la sesion t-1",
+        1,
+    ),
+    CatalogEntry(
+        "vix9d_vix",
+        "VIX9D(t-1) / VIX(t-1) - 1, con los cierres de '^VIX9D' y '^VIX'",
+        1,
+        "raw.market_daily",
+        "cierre de la sesion t-1",
+        1,
+    ),
+    CatalogEntry(
+        "breadth",
+        "fraccion de los sectores con dato en t-1 (el mismo denominador que 'sector_count' de "
+        "context_v1) cuyo retorno de t-1 es > 0",
+        1,
+        "raw.sectors",
+        "cierre de la sesion t-1",
+        1,
+    ),
+    CatalogEntry(
+        "streak_up",
+        "sesiones consecutivas con C_s > C_{s-1} al cierre de t-1 (0 si la ultima no sube)",
+        None,
+        "raw.market_daily",
+        "cierre de la sesion t-1",
+        1,
+    ),
+    CatalogEntry(
+        "ret_5_pct",
+        f"percentil de ventana expandida (min {REVERSION_MIN_SESSIONS}) de "
+        f"ln(C_t / C_t-{REVERSION_RETURN_WINDOW}) —el ret_5 de technical_v1—: fraccion de los "
+        "retornos anteriores que no superan al actual",
+        REVERSION_MIN_SESSIONS,
+        "raw.market_daily",
+        "cierre de la sesion t",
+        1,
+    ),
+)
+
+#: Columnas de feature que persiste la matriz de sobre-extension: **todas** las del catalogo.
+REVERSION_FEATURE_COLUMNS: Final[tuple[str, ...]] = tuple(
+    entry.name for entry in REVERSION_FEATURE_CATALOG
+)
+
+#: Ventanas por defecto de la spec de sobre-extension: las del catalogo, sin excepciones.
+DEFAULT_REVERSION_WINDOWS: Final[dict[str, int | None]] = {
+    entry.name: entry.window for entry in REVERSION_FEATURE_CATALOG
+}
+
+#: Fuentes de entrada por defecto de la familia: el ancla y los tres vertices del VIX (de
+#: ``raw.market_daily``) y los once sectores (de ``raw.sectors``).
+DEFAULT_REVERSION_SOURCES: Final[tuple[tuple[str, str], ...]] = (
+    *(
+        ("raw.market_daily", series_id)
+        for series_id in (REVERSION_ANCHOR_SERIES, *REVERSION_VIX_SERIES)
+    ),
+    *(("raw.sectors", series_id) for series_id in REVERSION_SECTOR_SERIES),
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Registro de familias
 # ─────────────────────────────────────────────────────────────────────────────
 #: Registro de familias: el catalogo de cada ``feature_set`` declarado.
@@ -1205,6 +1365,7 @@ CATALOG_BY_FEATURE_SET: Final[dict[str, tuple[CatalogEntry, ...]]] = {
     MACRO_FEATURE_SET: MACRO_FEATURE_CATALOG,
     REGIME_FEATURE_SET: REGIME_FEATURE_CATALOG,
     COMMODITIES_FEATURE_SET: COMMODITIES_FEATURE_CATALOG,
+    REVERSION_FEATURE_SET: REVERSION_FEATURE_CATALOG,
 }
 
 #: ``source`` con el que se persiste cada familia (el discriminador de la
@@ -1216,9 +1377,10 @@ SOURCE_BY_FEATURE_SET: Final[dict[str, str]] = {
     MACRO_FEATURE_SET: MACRO_FEATURES_SOURCE,
     REGIME_FEATURE_SET: REGIME_FEATURES_SOURCE,
     COMMODITIES_FEATURE_SET: COMMODITIES_FEATURES_SOURCE,
+    REVERSION_FEATURE_SET: REVERSION_FEATURES_SOURCE,
 }
 
-#: Todas las columnas de feature conocidas, de las **seis** familias: es la lista
+#: Todas las columnas de feature conocidas, de las **siete** familias: es la lista
 #: con la que el digest de una matriz comprueba que no haya ``NaN`` ni ``inf``. Se
 #: deduplica porque ``atr_norm`` existe en dos catalogos (el solape lo declara y lo
 #: resuelve #72, no esta capa). Que las 13 columnas macro entren aqui no es
@@ -1233,6 +1395,7 @@ ALL_FEATURE_COLUMNS: Final[tuple[str, ...]] = tuple(
             *MACRO_FEATURE_COLUMNS,
             *REGIME_FEATURE_COLUMNS,
             *COMMODITIES_FEATURE_COLUMNS,
+            *REVERSION_FEATURE_COLUMNS,
         )
     )
 )
@@ -1264,7 +1427,7 @@ def _design_lag_by_feature() -> dict[str, int]:
     return lags
 
 
-#: **Disponibilidad declarada** de las 57 columnas (#147, ampliada en #150 y en la
+#: **Disponibilidad declarada** de las 63 columnas (#147, ampliada en #150 y en la
 #: auditoria de disponibilidad): sesiones que la fila de diseno de `t` retrocede para
 #: leer cada una. Es la **unica** declaracion: la consume
 #: :func:`cfdtrader.models.baseline.design_frame` (via ``availability``) y el camino
