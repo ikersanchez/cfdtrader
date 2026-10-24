@@ -2,8 +2,8 @@
 
 | Campo | Valor |
 |---|---|
-| **Versión** | **2.27** |
-| **Fecha** | 2026-10-09 |
+| **Versión** | **2.28** |
+| **Fecha** | 2026-10-24 |
 | **Estado** | Diseño — pendiente de ejecutar Fase 0 |
 | **Instrumento** | **SPX500:CFD**, cotizando en el horario de la sesión regular estadounidense; las horas se calculan en `America/New_York` y se presentan en `Europe/Madrid` |
 | **Ámbito** | Decisión de apoyo (*decision support*). La ejecución es siempre manual. |
@@ -426,7 +426,7 @@ El error de diseño más común es **meter todo bajo un orquestador LLM**. Dos m
 |---|---|---|
 | **TechnicalAgent** | Propuesto | `trend_score`, `rsi`, `atr_norm`, `dist_to_ma`, `vol_breakout`, `soportes/resistencias` |
 | **MarketContextAgent** | Propuesto | `corr_rolling` SPX~DAX/FTSE/SX5E/Nikkei, `beta_vix`, `Δdxy`, `sesion_europea_previa`, `asia_overnight`, `dispersion_sectorial` |
-| **MacroAgent** | Propuesto | `fed_funds`, `Δfed_funds_esperado`, `ust_10y`, `Δust_10y_5d`, `pendiente_2s10s`, `cpi_yoy`, `dxy`, `sorpresa_macro_hoy` |
+| **MacroAgent** | Propuesto | `fed_funds`, `ust_10y`, `Δust_10y_5d`, `pendiente_2s10s`, `cpi_yoy`, `dxy` |
 | **NewsAgent (LLM)** | Propuesto | `list[Event{entity, direction, materiality, horizon, source, published_at, confidence}]` + veto |
 | **RiskAgent** | Propuesto | `sigma_forecast`, `expected_range`, `gap_risk`, `prob_stop_hit`, `max_daily_loss_ok`, `kill_switch` |
 | **Orquestador** | Propuesto | Ver §7.3 — híbrido |
@@ -438,6 +438,15 @@ El error de diseño más común es **meter todo bajo un orquestador LLM**. Dos m
 | **EvaluatorAgent** | ⭐ **añadido · se construye PRIMERO** | Backtest, purga/embargo, PBO, Deflated Sharpe |
 | **AttributionAgent** | ⭐ **añadido** | Post-mortem diario: ¿qué agente acertó/falló? Bucle de I+D |
 | **DevilAdvocateAgent** | ⭐ **añadido** | Genera el caso contrario a la recomendación → evita anclaje |
+
+**Alcance declarado del `MacroAgent` (#75).** El catálogo **no** promete `Δfed_funds_esperado` ni
+`sorpresa_macro_hoy`. Una sorpresa es `valor publicado − esperado`, y este proyecto **no ingesta el
+consenso**: BLS y BEA publican el valor, no la expectativa; los proveedores de consenso son de pago
+o proxies degradados, y el tipo esperado por el mercado exigiría probabilidades implícitas de la Fed
+o futuros de tipos. Lo que **sí** existe —y está en `macro_v1` (#22)— es el **observado**
+`fed_funds_chg_5`. Si algún día se contrata una fuente de consenso con histórico *point-in-time*, la
+sorpresa será una candidata de `macro_v2` o una regla del gate del día del evento, con su propia
+medición de disponibilidad; hasta entonces no se promete. Ver #75.
 
 **Nota específica del S&P 500:** el índice está **muy concentrado en mega-cap tecnológicas** —las mayores posiciones superan con holgura el 30% del peso agregado—, lo que tiene tres consecuencias directas sobre las features:
 
@@ -1616,3 +1625,4 @@ demostrado. Vive en `delivery/production.py`.
 | 2026-10-09 | **2.24** | 🛡️ **§19.20 (#83): la contabilidad de cartera del *kill switch* (reglas 3, 4 y 5).** Se cierra el hueco que `gate_sweep` publicaba como parámetro inerte: el acumulado de P&L realizado vive en **`journal.trades`** (recomputado, no un contador aparte) y lo sirve `analysis/portfolio_rules.py`. Se declaran las **ventanas de calendario** (día natural ET, semana ISO-8601, mes natural), su **rearme**, el criterio **point-in-time** (`trade_date` estrictamente anterior a la sesión) y la **conversión explícita** de `%` del nocional a `%` del capital vía apalancamiento (la trampa de #80: sin ella la valla sería decorativa). El camino diario pasa ya las tres cifras al gate, con `None` mientras el diario no tenga operaciones cerradas (en observación `journal.trades` está vacío, §19.11). **No** cambia `§11.6`, ni el carril B (`phase2_ready = false`), ni el carril A: hace **verificables** tres reglas de §12. La lectura de cartera del backtest sesión a sesión sigue siendo #28. Cabecera a 2.24 | Las reglas 3, 4 y 5 se evaluaban contra un `None`: la valla de pérdida máxima diaria, semanal y mensual no podía dispararse, y el sistema iba a operar dinero real sin ella |
 | 2026-10-09 | **2.26** | 🚀 **§19.22 (#47): puesta en producción con tamaño mínimo.** Se declara el procedimiento del día en `delivery/production.py`: la **tarjeta de operación** (se opera sii hay `recommendation` direccional de **tier A**; cualquier otro caso es *no operar* con su motivo), el **tamaño mínimo** (el nocional del gate es un **techo**, nunca un objetivo), los diez pasos con su comando y el **ensayo del día completo** como artefacto de aceptación. **La valla de honestidad es ahora explícita:** la Fase 2 dio `fail` en la base neta y el valor esperado **medido** sale negativo, así que operar con dinero real es una **decisión del propietario**, no una conclusión del sistema. `§11.6` **no** se altera y el carril B sigue bloqueado. Cabecera a 2.26 | Cerrar el último eslabón del carril A sin disfrazar de *edge* una decisión del propietario: el sistema ya sabe decidir, cubrirse y registrar; faltaba declarar **cómo se opera** |
 | 2026-10-11 | **2.27** | 🧭 **§19.23 (#148): la contradicción con el pre-mercado del ES avisa (regla 21), no bloquea.** El gap que **#141** mide y el informe imprime deja de ser decorativo: entra en el gate como **dato declarado** (`decision/premarket.py`) y estrena la **regla 21**, con el aviso `contradiccion_premercado`. Se pre-registra el **umbral 0,25 %** sobre `overnight_move_pct` —por debajo de `R` (1 %, §19.12) y por encima del coste declarado de ida y vuelta (~0,20 %, §3.3)—, la **acción** (**avisar**, no bloquear: decide el operador) y las tres condiciones que la desactivan (`unavailable`, dato de otra sesión y ausencia del dato, que no se sustituye por un `0`). **No** crea ni invierte una dirección y **no** toca el nocional, el stop ni el tier. La primera versión del mismo día **degradaba a `NOTHING`** y se corrigió **antes de usarse**, por decisión del propietario: queda declarado en §19.23. El **backtest no cambia** (no hay serie histórica de pre-mercado: esa medición es **#149**), `§11.6` **no** se altera y el ES sigue **fuera** de las 10 de `BASELINE_FEATURES`. Cabecera a 2.27 | El modelo decidió `SHORT` el 2026-10-09 con el ES en verde (`+0,291 %`) y **no podía verlo**: un input disponible e ignorado no es una limitación declarada, es un dato que falta en la decisión. Y quien decide con ese dato es el operador, no una regla cableada |
+| 2026-10-24 | **2.28** | 🧹 **§7.1 (#75): el `MacroAgent` deja de prometer dos salidas que el proyecto no puede construir.** Se retiran `Δfed_funds_esperado` y `sorpresa_macro_hoy` del catálogo; el observado `fed_funds_chg_5` sigue en `macro_v1` (#22). Se declara que **no se ingesta consenso** (BLS/BEA publican el valor, no la expectativa; los proveedores son de pago o proxies degradados) y que, si aparece una fuente con histórico *point-in-time*, la sorpresa será candidata de `macro_v2` o regla del gate del día del evento, con su propia medición de disponibilidad. Cabecera a 2.28 | Cerrar #75 con una decisión escrita: una salida que no se puede calcular no se promete, y el `MacroAgent` no debe declarar dos contratos inexistentes |
