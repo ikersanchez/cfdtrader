@@ -129,6 +129,11 @@ __all__ = [
     "HISTORICAL_SWAP_PREFIX",
     "INTERCHANGE_RULE",
     "REPORT_PREFIX",
+    "REVERSION_ADD_PREFIX",
+    "REVERSION_BUDGET_RULE",
+    "REVERSION_CANDIDATES",
+    "REVERSION_CANDIDATE_GROUP",
+    "REVERSION_SWAP_PREFIX",
     "SWAP_PREFIX",
     "TOLERANCE_STANDARD_ERRORS",
     "VERDICT_IMPROVES",
@@ -142,6 +147,7 @@ __all__ = [
     "FeatureSet",
     "SetMeasurement",
     "Verdict",
+    "build_parser",
     "classify_verdict",
     "decide_budget",
     "measure",
@@ -203,6 +209,19 @@ HISTORICAL_BUDGET_RULE: Final[str] = (
     "candidatas de `historical_market_v1`, 12 columnas) y un intercambio por candidata (10). "
     "Se aplica sin cambios el protocolo de #146; el espacio historico no forma parte del grupo "
     "ni de las conclusiones del experimento de commodities."
+)
+
+#: Grupo opt-in de la familia de sobre-extension y reversion (#160, seguimiento de #159).
+REVERSION_CANDIDATE_GROUP: Final[str] = "reversion"
+REVERSION_CANDIDATES: Final[tuple[str, ...]] = feature_store.REVERSION_FEATURE_COLUMNS
+REVERSION_ADD_PREFIX: Final[str] = "add"
+REVERSION_SWAP_PREFIX: Final[str] = "swap"
+REVERSION_BUDGET_RULE: Final[str] = (
+    "Se mide el control de 10 columnas frente a **seis adiciones de una candidata** "
+    "(`control + candidata`, 11 columnas) y **seis intercambios** (mismo tamano 10), uno por "
+    "candidata de `reversion_v1`. El ampliado de las seis juntas (16 columnas) **no** es "
+    "admisible: supera el limite 10-15 de `plan.md` §9. Se aplica sin cambios el protocolo de "
+    "#146 y el espacio no forma parte del grupo ni de las conclusiones de commodities."
 )
 
 
@@ -410,13 +429,20 @@ def planned_sets(
     swap_prefix: str = SWAP_PREFIX,
     expanded_source: str | None = None,
     expanded_provenance: str | None = None,
+    per_candidate_additions: bool = False,
+    add_prefix: str = "add",
 ) -> tuple[FeatureSet, ...]:
-    """El **espacio pre-registrado**: control, ampliado y un intercambio por candidata (A1).
+    """El **espacio pre-registrado**: control, ampliado (o adiciones) e intercambios (A1).
 
-    El orden es el declarado y **determinista**: control primero, ampliado despues y, por ultimo,
-    los intercambios en el orden de :data:`CANDIDATE_FEATURES`. Las columnas del ampliado son la
-    concatenacion literal de control y candidatas. El intercambio de una candidata **no** puede
-    reutilizar una columna que ya haya salido: sale la siguiente mas redundante disponible.
+    El orden es el declarado y **determinista**: control primero, el ampliado o las adiciones
+    de una candidata despues y, por ultimo, los intercambios en el orden de la lista de
+    candidatas. Las columnas del ampliado son la concatenacion literal de control y candidatas.
+    El intercambio de una candidata **no** puede reutilizar una columna que ya haya salido: sale
+    la siguiente mas redundante disponible.
+
+    Con ``per_candidate_additions`` el espacio **no** construye el ampliado: anade una candidata
+    al control por conjunto (``add_<candidata>``, 11 columnas), que es la unica forma de medir
+    una familia que, entera, supera el limite 10-15 (el caso de ``reversion_v1``, #160).
     """
     control_tuple = tuple(control)
     candidates_tuple = tuple(candidates)
@@ -430,40 +456,60 @@ def planned_sets(
         raise BudgetError(
             f"control y candidatas no pueden solaparse: {overlap} (la procedencia seria ambigua)"
         )
+    if per_candidate_additions and (expanded_source is not None or expanded_provenance is not None):
+        raise BudgetError(
+            "las adiciones por candidata no construyen el ampliado: `expanded_source` y "
+            "`expanded_provenance` no aplican (A1)"
+        )
     default_commodity_group = (
         tuple(candidates) == CANDIDATE_FEATURES
         and candidate_set == CANDIDATE_SET
         and expanded_name == EXPANDED_SET
         and swap_prefix == SWAP_PREFIX
     )
-    expanded = FeatureSet(
-        name=expanded_name,
-        kind="expanded",
-        columns=(*control_tuple, *candidates_tuple),
-        source=expanded_source
-        or (
-            "BASELINE_FEATURES + commodities_v1 (control + candidatas)"
-            if default_commodity_group
-            else f"BASELINE_FEATURES + {candidate_set} (control + candidatas)"
-        ),
-        provenance=expanded_provenance
-        or (
-            "control + las 5 candidatas de `commodities_v1` (#143); 15 columnas, el limite "
-            "declarado de `plan.md` §9"
-            if default_commodity_group
-            else f"control + las {len(candidates_tuple)} candidatas de `{candidate_set}`"
-        ),
+    control_set = FeatureSet(
+        name=CONTROL_SET,
+        kind="control",
+        columns=control_tuple,
+        source="cfdtrader.models.baseline.BASELINE_FEATURES",
+        provenance="las 10 de control de #24, sin tocar: es la referencia de la comparacion",
     )
-    sets: list[FeatureSet] = [
-        FeatureSet(
-            name=CONTROL_SET,
-            kind="control",
-            columns=control_tuple,
-            source="cfdtrader.models.baseline.BASELINE_FEATURES",
-            provenance="las 10 de control de #24, sin tocar: es la referencia de la comparacion",
-        ),
-        expanded,
-    ]
+    sets: list[FeatureSet] = [control_set]
+    if per_candidate_additions:
+        for candidate in candidates_tuple:
+            sets.append(
+                FeatureSet(
+                    name=f"{add_prefix}_{candidate}",
+                    kind="add",
+                    columns=(*control_tuple, candidate),
+                    source=f"BASELINE_FEATURES + `{candidate}` ({candidate_set})",
+                    provenance=(
+                        f"control + `{candidate}`; {len(control_tuple) + 1} columnas, dentro "
+                        f"del limite 10-15 de `plan.md` §9"
+                    ),
+                )
+            )
+    else:
+        sets.append(
+            FeatureSet(
+                name=expanded_name,
+                kind="expanded",
+                columns=(*control_tuple, *candidates_tuple),
+                source=expanded_source
+                or (
+                    "BASELINE_FEATURES + commodities_v1 (control + candidatas)"
+                    if default_commodity_group
+                    else f"BASELINE_FEATURES + {candidate_set} (control + candidatas)"
+                ),
+                provenance=expanded_provenance
+                or (
+                    "control + las 5 candidatas de `commodities_v1` (#143); 15 columnas, el limite "
+                    "declarado de `plan.md` §9"
+                    if default_commodity_group
+                    else f"control + las {len(candidates_tuple)} candidatas de `{candidate_set}`"
+                ),
+            )
+        )
     used: set[str] = set()
     for candidate in candidates_tuple:
         removable = tuple(name for name in control_tuple if name not in used)
@@ -588,13 +634,13 @@ def decide_budget(
     """La decision de presupuesto a partir del veredicto, del ganador y de la puerta (A7).
 
     Solo un veredicto `mejora` **con** la puerta de significacion superada mueve la aguja: adopta
-    el ampliado (`amplia`) o un intercambio (`intercambia`). `empata`, `empeora`, `not_evaluable`
-    y una mejora sin respaldo de DSR/PBO **mantienen** el control: la carga de la prueba la lleva
-    quien afirma la mejora, no quien la niega.
+    el ampliado o la adicion de una candidata (`amplia`) o un intercambio (`intercambia`).
+    `empata`, `empeora`, `not_evaluable` y una mejora sin respaldo de DSR/PBO **mantienen** el
+    control: la carga de la prueba la lleva quien afirma la mejora, no quien la niega.
     """
     if verdict != VERDICT_IMPROVES or not significance_ok or best is None:
         return DECISION_KEEP, CONTROL_SET
-    if best.kind == "expanded":
+    if best.kind in {"expanded", "add"}:
         return DECISION_ADOPT, best.name
     if best.kind == "swap":
         return DECISION_SWAP, best.name
@@ -843,14 +889,15 @@ def measure(
 
     El protocolo es el de la Fase 2, **importado** y no reimplementado: el plan de particiones de
     #12 (purga y embargo), el modelo de #24/#25 con su calibrador, el motor de #13 con el coste
-    declarado de #11. El valor por defecto conserva el espacio commodities de #146. El grupo
-    historico es opt-in, se une solo para esta llamada y no altera la matriz ni el experimento
-    commodities.
+    declarado de #11. El valor por defecto conserva el espacio commodities de #146. Los grupos
+    historico y de reversion son opt-in: el historico une sus dos columnas solo para esta llamada
+    y el de reversion usa las seis que ya estan en la matriz, sin recalcular ninguna feature.
     """
     moment = _as_utc(as_of)
     if candidate_group not in {
         COMMODITIES_CANDIDATE_GROUP,
         HISTORICAL_MARKET_CANDIDATE_GROUP,
+        REVERSION_CANDIDATE_GROUP,
     }:
         raise BudgetError(f"grupo de candidatas desconocido: {candidate_group!r}")
     history = backtest_report.load_history(store, series_id=backtest_report.SERIES_ID)
@@ -900,6 +947,22 @@ def measure(
                     "control + exactamente `es_basis` y `spx_overnight_ret_1`; 12 columnas, dentro "
                     "del presupuesto declarado de 10-15"
                 ),
+            )
+        )
+    elif candidate_group == REVERSION_CANDIDATE_GROUP:
+        # Las seis columnas ya estan en la matriz de 63 del catalogo: no hay join, ni recalculo,
+        # ni spec nueva. Solo cambia **la lista de columnas** de cada conjunto.
+        candidates = REVERSION_CANDIDATES
+        planned = (
+            tuple(sets)
+            if sets is not None
+            else planned_sets(
+                analysis_matrix,
+                candidates=candidates,
+                candidate_set=feature_store.REVERSION_FEATURE_SET,
+                swap_prefix=REVERSION_SWAP_PREFIX,
+                add_prefix=REVERSION_ADD_PREFIX,
+                per_candidate_additions=True,
             )
         )
     else:
@@ -1013,7 +1076,7 @@ def measure(
         usable_measurements,
         returns_by_name,
         attempted_trials=(
-            len(measurements) if candidate_group == HISTORICAL_MARKET_CANDIDATE_GROUP else None
+            len(measurements) if candidate_group != COMMODITIES_CANDIDATE_GROUP else None
         ),
     )
     pbo = _pbo_block(usable_measurements, returns_by_name)
@@ -1021,7 +1084,7 @@ def measure(
     decision, adopted = decide_budget(verdict.verdict, best, significance_ok=significance_ok)
     chosen = next(item for item in measurements if item.name == adopted)
     split_plan_audit: dict[str, object] = {}
-    if candidate_group == HISTORICAL_MARKET_CANDIDATE_GROUP:
+    if candidate_group != COMMODITIES_CANDIDATE_GROUP:
         split_plan_audit = {
             "plan_sha256": plan.plan_sha256,
             "n_sessions": plan.n_sessions,
@@ -1116,6 +1179,59 @@ def _historical_candidate_spec_digest() -> str:
     )
 
 
+def _reversion_experiment(
+    *,
+    candidate_features: Sequence[str],
+    candidate_matrix_sha256: str,
+    n_candidate_design_rows: int,
+    sessions: Sequence[date],
+    n_sessions: int,
+    design_lag_by_feature: Mapping[str, int],
+    split_plan_audit: Mapping[str, object],
+) -> dict[str, object]:
+    """El bloque del experimento de `reversion_v1`: catalogo, lags, ventana y valla (A11)."""
+    return {
+        "candidate_set": feature_store.REVERSION_FEATURE_SET,
+        "catalog": [
+            {
+                "name": entry.name,
+                "formula": entry.formula,
+                "window_sessions": entry.window,
+                "source": entry.source,
+                "required_as_of": entry.required_as_of,
+                "design_lag": entry.design_lag,
+            }
+            for entry in feature_store.REVERSION_FEATURE_CATALOG
+        ],
+        "design_lag_by_feature": {
+            name: dict(design_lag_by_feature)[name] for name in candidate_features
+        },
+        "expanded_set_admissible": False,
+        "expanded_set_reason": (
+            "control + las seis candidatas serian 16 columnas y superan el limite 10-15 de "
+            "`plan.md` §9: el espacio son seis adiciones de 11 y seis intercambios de 10"
+        ),
+        "candidate_matrix_sha256": candidate_matrix_sha256,
+        "common_complete_case_window": {
+            "design_rows_before_filter": n_candidate_design_rows,
+            "rows_used": n_sessions,
+            "rows_excluded": n_candidate_design_rows - n_sessions,
+            "first_session_used": sessions[0].isoformat(),
+            "last_session_used": sessions[-1].isoformat(),
+            "rule": (
+                "control y las seis candidatas usan exactamente las mismas filas completas; "
+                "no hay imputacion ni relleno de features"
+            ),
+        },
+        "walk_forward_exclusions": dict(split_plan_audit),
+        "scope": (
+            "experimento independiente de commodities_v1 e historical_market_v1; no cambia "
+            "`BASELINE_FEATURES`, `delivery.run_daily`, outputs publicos ni `phase2_ready`; "
+            "edge no demostrado"
+        ),
+    }
+
+
 def _payload(
     *,
     as_of: datetime,
@@ -1142,25 +1258,46 @@ def _payload(
     """El payload del informe: reglas, espacio, medidas, DSR/PBO, decision e identidad (A11)."""
     sessions = window.sessions
     is_historical = candidate_group == HISTORICAL_MARKET_CANDIDATE_GROUP
-    candidate_set = HISTORICAL_MARKET_CANDIDATE_SET if is_historical else CANDIDATE_SET
-    candidate_source = (
-        "cfdtrader.features.historical_market.HISTORICAL_MARKET_CANDIDATE_COLUMNS"
-        if is_historical
-        else "cfdtrader.features.store.COMMODITIES_FEATURE_COLUMNS"
-    )
+    is_reversion = candidate_group == REVERSION_CANDIDATE_GROUP
+    is_experiment = is_historical or is_reversion
+    if is_historical:
+        candidate_set = HISTORICAL_MARKET_CANDIDATE_SET
+    elif is_reversion:
+        candidate_set = feature_store.REVERSION_FEATURE_SET
+    else:
+        candidate_set = CANDIDATE_SET
+    if is_historical:
+        candidate_source = (
+            "cfdtrader.features.historical_market.HISTORICAL_MARKET_CANDIDATE_COLUMNS"
+        )
+    elif is_reversion:
+        candidate_source = "cfdtrader.features.store.REVERSION_FEATURE_COLUMNS"
+    else:
+        candidate_source = "cfdtrader.features.store.COMMODITIES_FEATURE_COLUMNS"
     payload: dict[str, object] = {
         "analysis": ANALYSIS,
         "kind": "feature_budget",
         "title": (
             "Medicion de candidatas historicas ES/S&P con el protocolo de #146"
             if is_historical
-            else "Presupuesto de features de #24 y re-medida de la Fase 2 (#146)"
+            else (
+                "Presupuesto de features de `reversion_v1` (sobre-extension y reversion) con el "
+                "protocolo de #146"
+                if is_reversion
+                else "Presupuesto de features de #24 y re-medida de la Fase 2 (#146)"
+            )
         ),
         "as_of": as_of.isoformat(),
         "budget": {
             "min": BUDGET_MIN,
             "max": BUDGET_MAX,
-            "rule": HISTORICAL_BUDGET_RULE if is_historical else BUDGET_RULE,
+            "rule": (
+                HISTORICAL_BUDGET_RULE
+                if is_historical
+                else REVERSION_BUDGET_RULE
+                if is_reversion
+                else BUDGET_RULE
+            ),
             "interchange_rule": INTERCHANGE_RULE,
             "verdict_rule": VERDICT_RULE,
             "gate_rule": GATE_RULE,
@@ -1205,7 +1342,7 @@ def _payload(
             "adopted_set": adopted.name,
             "n_features": adopted.n_features,
             "features": list(adopted.columns),
-            "production_changes": (decision != DECISION_KEEP and not is_historical),
+            "production_changes": (decision != DECISION_KEEP and not is_experiment),
             "gate": {
                 "passed": gate_ok,
                 "reason": gate_reason,
@@ -1219,7 +1356,7 @@ def _payload(
                     "`BASELINE_FEATURES`, `delivery.run_daily`, las recomendaciones publicas ni "
                     "`phase2_ready`; cualquier adopcion requiere un seguimiento separado"
                 )
-                if is_historical
+                if is_experiment
                 else (
                     "carril B (`plan.md` §11.6 / §19.7): esta decision **no** "
                     "desbloquea produccion "
@@ -1248,8 +1385,9 @@ def _payload(
             ),
         },
     }
-    if is_historical:
+    if is_experiment:
         payload["candidate_group"] = candidate_group
+    if is_historical:
         payload["historical_market_experiment"] = {
             "candidate_set": HISTORICAL_MARKET_CANDIDATE_SET,
             "catalog": [
@@ -1288,6 +1426,20 @@ def _payload(
         identity = cast("dict[str, object]", payload["identity"])
         identity["historical_candidate_matrix_sha256"] = candidate_matrix_sha256
         identity["historical_candidate_spec_sha256"] = _historical_candidate_spec_digest()
+    if is_reversion:
+        payload["reversion_experiment"] = _reversion_experiment(
+            candidate_features=candidate_features,
+            candidate_matrix_sha256=candidate_matrix_sha256,
+            n_candidate_design_rows=n_candidate_design_rows,
+            sessions=sessions,
+            n_sessions=window.n_sessions,
+            design_lag_by_feature=dict(window.design_lag_by_feature),
+            split_plan_audit=split_plan_audit,
+        )
+        identity = cast("dict[str, object]", payload["identity"])
+        family_spec = frame.matrix.feature_spec_sha256.get(feature_store.REVERSION_FEATURE_SET)
+        if family_spec is not None:
+            identity["reversion_candidate_spec_sha256"] = family_spec
     return payload
 
 
@@ -1310,6 +1462,8 @@ class BudgetReport:
         """Nombre base separado por grupo; el default conserva el artefacto de #146."""
         if self.candidate_group == HISTORICAL_MARKET_CANDIDATE_GROUP:
             return f"feature_budget_historical_market_{self.report_date.isoformat()}"
+        if self.candidate_group == REVERSION_CANDIDATE_GROUP:
+            return f"feature_budget_reversion_{self.report_date.isoformat()}"
         return f"{REPORT_PREFIX}_{self.report_date.isoformat()}"
 
     def json_text(self) -> str:
@@ -1347,7 +1501,12 @@ def _render_markdown(report: BudgetReport) -> str:
         (
             "# Medicion de candidatas historicas ES/S&P con el protocolo de #146"
             if report.candidate_group == HISTORICAL_MARKET_CANDIDATE_GROUP
-            else "# Presupuesto de features de #24 y re-medida de la Fase 2 (#146)"
+            else (
+                "# Presupuesto de features de `reversion_v1` (sobre-extension y reversion) con el "
+                "protocolo de #146"
+                if report.candidate_group == REVERSION_CANDIDATE_GROUP
+                else "# Presupuesto de features de #24 y re-medida de la Fase 2 (#146)"
+            )
         ),
         "",
         f"> **Fecha:** {report.report_date.isoformat()} · **Veredicto:** "
@@ -1412,6 +1571,29 @@ def _render_markdown(report: BudgetReport) -> str:
                 "",
             ]
         )
+    if report.candidate_group == REVERSION_CANDIDATE_GROUP:
+        experiment = cast("Mapping[str, object]", payload["reversion_experiment"])
+        window = cast("Mapping[str, object]", experiment["common_complete_case_window"])
+        exclusions = cast("Mapping[str, object]", experiment["walk_forward_exclusions"])
+        lines.extend(
+            [
+                "## Espacio y ventana",
+                "",
+                "- Espacio pre-registrado: control (10) + seis adiciones de una candidata (11) + "
+                "seis intercambios (10).",
+                "- El ampliado de las seis juntas (16 columnas) **no** es admisible: supera el "
+                "límite 10-15 de `plan.md` §9.",
+                f"- Ventana común: {window['rows_used']} sesiones usadas / "
+                f"{window['rows_excluded']} excluidas.",
+                f"- Purga real: {exclusions['purge_total']}; embargo total: "
+                f"{exclusions['embargo_total']}; embargo dentro del train: "
+                f"{exclusions['embargo_in_train_total']}.",
+                "- Las seis columnas ya estaban en la matriz de 63: no se recalcula ninguna "
+                "feature.",
+                "- No hay poder predictivo demostrado y no se adopta nada en producción.",
+                "",
+            ]
+        )
     return "\n".join(lines)
 
 
@@ -1426,8 +1608,8 @@ def _parse_as_of(value: str | None) -> datetime:
     return _as_utc(parsed)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    """Punto de entrada: ``0`` informe escrito, ``2`` falta un argumento o la re-medida fallo."""
+def build_parser() -> argparse.ArgumentParser:
+    """El parser del CLI, con los tres grupos pre-registrados y `commodities` por defecto."""
     parser = argparse.ArgumentParser(
         prog=CLI_NAME,
         description=(
@@ -1445,11 +1627,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--settings", type=Path, default=None, help="ruta de settings.yaml")
     parser.add_argument(
         "--candidate-group",
-        choices=(COMMODITIES_CANDIDATE_GROUP, HISTORICAL_MARKET_CANDIDATE_GROUP),
+        choices=(
+            COMMODITIES_CANDIDATE_GROUP,
+            HISTORICAL_MARKET_CANDIDATE_GROUP,
+            REVERSION_CANDIDATE_GROUP,
+        ),
         default=COMMODITIES_CANDIDATE_GROUP,
         help=(
-            "grupo pre-registrado a medir; historical_market emite un informe independiente y "
-            "solo lee datos locales"
+            "grupo pre-registrado a medir; historical_market y reversion emiten informes "
+            "independientes y solo leen datos locales"
         ),
     )
     parser.add_argument(
@@ -1457,7 +1643,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="instante declarado ISO-8601 con zona, obligatorio (el modulo no lee el reloj)",
     )
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Punto de entrada: ``0`` informe escrito, ``2`` falta un argumento o la re-medida fallo."""
+    args = build_parser().parse_args(argv)
 
     try:
         moment = _parse_as_of(cast("str | None", args.as_of))

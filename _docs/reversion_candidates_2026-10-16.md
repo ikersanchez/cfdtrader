@@ -144,12 +144,18 @@ disponibilidad, no una linea mas en esta tabla.
 ## Medición de poder predictivo (sonda del 2026-10-16)
 
 Sonda de solo lectura `.scratch/measure_reversion_2026-10-16.py`: **no** es un artefacto publicado y
-**no** decide nada (la decision formal de presupuesto es la issue de seguimiento). Aplica el
+**no** decide nada (la decision formal se tomo despues en #160). Aplica el
 protocolo de #146 importado —plan de #12, modelo de #24/#25, motor de #13, ventana comun de casos
 completos, veredicto pareado y DSR/PBO de `analysis.feature_budget`— candidata a candidata, porque
-`measure` esta cableado al grupo de commodities: `control + candidata` (11 columnas, dentro del
+`measure` estaba cableado al grupo de commodities: `control + candidata` (11 columnas, dentro del
 presupuesto 10-15) y el **intercambio** declarado (`control + candidata − la columna de control con
 mayor |r|`).
+
+**Cautela de la sonda (declarada a posteriori).** Llamaba a `redundant_control_feature` **sin**
+excluir una columna de control que ya hubiera salido, asi que sus intercambios podian repetir la
+misma columna (`swap_breadth` y `swap_streak_up` sacaban las dos `europe_prev_1`; `vix_ts_slope` y
+`vix_contango` podian repetir `vix_zscore`). No es el espacio pre-registrado: el informe formal de
+#160, con la exclusion, es el que decide.
 
 Ventana comun: **2.688 sesiones**, 10 pliegues, 500 sesiones de test por conjunto. Control:
 `sharpe = −0,0345`, 416 operaciones.
@@ -185,17 +191,24 @@ Tres cautelas que la tabla no dice por si sola:
 - la ventana mide, no fija: 500 sesiones de test dan errores tipicos de 3e−05 a 2e−04 por sesion,
   del mismo orden que las diferencias medidas.
 
-Conclusion: **no hay poder predictivo demostrado**, asi que la produccion se queda como esta
-(`BASELINE_FEATURES` intacto) y no se abre la adopcion. Las columnas quedan materializadas para que
-el presupuesto formal (issue de seguimiento) pueda medirlas con el grupo `reversion` declarado en
-`analysis/feature_budget`, sin volver a calcular nada.
+Conclusion de la sonda: **no hay poder predictivo demostrado**, asi que la produccion se queda como
+esta (`BASELINE_FEATURES` intacto) y no se abre la adopcion. Las columnas quedaron materializadas
+para el presupuesto formal, y ese presupuesto **ya se ejecuto** en #160 con el grupo `reversion`
+declarado en `analysis/feature_budget`: ver
+[`feature_budget_reversion_2026-10-24.md`](feature_budget_reversion_2026-10-24.md) y
+`data/derived/reports/feature_budget_reversion_2026-10-24.{json,md}`. Con el espacio pre-registrado
+(seis adiciones de 11 y seis intercambios de 10; el ampliado de 16 **no** cabe en 10-15) el
+resultado es `mejora` descriptiva (`swap_streak_up`, +3,27e−04/sesion, se 2,43e−04), DSR `0,348`
+(`not_significant`) y PBO `0,544` (`detected`) → `mantiene_control`. La sonda y el informe formal
+coinciden en la decision (no se adopta nada); difieren en el detalle de la exclusion de columnas,
+que en el espacio formal saca `asia_overnight_1` por `streak_up` y sube el PBO.
 
 ## La valla
 
 Estas seis columnas **no** estan en produccion: `BASELINE_FEATURES` intacto, `phase2_ready = false`,
-carril B bloqueado y `§11.6` sin tocar. Medir si alguna tiene poder predictivo es la issue de
-seguimiento con `analysis/feature_budget` (patron #143 → #146): control + ampliado + intercambios
-sobre los mismos pliegues de #12, con la puerta de significacion (DSR y PBO) que decidio #146.
+carril B bloqueado y `§11.6` sin tocar. La medicion con `analysis/feature_budget` (patron #143 →
+#146) ya se hizo en #160: control + seis adiciones + seis intercambios sobre los mismos pliegues de
+#12, con la puerta de significacion (DSR y PBO) que decidio #146, y salio `mantiene_control`.
 Adoptar exigiria reentrenar y regenerar la cadena §2 completa, y en ese caso habria que re-declarar
 la referencia de la puerta del *paper* en vez de recalcularla: cambiarla a mitad de observacion es
 mover la porteria.
