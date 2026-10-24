@@ -332,12 +332,13 @@ def test_a1_the_module_is_pure() -> None:
 # A2 — registro
 # ─────────────────────────────────────────────────────────────────────────────
 def test_a2_the_registry_declares_the_fifth_family() -> None:
-    """El registro expone las seis familias y la spec de regimen se construye."""
+    """El registro expone las siete familias y la spec de regimen se construye."""
     assert sorted(store.CATALOG_BY_FEATURE_SET) == [
         "commodities_v1",
         "context_v1",
         "macro_v1",
         "regime_v1",
+        "reversion_v1",
         "technical_v1",
         "volatility_v1",
     ]
@@ -407,13 +408,14 @@ def test_a3_a_bad_window_or_a_foreign_name_is_a_typed_error() -> None:
 # A4 — nombres
 # ─────────────────────────────────────────────────────────────────────────────
 def test_a4_the_names_do_not_collide_between_the_families() -> None:
-    """Ninguna de las 7 esta en los otros cuatro catalogos y el unico solape sigue igual."""
+    """Ninguna de las 7 esta en los otros catalogos y el unico solape sigue igual."""
     regimes = set(store.REGIME_FEATURE_COLUMNS)
     assert len(regimes) == 7
     assert regimes & set(store.FEATURE_COLUMNS) == set()
     assert regimes & set(store.TECHNICAL_FEATURE_COLUMNS) == set()
     assert regimes & set(store.CONTEXT_FEATURE_COLUMNS) == set()
     assert regimes & set(store.MACRO_FEATURE_COLUMNS) == set()
+    assert regimes & set(store.REVERSION_FEATURE_COLUMNS) == set()
     assert "rv_percentile" not in store.FEATURE_COLUMNS
     assert "vix_percentile" in store.FEATURE_COLUMNS
     assert "garch_forecast" not in store.FEATURE_COLUMNS
@@ -425,11 +427,12 @@ def test_a4_the_names_do_not_collide_between_the_families() -> None:
         | set(store.CONTEXT_FEATURE_COLUMNS)
         | set(store.MACRO_FEATURE_COLUMNS)
         | set(store.COMMODITIES_FEATURE_COLUMNS)
+        | set(store.REVERSION_FEATURE_COLUMNS)
         | regimes
     )
     assert set(store.ALL_FEATURE_COLUMNS) == union
     assert len(store.ALL_FEATURE_COLUMNS) == len(union)
-    # el unico repetido entre las seis familias sigue siendo `atr_norm` (#72)
+    # el unico repetido entre las siete familias sigue siendo `atr_norm` (#72)
     assert len(store.ALL_FEATURE_COLUMNS) == (
         len(store.FEATURE_COLUMNS)
         + len(store.TECHNICAL_FEATURE_COLUMNS)
@@ -437,15 +440,16 @@ def test_a4_the_names_do_not_collide_between_the_families() -> None:
         + len(store.MACRO_FEATURE_COLUMNS)
         + 7
         + 5
+        + 6
         - 1
     )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# A5 — acoplamiento congelado: los SEIS sitios de una linea
+# A5 — acoplamiento congelado: los SIETE sitios de una linea
 # ─────────────────────────────────────────────────────────────────────────────
 def test_a5_the_frozen_coupling_is_resolved_with_the_regime_columns() -> None:
-    """Los seis sitios congelados de #20/#21/#22, re-verificados desde la familia nueva.
+    """Los siete sitios congelados de #20/#21/#22/#159, re-verificados desde la familia nueva.
 
     Registrar ``regime_v1`` rompe **seis** aserciones de las suites anteriores
     (medido parcheando el registro: ``6 failed, 117 passed``) y cada una se edita
@@ -455,14 +459,15 @@ def test_a5_the_frozen_coupling_is_resolved_with_the_regime_columns() -> None:
     la lista, el conteo de ``sources``, la union, la aritmetica y los docstrings de
     ``test_macro_features.py::test_a2``, ``::test_a4`` y ``::test_a5`` (``ruff
     format`` refluye el literal de cinco familias a varias lineas fisicas: es
-    esperado). Este test re-verifica los hechos: si alguno de esos ficheros se
-    hubiera "arreglado" de otra forma, aqui se ve.
+    esperado). #159 anade la septima familia y este test vuelve a fijar los hechos:
+    si alguno de esos ficheros se hubiera "arreglado" de otra forma, aqui se ve.
     """
     assert sorted(store.CATALOG_BY_FEATURE_SET) == [
         "commodities_v1",
         "context_v1",
         "macro_v1",
         "regime_v1",
+        "reversion_v1",
         "technical_v1",
         "volatility_v1",
     ]
@@ -470,7 +475,7 @@ def test_a5_the_frozen_coupling_is_resolved_with_the_regime_columns() -> None:
     assert store.CATALOG_BY_FEATURE_SET["context_v1"] is store.CONTEXT_FEATURE_CATALOG
     assert store.CATALOG_BY_FEATURE_SET["macro_v1"] is store.MACRO_FEATURE_CATALOG
     assert store.CATALOG_BY_FEATURE_SET["volatility_v1"] is store.FEATURE_CATALOG
-    assert len(set(store.SOURCE_BY_FEATURE_SET.values())) == 6
+    assert len(set(store.SOURCE_BY_FEATURE_SET.values())) == 7
     assert len(store.FEATURE_COLUMNS) == 12
     assert len(store.TECHNICAL_FEATURE_COLUMNS) == 10
     assert len(store.CONTEXT_FEATURE_COLUMNS) == 11
@@ -483,6 +488,7 @@ def test_a5_the_frozen_coupling_is_resolved_with_the_regime_columns() -> None:
         | set(store.MACRO_FEATURE_COLUMNS)
         | set(store.REGIME_FEATURE_COLUMNS)
         | set(store.COMMODITIES_FEATURE_COLUMNS)
+        | set(store.REVERSION_FEATURE_COLUMNS)
     )
     assert len(store.ALL_FEATURE_COLUMNS) == len(union)
 
@@ -902,9 +908,11 @@ def test_a12_the_four_previous_goldens_are_untouched() -> None:
         "context_v1": "context_golden_expected.json",
         "macro_v1": "macro_golden_expected.json",
     }
-    assert set(specs) | {"regime_v1", store.COMMODITIES_FEATURE_SET} == set(
-        store.CATALOG_BY_FEATURE_SET
-    )
+    assert set(specs) | {
+        "regime_v1",
+        store.COMMODITIES_FEATURE_SET,
+        store.REVERSION_FEATURE_SET,
+    } == set(store.CATALOG_BY_FEATURE_SET)
     for feature_set, path in files.items():
         expected = dict(json.loads((FIXTURES / path).read_text(encoding="utf-8")))
         assert expected["feature_set"] == feature_set

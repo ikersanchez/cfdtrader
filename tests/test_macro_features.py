@@ -566,12 +566,13 @@ def test_a1_an_empty_series_leaves_nulls_and_never_a_zero() -> None:
 # A2 — registro
 # ─────────────────────────────────────────────────────────────────────────────
 def test_a2_the_registry_declares_the_fourth_family() -> None:
-    """El registro expone las seis familias y la spec macro se construye."""
+    """El registro expone las siete familias y la spec macro se construye."""
     assert sorted(store.CATALOG_BY_FEATURE_SET) == [
         "commodities_v1",
         "context_v1",
         "macro_v1",
         "regime_v1",
+        "reversion_v1",
         "technical_v1",
         "volatility_v1",
     ]
@@ -583,7 +584,7 @@ def test_a2_the_registry_declares_the_fourth_family() -> None:
         store.CONTEXT_FEATURES_SOURCE,
     }
     assert set(store.SOURCE_BY_FEATURE_SET) == set(store.CATALOG_BY_FEATURE_SET)
-    assert len(set(store.SOURCE_BY_FEATURE_SET.values())) == 6
+    assert len(set(store.SOURCE_BY_FEATURE_SET.values())) == 7
 
     spec = macro_spec()
     assert spec.feature_set == store.MACRO_FEATURE_SET
@@ -680,23 +681,25 @@ def test_a3_a_poisoned_macro_column_is_caught_by_the_digest() -> None:
 # A4 — nombres
 # ─────────────────────────────────────────────────────────────────────────────
 def test_a4_the_names_do_not_collide_between_the_families() -> None:
-    """Ninguna de las 13 macro esta en los otros **cuatro** catalogos, y no hay `dxy_ret_1`."""
+    """Ninguna de las 13 macro esta en los otros catalogos, y no hay `dxy_ret_1`."""
     macros = set(store.MACRO_FEATURE_COLUMNS)
     assert macros & set(store.FEATURE_COLUMNS) == set()
     assert macros & set(store.TECHNICAL_FEATURE_COLUMNS) == set()
     assert macros & set(store.CONTEXT_FEATURE_COLUMNS) == set()
     assert macros & set(store.REGIME_FEATURE_COLUMNS) == set()
+    assert macros & set(store.REVERSION_FEATURE_COLUMNS) == set()
     assert "dxy_ret_1" not in macros
     assert "dxy_ret_1" in store.CONTEXT_FEATURE_COLUMNS
     assert len(macros) == 13
 
-    # el unico repetido entre las seis familias sigue siendo `atr_norm` (#72)
+    # el unico repetido entre las siete familias sigue siendo `atr_norm` (#72)
     union = (
         set(store.FEATURE_COLUMNS)
         | set(store.TECHNICAL_FEATURE_COLUMNS)
         | set(store.CONTEXT_FEATURE_COLUMNS)
         | set(store.REGIME_FEATURE_COLUMNS)
         | set(store.COMMODITIES_FEATURE_COLUMNS)
+        | set(store.REVERSION_FEATURE_COLUMNS)
         | macros
     )
     assert len(store.ALL_FEATURE_COLUMNS) == len(union)
@@ -707,6 +710,7 @@ def test_a4_the_names_do_not_collide_between_the_families() -> None:
         + len(store.REGIME_FEATURE_COLUMNS)
         + 13
         + 5
+        + 6
         - 1
     )
     assert set(store.ALL_FEATURE_COLUMNS) == union
@@ -716,14 +720,15 @@ def test_a4_the_names_do_not_collide_between_the_families() -> None:
 # A5 — acoplamiento con las aserciones congeladas
 # ─────────────────────────────────────────────────────────────────────────────
 def test_a5_the_frozen_coupling_is_resolved_with_the_macro_columns() -> None:
-    """Las **seis** aserciones congeladas, re-verificadas desde la familia nueva.
+    """Las **siete** aserciones congeladas, re-verificadas desde la familia nueva.
 
     Registrar ``macro_v1`` rompe **tres** aserciones de las suites anteriores
-    (desde #23 son **seis**) y cada una se edita con **una** linea: la lista
+    (desde #23 son **seis**, y #159 anade la septima familia) y cada una se edita
+    con **una** linea: la lista
     esperada de ``test_technical_features.py::test_a1``, la de
     ``test_context_features.py::test_a1`` y la union de ``ALL_FEATURE_COLUMNS`` de
     ``test_context_features.py::test_a9``. Este test re-verifica los tres hechos
-    (registro de cuatro familias, catalogos anteriores intactos y union completa):
+    (registro, catalogos anteriores intactos y union completa):
     si alguno de esos ficheros se hubiera "arreglado" de otra forma, aqui se ve.
     """
     assert sorted(store.CATALOG_BY_FEATURE_SET) == [
@@ -731,6 +736,7 @@ def test_a5_the_frozen_coupling_is_resolved_with_the_macro_columns() -> None:
         "context_v1",
         "macro_v1",
         "regime_v1",
+        "reversion_v1",
         "technical_v1",
         "volatility_v1",
     ]
@@ -748,6 +754,7 @@ def test_a5_the_frozen_coupling_is_resolved_with_the_macro_columns() -> None:
         | set(store.MACRO_FEATURE_COLUMNS)
         | set(store.REGIME_FEATURE_COLUMNS)
         | set(store.COMMODITIES_FEATURE_COLUMNS)
+        | set(store.REVERSION_FEATURE_COLUMNS)
     )
     assert len(store.ALL_FEATURE_COLUMNS) == len(union)
 

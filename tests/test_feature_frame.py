@@ -95,7 +95,7 @@ def _prices_doubled(frame: pl.DataFrame, *, session: date, factor: float) -> pl.
 
 
 def _shock(frame: pl.DataFrame, *, session: date, factor: float) -> pl.DataFrame:
-    """Multiplica y desplaza **las 57 columnas** de esa sesion del frame de features."""
+    """Multiplica y desplaza **las 63 columnas** de esa sesion del frame de features."""
     return frame.with_columns(
         [
             pl.when(pl.col("session") == session)

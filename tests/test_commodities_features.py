@@ -378,7 +378,9 @@ def test_a10_the_module_does_not_read_the_clock_or_the_filesystem() -> None:
 def test_a11_the_family_is_assembled_with_the_others() -> None:
     """A11: la familia entra en el orden de ensamblado, con sus columnas y su spec."""
     assert store.COMMODITIES_FEATURE_SET in feature_frame.FAMILY_ORDER
-    assert feature_frame.FAMILY_ORDER[-1] == store.COMMODITIES_FEATURE_SET
+    # #159 registra `reversion_v1` detras: la de commodities pasa a ser la penultima.
+    assert feature_frame.FAMILY_ORDER[-2] == store.COMMODITIES_FEATURE_SET
+    assert feature_frame.FAMILY_ORDER[-1] == store.REVERSION_FEATURE_SET
     assert (
         feature_frame.COLUMNS_BY_FAMILY[store.COMMODITIES_FEATURE_SET]
         == store.COMMODITIES_FEATURE_COLUMNS
@@ -392,7 +394,8 @@ def test_a11_the_family_is_assembled_with_the_others() -> None:
 def test_a12_the_layout_of_features_daily_declares_the_new_columns() -> None:
     """A12: las cinco columnas estan en la firma y el ``layout_version`` ha subido."""
     layout = contracts.LAYOUTS[("derived", "features_daily")]
-    assert layout.layout_version == 2
+    # #159 (septima familia) sube el layout 2 -> 3; la firma sigue siendo la de todas.
+    assert layout.layout_version == 3
     assert set(layout.signature) == {*store.ALL_FEATURE_COLUMNS, *store.VERSION_COLUMNS}
     assert set(store.COMMODITIES_FEATURE_COLUMNS) <= set(layout.signature)
 

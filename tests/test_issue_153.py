@@ -121,9 +121,9 @@ FORCED_BY_MACRO_CUT: Final[tuple[str, ...]] = (
 )
 
 #: Las que **podrian** declararse `0` (su input cierra antes del snapshot) pero **aun no tienen
-#: lector pendiente**: las commodities/FX y las de contexto que no son de las cuatro ya publicadas.
-#: Conservan el `1` conservador y su auditoria es una tarea aparte. `sessions_to_opex` es de
-#: calendario pero arrastra nulos de cola (#79), asi que tambien espera.
+#: lector pendiente**: las commodities/FX, la familia de reversion (#159) y las de contexto que no
+#: son de las cuatro ya publicadas. Conservan el `1` conservador y su auditoria es una tarea aparte.
+#: `sessions_to_opex` es de calendario pero arrastra nulos de cola (#79), asi que tambien espera.
 DEFERRED_READER: Final[tuple[str, ...]] = (
     "corr_dax_60",
     "corr_ftse_60",
@@ -138,6 +138,12 @@ DEFERRED_READER: Final[tuple[str, ...]] = (
     "oil_ret_1_z",
     "gold_ret_1",
     "eurusd_ret_1",
+    "vix_ts_slope",
+    "vix_contango",
+    "vix9d_vix",
+    "breadth",
+    "streak_up",
+    "ret_5_pct",
 )
 
 needs_store = pytest.mark.skipif(
@@ -180,10 +186,10 @@ def test_c1_the_pending_families_are_the_snap_anchored_ones() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# La auditoria de disponibilidad: las 57 columnas, en tres grupos declarados
+# La auditoria de disponibilidad: las 63 columnas, en tres grupos declarados
 # ─────────────────────────────────────────────────────────────────────────────
 def test_the_audit_partitions_every_catalog_column() -> None:
-    """Cada una de las 57 columnas cae en **exactamente** un grupo declarado.
+    """Cada una de las 63 columnas cae en **exactamente** un grupo declarado.
 
     Los tres grupos son: las legibles en el instantaneo (`design_lag = 0`), las forzadas por el
     reloj del ancla o por el corte macro, y las conservadoras a la espera de su lector. Si una

@@ -132,7 +132,7 @@ def _row(frame: pl.DataFrame, session: date) -> Mapping[str, object]:
 # C2 - la disponibilidad declarada en el catalogo
 # ─────────────────────────────────────────────────────────────────────────────
 def test_c2_every_column_declares_its_availability() -> None:
-    """Las 57 columnas del catalogo declaran `design_lag`, y solo el Asia es de la sesion `t`."""
+    """Las 63 columnas del catalogo declaran `design_lag`, y solo el Asia es de la sesion `t`."""
     declared = feature_store.DESIGN_LAG_BY_FEATURE
     assert set(declared) == set(feature_store.ALL_FEATURE_COLUMNS)
     assert sorted({name for name, lag in declared.items() if lag == 0}) == list(ZERO_LAG_COLUMNS)

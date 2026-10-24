@@ -327,12 +327,13 @@ def _golden_matrix() -> pl.DataFrame:
 # A1 — registro por familia
 # ─────────────────────────────────────────────────────────────────────────────
 def test_a1_the_registry_declares_the_third_family() -> None:
-    """El registro expone las tres familias y la spec de contexto se construye."""
+    """El registro expone las siete familias y la spec de contexto se construye."""
     assert sorted(store.CATALOG_BY_FEATURE_SET) == [
         "commodities_v1",
         "context_v1",
         "macro_v1",
         "regime_v1",
+        "reversion_v1",
         "technical_v1",
         "volatility_v1",
     ]
@@ -950,7 +951,7 @@ def test_a9_the_sp500_return_is_not_duplicated_between_families() -> None:
 
     overlap = set(store.TECHNICAL_FEATURE_COLUMNS) & set(store.CONTEXT_FEATURE_COLUMNS)
     assert overlap == set()
-    # el unico solape entre los seis catalogos sigue siendo `atr_norm` (#72)
+    # el unico solape entre los siete catalogos sigue siendo `atr_norm` (#72)
     assert set(store.FEATURE_COLUMNS) & set(store.TECHNICAL_FEATURE_COLUMNS) == {"atr_norm"}
     assert set(store.FEATURE_COLUMNS) & set(store.CONTEXT_FEATURE_COLUMNS) == set()
     assert len(store.ALL_FEATURE_COLUMNS) == len(
@@ -960,6 +961,7 @@ def test_a9_the_sp500_return_is_not_duplicated_between_families() -> None:
         | set(store.MACRO_FEATURE_COLUMNS)
         | set(store.REGIME_FEATURE_COLUMNS)
         | set(store.COMMODITIES_FEATURE_COLUMNS)
+        | set(store.REVERSION_FEATURE_COLUMNS)
     )
 
 

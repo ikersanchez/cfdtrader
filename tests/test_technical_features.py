@@ -216,13 +216,14 @@ def _column(matrix: pl.DataFrame, name: str) -> list[float | None]:
 # A1 — registro por familia
 # ─────────────────────────────────────────────────────────────────────────────
 def test_a1_the_registry_declares_the_two_families() -> None:
-    """El registro expone las dos familias y la spec tecnica se construye."""
-    # #21 anade `context_v1`: el registro deja de ser solo el de esta familia
+    """El registro expone las siete familias y la spec tecnica se construye."""
+    # #21 anade `context_v1` y #159 `reversion_v1`: el registro deja de ser el de esta familia
     assert sorted(store.CATALOG_BY_FEATURE_SET) == [
         "commodities_v1",
         "context_v1",
         "macro_v1",
         "regime_v1",
+        "reversion_v1",
         "technical_v1",
         "volatility_v1",
     ]
