@@ -213,11 +213,21 @@ if p is not None:
 # ORIGEN (sin overlay) = la recomendacion del modelo, la que el sistema REGISTRA y mide (Fase 4).
 # FINAL (con overlay)  = la que resulta de aplicar el veto/ajuste del NewsAgent; informativa, es
 # la que ejecuta el operador. Se muestran **las dos**, siempre, aunque el overlay no haya actuado.
+def num(value):
+    """Número corto para la prosa del informe; `None` se declara, nunca se rellena con 0."""
+    if value is None:
+        return "null"
+    try:
+        return f"{float(value):.2f}".rstrip("0").rstrip(".")
+    except (TypeError, ValueError):
+        return str(value)
+
 overlay_state = d.get("llm_overlay")
 overlay_decision = "= origen (sin señal de overlay registrada)"
 overlay_prob = None
 overlay_reason = None
 overlay_reasons = None
+tilt = None
 overlay_file = pathlib.Path("journal/agent_signals") / f"{session}__news.json"
 if overlay_file.exists():
     o = json.loads(overlay_file.read_text(encoding="utf-8"))
@@ -227,6 +237,8 @@ if overlay_file.exists():
     overlay_reason = o.get("veto_reason")
     # Los motivos del estado (p. ej. por qué quedó `disabled_error`), sin inventar ninguno.
     overlay_reasons = ev.get("reasons")
+    # `.get` y no `[...]`: las filas escritas antes de #161 no tienen la clave.
+    tilt = ev.get("tilt") if isinstance(ev.get("tilt"), dict) else None
     odir = ev.get("direction")
     if odir == "nothing":
         overlay_decision = "NOTHING (veto del overlay)" if o.get("veto") else "NOTHING"
@@ -235,10 +247,13 @@ if overlay_file.exists():
     else:
         overlay_decision = "NOTHING"
 
+# El bloqueo que explica la decision de origen, dentro del bloque donde se decide.
+bloqueos = [ln for ln in text.splitlines() if ln.startswith("bloqueo:")]
+
 print()
 print(f"  Estado del informe ......... {status}")
 print()
-print("  ── Las dos decisiones ──")
+print("  ── Las dos decisiones (eje 1: estado y veto del overlay) ──")
 print(f"  Recomendación de origen (sin overlay)  {decision}")
 print(f"  Decisión final (con overlay)           {overlay_decision}")
 print(f"     · estado del overlay ..... {show_raw(overlay_state)}")
@@ -248,8 +263,54 @@ if overlay_reason:
 elif overlay_reasons:
     # Estado sin veto (típicamente `disabled_*`): se declara el motivo, no se maquilla.
     print("     · motivos del overlay .... " + "; ".join(str(r) for r in overlay_reasons))
+for line in bloqueos:
+    print(f"  {line}")
 print("     (la fila que se registra y mide la Fase 4 es la de ORIGEN (sin overlay), §19.19;")
 print("      la decisión final con overlay es informativa: la ejecuta el operador)")
+
+# ── Eje 2: el sesgo del lote (#161) ──
+# Es aritmética sobre la tabla declarada `ADJUSTMENT_BY_MAGNITUDE`, no una predicción: por eso
+# se imprime aparte del estado/veto y con la valla de honestidad en la misma línea de cabecera.
+print()
+print("  ── Las dos decisiones (eje 2: sesgo del lote, tilt) ──")
+print("  descripción del lote en una escala declarada — no una previsión ni una señal de edge.")
+if tilt is None:
+    print("  sin tilt: no hay lote que describir (capa desactivada o señal sin sesgo registrado).")
+else:
+    weighted = tilt.get("weighted") or {}
+    horizon = tilt.get("horizon") or {}
+    consenso = tilt.get("consensus")
+    print(f"     · estado del overlay ..... {show_raw(overlay_state)}")
+    print(
+        f"     · side={tilt.get('side')}  net_pct={num(tilt.get('net_pct'))}"
+        f"  ratio={num(tilt.get('ratio'))}"
+        f"  consensus={'null' if consenso is None else num(consenso)}"
+    )
+    print(
+        "     · composición (peso bruto, neutrales incluidos) ..... "
+        f"bullish={num(weighted.get('bullish'))}  bearish={num(weighted.get('bearish'))}"
+        f"  neutral={num(weighted.get('neutral'))}"
+    )
+    print(
+        f"     · horizonte .............. intraday={horizon.get('intraday', 0)}"
+        f"  days={horizon.get('days', 0)}"
+    )
+    print(
+        f"     · eventos ................ n_events={tilt.get('n_events')}"
+        f"  n_neutral={tilt.get('n_neutral')}"
+        f"  capped_events={tilt.get('capped_events')}"
+    )
+    if tilt.get("clamped"):
+        print("     · recortado .............. sí: |net_pct| > 10 pp, el ajuste se aplica acotado")
+    dominante = tilt.get("dominant")
+    if isinstance(dominante, dict):
+        print(
+            "     · dominant (evento dominante) .... "
+            f"{dominante.get('event_type')}/{dominante.get('sentiment')}/"
+            f"{dominante.get('magnitude')}: {dominante.get('rationale')}"
+        )
+    else:
+        print("     · dominant (evento dominante) .... null")
 print()
 print(f"  p(up) calibrada ............ {'null' if p is None else f'{p:.4f}'}")
 print(f"  p a favor del lado ......... {'null' if fav is None else f'{fav:.4f}'}   (p si p>=0.50, 1-p si no)")
@@ -274,7 +335,7 @@ print(f"  Apalancamiento implícito ... {show_raw(d.get('leverage_implied'))}")
 print(f"  Overlay de noticias ........ {show_raw(d.get('llm_overlay'))}")
 
 lines = [ln for ln in text.splitlines()
-         if ln.startswith(("redaccion:", "redaccion_modelo:", "motivo:", "bloqueo:", "contra_argumento:"))]
+         if ln.startswith(("redaccion:", "redaccion_modelo:", "motivo:", "contra_argumento:"))]
 if lines:
     print()
     print("  ── Redacción y contra-argumentos ──")

@@ -15,15 +15,19 @@ import pytest
 from pydantic import ValidationError
 
 from cfdtrader.agents.news import NewsEvent, NewsExtraction
+from cfdtrader.decision import overlay as overlay_module
 from cfdtrader.decision.overlay import (
     ADJUSTMENT_BY_MAGNITUDE,
     MAX_ADJUSTMENT_PCT,
+    TILT_DEADBAND_PCT,
     VETO_MIN_CONFIDENCE,
     OverlayDecision,
     OverlayState,
+    OverlayTilt,
     apply_overlay,
     disabled_overlay,
     overlay_from_extraction,
+    tilt_from_events,
     vetoes,
 )
 from cfdtrader.journal.decision_log import LLM_OVERLAYS
@@ -32,25 +36,53 @@ REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[1]
 MODULE: Final[Path] = REPO_ROOT / "src" / "cfdtrader" / "decision" / "overlay.py"
 PROMPT_HASH: Final[str] = "sha256:" + "a" * 64
 
+#: Las once claves que publica el sesgo del lote (#161), en el orden del contrato.
+TILT_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "net_pct",
+        "clamped",
+        "ratio",
+        "side",
+        "weighted",
+        "n_events",
+        "n_neutral",
+        "consensus",
+        "horizon",
+        "dominant",
+        "capped_events",
+    }
+)
+
 
 def _event(
-    *, magnitude: str = "low", sentiment: str = "bullish", confidence: float = 0.5
+    *,
+    magnitude: str = "low",
+    sentiment: str = "bullish",
+    confidence: float = 0.5,
+    event_type: str = "monetary_policy",
+    horizon: str = "intraday",
+    rationale: str = "una frase de prueba",
 ) -> NewsEvent:
     return NewsEvent.model_validate(
         {
             "headline_hash": "sha256:" + "b" * 64,
-            "event_type": "monetary_policy",
+            "event_type": event_type,
             "sentiment": sentiment,
             "magnitude": magnitude,
             "confidence": confidence,
-            "horizon": "intraday",
-            "rationale": "una frase de prueba",
+            "horizon": horizon,
+            "rationale": rationale,
         }
     )
 
 
-def _extraction(*events: NewsEvent) -> NewsExtraction:
-    return NewsExtraction(events=events, prompt_hash=PROMPT_HASH, model="modelo-de-prueba")
+def _extraction(*events: NewsEvent, capped_events: int = 0) -> NewsExtraction:
+    return NewsExtraction(
+        events=events,
+        prompt_hash=PROMPT_HASH,
+        model="modelo-de-prueba",
+        capped_events=capped_events,
+    )
 
 
 def _imported_modules(tree: ast.Module) -> set[str]:
@@ -76,10 +108,20 @@ def test_a1_the_module_and_its_type_exist() -> None:
         "adjustment_pct",
         "reasons",
         "prompt_hash",
+        "tilt",
     }
 
     with pytest.raises(ValidationError):
         OverlayDecision.model_validate({"state": "applied", "campo_de_mas": 1})
+
+    # El sesgo del lote (#161): un tipo congelado y cerrado con exactamente once campos.
+    assert OverlayTilt.model_config.get("frozen") is True
+    assert OverlayTilt.model_config.get("extra") == "forbid"
+    assert set(OverlayTilt.model_fields) == TILT_FIELDS
+    assert {"OverlayTilt", "tilt_from_events"} <= set(overlay_module.__all__)
+
+    with pytest.raises(ValidationError):
+        OverlayTilt.model_validate({**tilt_from_events(()).model_dump(), "campo_de_mas": 1})
 
 
 def test_a1_the_vocabulary_is_the_one_39_declared() -> None:
@@ -220,3 +262,141 @@ def test_disabled_overlay_only_accepts_disabled_states() -> None:
     for state in (OverlayState.APPLIED, OverlayState.VETO):
         with pytest.raises(ValueError, match="no es un estado desactivado"):
             disabled_overlay(state)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# El sesgo del lote (#161): aritmética declarada, sin autoridad sobre la decisión
+# ─────────────────────────────────────────────────────────────────────────────
+def test_tilt_clamped_marks_the_recorte_without_changing_the_ceiling() -> None:
+    """Seis ``high`` alcistas: ``net_pct`` 60 sin recortar, ajuste recortado a +10 pp."""
+    up = overlay_from_extraction(_extraction(*[_event(magnitude="high") for _ in range(6)]))
+    assert up.tilt is not None
+    assert up.tilt.net_pct == pytest.approx(60.0)
+    assert up.tilt.clamped is True
+    assert up.adjustment_pct == MAX_ADJUSTMENT_PCT
+
+    down = overlay_from_extraction(
+        _extraction(*[_event(magnitude="high", sentiment="bearish") for _ in range(6)])
+    )
+    assert down.tilt is not None
+    assert down.tilt.net_pct == pytest.approx(-60.0)
+    assert down.tilt.clamped is True
+    assert down.adjustment_pct == -MAX_ADJUSTMENT_PCT
+
+    flat = overlay_from_extraction(
+        _extraction(_event(magnitude="high"), _event(magnitude="high", sentiment="bearish"))
+    )
+    assert flat.tilt is not None
+    assert flat.tilt.net_pct == pytest.approx(0.0)
+    assert flat.tilt.clamped is False
+    assert flat.adjustment_pct == 0.0
+
+
+def test_tilt_composition_counts_the_neutrals_in_the_gross_weight() -> None:
+    """``low bullish, low bullish, low bearish, low neutral``: ratio 0,25 y consenso 0,5."""
+    tilt = tilt_from_events(
+        (
+            _event(),
+            _event(),
+            _event(sentiment="bearish"),
+            _event(sentiment="neutral"),
+        )
+    )
+    assert tilt.net_pct == pytest.approx(2.5)
+    assert tilt.ratio == pytest.approx(0.25)
+    assert tilt.weighted == {"bullish": 5.0, "bearish": 2.5, "neutral": 2.5}
+    assert tilt.consensus == pytest.approx(0.5)
+    assert tilt.n_events == 4
+    assert tilt.n_neutral == 1
+    assert tilt.side == "neutral", "la banda muerta es inclusiva: 2,5 no declara lado"
+
+
+def test_tilt_deadband_is_inclusive_and_anchored_to_the_low_magnitude() -> None:
+    assert TILT_DEADBAND_PCT == ADJUSTMENT_BY_MAGNITUDE["low"] == 2.5
+
+    mixed = tilt_from_events((_event(), _event(sentiment="bearish")))
+    assert mixed.net_pct == pytest.approx(0.0)
+    assert mixed.side == "neutral"
+
+    one_low = tilt_from_events((_event(),))
+    assert one_low.net_pct == pytest.approx(TILT_DEADBAND_PCT)
+    assert one_low.side == "neutral", "un único titular de magnitud baja no puede declarar lado"
+
+    two_up = tilt_from_events((_event(), _event()))
+    assert two_up.net_pct == pytest.approx(5.0)
+    assert two_up.side == "long"
+
+    two_down = tilt_from_events((_event(sentiment="bearish"), _event(sentiment="bearish")))
+    assert two_down.net_pct == pytest.approx(-5.0)
+    assert two_down.side == "short"
+
+
+def test_tilt_empty_declares_the_lote_vacio_without_inventing_numbers() -> None:
+    tilt = tilt_from_events(())
+    assert tilt.net_pct == 0.0
+    assert tilt.clamped is False
+    assert tilt.ratio == 0.0
+    assert tilt.side == "neutral"
+    assert tilt.weighted == {"bullish": 0.0, "bearish": 0.0, "neutral": 0.0}
+    assert tilt.n_events == 0
+    assert tilt.n_neutral == 0
+    assert tilt.consensus is None
+    assert tilt.horizon == {"intraday": 0, "days": 0}
+    assert tilt.dominant is None
+    assert tilt.capped_events == 0
+
+
+def test_tilt_horizon_and_dominant_are_read_from_the_batch() -> None:
+    first_high = _event(
+        magnitude="high",
+        event_type="inflation",
+        horizon="intraday",
+        rationale="el primero de los dos altos",
+    )
+    second_high = _event(
+        magnitude="high",
+        sentiment="bearish",
+        event_type="geopolitics",
+        horizon="days",
+        rationale="el segundo de los dos altos",
+    )
+    tilt = tilt_from_events((_event(magnitude="medium", horizon="days"), first_high, second_high))
+
+    assert tilt.horizon == {"intraday": 1, "days": 2}
+    assert tilt.dominant is not None
+    assert tilt.dominant.event_type.value == "inflation"
+    assert tilt.dominant.sentiment.value == "bullish"
+    assert tilt.dominant.magnitude.value == "high"
+    assert tilt.dominant.rationale == "el primero de los dos altos", "en un empate gana el primero"
+
+
+def test_tilt_in_veto_is_still_published() -> None:
+    """El overlay vetado **también** publica su sesgo: son dos ejes distintos (#161)."""
+    decision = overlay_from_extraction(
+        _extraction(
+            _event(magnitude="high", sentiment="bearish", confidence=0.9),
+            _event(magnitude="high", sentiment="bearish", confidence=0.9),
+        )
+    )
+    assert decision.state is OverlayState.VETO
+    assert decision.adjustment_pct == 0.0
+    assert decision.tilt is not None
+    assert decision.tilt.net_pct == pytest.approx(-20.0)
+    assert decision.tilt.clamped is True
+    assert decision.tilt.side == "short"
+    assert decision.tilt.n_events == 2
+
+    capped = overlay_from_extraction(_extraction(_event(magnitude="medium"), capped_events=3))
+    assert capped.tilt is not None
+    assert capped.tilt.capped_events == 3
+
+
+def test_tilt_disabled_leaves_no_tilt_at_all() -> None:
+    for state in (
+        OverlayState.DISABLED_BUDGET,
+        OverlayState.DISABLED_ERROR,
+        OverlayState.DISABLED_TIMEOUT,
+    ):
+        assert disabled_overlay(state).tilt is None, "sin extracción no hay lote que describir"
+
+    assert overlay_from_extraction(_extraction()).tilt is not None

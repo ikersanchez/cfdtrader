@@ -70,7 +70,12 @@ from cfdtrader.data.sources.fred_adapter import MacroSeriesRegistry, MacroSeries
 from cfdtrader.data.sources.news import Headline
 from cfdtrader.data.store import Store
 from cfdtrader.decision.gate import GateOutput, GateStatus, evaluate_gate, gate_sha256
-from cfdtrader.decision.overlay import OverlayDecision, OverlayState, disabled_overlay
+from cfdtrader.decision.overlay import (
+    OverlayDecision,
+    OverlayState,
+    disabled_overlay,
+    tilt_from_events,
+)
 from cfdtrader.delivery import bracket, production, run_daily
 from cfdtrader.features import store as feature_store
 from cfdtrader.features.store import FEATURE_VERSION_PREFIX
@@ -189,6 +194,7 @@ FROZEN: Final[frozenset[str]] = frozenset(
 #: La guardia de calidad de fila del modulo, por su nombre, para la prueba directa.
 _ROW_PROBLEM = run_daily._row_problem  # pyright: ignore[reportPrivateUsage]
 _PREDICTIONS = run_daily._predictions  # pyright: ignore[reportPrivateUsage]
+_RECORD_OVERLAY_SIGNAL = run_daily._record_overlay_signal  # pyright: ignore[reportPrivateUsage]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1126,6 +1132,70 @@ def test_the_overlay_variant_is_recorded_even_when_it_could_not_act(
     assert signal["veto"] is False
 
 
+#: Las once claves del sesgo del lote (#161).
+TILT_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "net_pct",
+        "clamped",
+        "ratio",
+        "side",
+        "weighted",
+        "n_events",
+        "n_neutral",
+        "consensus",
+        "horizon",
+        "dominant",
+        "capped_events",
+    }
+)
+
+
+def test_a9_the_tilt_signal_is_published_beside_the_gate_direction(tmp_path: Path) -> None:
+    """El sesgo del lote viaja en `evidence.tilt` y la dirección del gate se conserva (#161).
+
+    `evidence.direction` sigue existiendo —la lee `_overlay_directions` (#150)— y gana su nombre
+    explícito, `gate_direction_with_overlay`, con **el mismo valor**: dos nombres para el mismo
+    hecho, ninguno inventado por el sesgo.
+    """
+    journal_root = tmp_path / "journal"
+    output = _gate_output(measured=True, probability=0.62)
+    overlay = OverlayDecision(
+        state=OverlayState.APPLIED,
+        adjustment_pct=2.5,
+        tilt=tilt_from_events(()),
+    )
+
+    _RECORD_OVERLAY_SIGNAL(journal_root, session=NEXT_SESSION, overlay=overlay, output=output)
+
+    signal = Journal(journal_root).read(
+        "agent_signals", {"trade_date": NEXT_SESSION.isoformat(), "agent": "news"}
+    )
+    evidence = cast("Mapping[str, object]", signal["evidence"])
+    published = cast("Mapping[str, object]", evidence["tilt"])
+    assert set(published) == TILT_FIELDS
+    assert published["n_events"] == 0
+    assert published["side"] == "neutral"
+    assert output.direction is not None
+    assert evidence["direction"] == output.direction.value
+    assert evidence["gate_direction_with_overlay"] == evidence["direction"]
+
+
+def test_a9_the_tilt_signal_is_null_when_the_overlay_is_disabled(tmp_path: Path) -> None:
+    """`disabled_*` es el único caso con `tilt = None`: no hubo lote que describir (#161)."""
+    journal_root = tmp_path / "journal"
+    output = _gate_output(measured=True, probability=0.62)
+    overlay = disabled_overlay(OverlayState.DISABLED_BUDGET, reasons=("presupuesto agotado",))
+
+    _RECORD_OVERLAY_SIGNAL(journal_root, session=NEXT_SESSION, overlay=overlay, output=output)
+
+    signal = Journal(journal_root).read(
+        "agent_signals", {"trade_date": NEXT_SESSION.isoformat(), "agent": "news"}
+    )
+    evidence = cast("Mapping[str, object]", signal["evidence"])
+    assert evidence["tilt"] is None
+    assert evidence["gate_direction_with_overlay"] == evidence["direction"]
+
+
 def test_a8_without_news_the_recommendation_still_comes_out(
     store_root: Path,
     runs_root: Path,
@@ -1148,6 +1218,15 @@ def test_a8_without_news_the_recommendation_still_comes_out(
     assert "estado: recommendation" in captured.out
     row = _journal_row(journal_root)
     assert row["llm_overlay"] == "applied", "sin noticias no hay nada que vetar"
+
+    # La rama temprana «sin titulares» también publica su sesgo (#161): lote vacío, no `None`.
+    signal = Journal(journal_root).read(
+        "agent_signals", {"trade_date": NEXT_SESSION.isoformat(), "agent": "news"}
+    )
+    evidence = cast("Mapping[str, object]", signal["evidence"])
+    empty_tilt = cast("Mapping[str, object]", evidence["tilt"])
+    assert empty_tilt["n_events"] == 0
+    assert empty_tilt["side"] == "neutral"
     assert row["prompt_hashes"] == {}, "sin llamada no hay hash de prompt que registrar"
 
 

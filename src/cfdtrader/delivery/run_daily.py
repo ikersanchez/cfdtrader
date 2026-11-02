@@ -174,6 +174,7 @@ from cfdtrader.decision.overlay import (
     OverlayState,
     disabled_overlay,
     overlay_from_extraction,
+    tilt_from_events,
 )
 from cfdtrader.decision.premarket import PremarketDecision, PremarketError
 from cfdtrader.delivery.staleness import (
@@ -1100,7 +1101,11 @@ def _compute_overlay(
         if not prepared:
             return (
                 OverlayDecision(
-                    state=OverlayState.APPLIED, reasons=("sin titulares en la ventana",)
+                    state=OverlayState.APPLIED,
+                    reasons=("sin titulares en la ventana",),
+                    # El lote vacio tambien tiene sesgo declarado (#161): `applied` con
+                    # `tilt=None` se leeria como si el overlay no hubiera mirado el lote.
+                    tilt=tilt_from_events(()),
                 ),
                 {},
                 _headline_counters(counts, sent=0),
@@ -1218,6 +1223,7 @@ def _record_overlay_signal(
     la linea «con overlay».
     """
     veto = overlay.state is OverlayState.VETO
+    gate_direction = None if output.direction is None else output.direction.value
     Journal(journal_root).write(
         "agent_signals",
         {
@@ -1230,10 +1236,17 @@ def _record_overlay_signal(
             "evidence": {
                 "state": overlay.state.value,
                 "adjustment_pct": overlay.adjustment_pct,
-                "direction": None if output.direction is None else output.direction.value,
+                "direction": gate_direction,
+                # El mismo valor, con el nombre que lo hace explicito (#161): la direccion del
+                # gate **con** overlay. `direction` se conserva porque `_overlay_directions` y
+                # el registro prospectivo de la Fase 4 ya la leen con ese nombre.
+                "gate_direction_with_overlay": gate_direction,
                 "status": output.status.value,
                 "reasons": list(overlay.reasons),
                 "prompt_hash": overlay.prompt_hash,
+                # El sesgo del lote viaja como **descripcion del lote**, no como decision: el
+                # gate, `blocking_events` y la fila medida siguen sin overlay (§19.19, #161).
+                "tilt": None if overlay.tilt is None else overlay.tilt.model_dump(mode="json"),
             },
         },
     )

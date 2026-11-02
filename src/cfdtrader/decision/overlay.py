@@ -34,21 +34,32 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from enum import StrEnum
-from typing import Final
+from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from cfdtrader.agents.news import Magnitude, NewsEvent, NewsExtraction, Sentiment
+from cfdtrader.agents.news import (
+    EventType,
+    Horizon,
+    Magnitude,
+    NewsEvent,
+    NewsExtraction,
+    Sentiment,
+)
 
 __all__ = [
     "ADJUSTMENT_BY_MAGNITUDE",
     "MAX_ADJUSTMENT_PCT",
+    "TILT_DEADBAND_PCT",
     "VETO_MIN_CONFIDENCE",
     "OverlayDecision",
     "OverlayState",
+    "OverlayTilt",
+    "OverlayTiltEvent",
     "apply_overlay",
     "disabled_overlay",
     "overlay_from_extraction",
+    "tilt_from_events",
     "vetoes",
 ]
 
@@ -66,6 +77,12 @@ ADJUSTMENT_BY_MAGNITUDE: Final[dict[str, float]] = {
 #: Confianza mínima para que un evento de magnitud alta vete la sesión.
 VETO_MIN_CONFIDENCE: Final[float] = 0.8
 
+#: Banda muerta del sesgo (#161), en puntos porcentuales y **inclusiva**: por debajo o igual a
+#: ella el lado es ``neutral``. Se ancla a la magnitud baja para que un único titular de magnitud
+#: baja **no** pueda declarar lado, que es la razón declarada de la banda (#161 la enmendó de
+#: ``<`` a ``<=``); si ``ADJUSTMENT_BY_MAGNITUDE`` cambia, la banda se mueve con ella.
+TILT_DEADBAND_PCT: Final[float] = ADJUSTMENT_BY_MAGNITUDE[Magnitude.LOW.value]
+
 
 class OverlayState(StrEnum):
     """Los cinco estados de §12.5, declarados por #39. Aquí no se inventa ningún vocabulario."""
@@ -75,6 +92,62 @@ class OverlayState(StrEnum):
     DISABLED_BUDGET = "disabled_budget"
     DISABLED_ERROR = "disabled_error"
     DISABLED_TIMEOUT = "disabled_timeout"
+
+
+class OverlayTiltEvent(BaseModel):
+    """El evento que más pesa en el lote: la evidencia legible del sesgo.
+
+    Se copian **solo** los campos que se publican (``event_type``, ``sentiment``, ``magnitude`` y
+    ``rationale``), no el ``headline_hash`` ni la confianza: el tilt describe el lote, no el
+    proceso que lo extrajo.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    event_type: EventType
+    sentiment: Sentiment
+    magnitude: Magnitude
+    rationale: str = Field(min_length=1)
+
+
+class OverlayTilt(BaseModel):
+    """El sesgo direccional del lote como **descripción del lote en una escala declarada**.
+
+    Es la aritmética de ``ADJUSTMENT_BY_MAGNITUDE`` (una tabla del propietario) aplicada a lo que
+    el LLM declaró: no una previsión ni una señal de edge, y sin autoridad sobre la decisión. El
+    gate, el veto y la fila medida de ``journal.decisions`` siguen sin overlay (§19.19); este
+    objeto existe para poder auditar el lote sin darle un número que el modelo no calculó (§4.9).
+
+    ``net_pct`` es la suma **sin recortar** (el recorte a ±10 pp vive en ``adjustment_pct`` y en
+    ``clamped``); ``weighted`` incluye los neutrales, que pesan en el denominador aunque no
+    empujen en ninguna dirección; por eso ``ratio`` y ``consensus`` se miden contra el peso bruto.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    net_pct: float = Field(description="suma con signo, sin recortar, en puntos porcentuales")
+    clamped: bool = Field(description="si el recorte a ±10 pp muerde, es decir |net_pct| > 10")
+    ratio: float = Field(description="net_pct / peso bruto; 0.0 si el lote esta vacio")
+    side: Literal["long", "short", "neutral"] = Field(
+        description="lado declarado por el lote, con la banda muerta inclusiva"
+    )
+    weighted: dict[str, float] = Field(
+        description="peso por sentimiento, con las claves exactas bullish/bearish/neutral"
+    )
+    n_events: int = Field(ge=0, description="eventos del lote, neutrales incluidos")
+    n_neutral: int = Field(ge=0, description="eventos neutrales del lote")
+    consensus: float | None = Field(
+        default=None, description="mayor peso / peso bruto; None si el lote esta vacio"
+    )
+    horizon: dict[str, int] = Field(
+        description="eventos por horizonte, con las claves exactas intraday/days"
+    )
+    dominant: OverlayTiltEvent | None = Field(
+        default=None, description="evento de mayor peso (empate: el primero del lote)"
+    )
+    capped_events: int = Field(
+        default=0, ge=0, description="eventos acotados por venir de un titular sospechoso (#115)"
+    )
 
 
 class OverlayDecision(BaseModel):
@@ -94,6 +167,66 @@ class OverlayDecision(BaseModel):
     prompt_hash: str | None = Field(
         default=None, description="hash del prompt que produjo los eventos; lo persiste el diario"
     )
+    tilt: OverlayTilt | None = Field(
+        default=None,
+        description=(
+            "sesgo del lote segun la tabla declarada (#161); ``None`` solo si el overlay esta "
+            "desactivado (``disabled_*``)"
+        ),
+    )
+
+
+def tilt_from_events(events: Sequence[NewsEvent], *, capped_events: int = 0) -> OverlayTilt:
+    """El sesgo del lote: pura aritmética sobre la tabla declarada, sin recortar.
+
+    ``net_pct`` suma ``ADJUSTMENT_BY_MAGNITUDE`` con signo por sentimiento (``neutral`` aporta 0)
+    y **no** se recorta: el recorte es del ajuste, y ``clamped`` declara si muerde. El peso bruto
+    —el denominador de ``ratio`` y ``consensus``— sí incluye los neutrales, para que un lote
+    tibio no parezca unánime. Función pura: no lee el reloj, no toca el disco y no depende del
+    proveedor.
+    """
+    weighted: dict[str, float] = {
+        Sentiment.BULLISH.value: 0.0,
+        Sentiment.BEARISH.value: 0.0,
+        Sentiment.NEUTRAL.value: 0.0,
+    }
+    horizon: dict[str, int] = {Horizon.INTRADAY.value: 0, Horizon.DAYS.value: 0}
+    net_pct = 0.0
+    for event in events:
+        weight = ADJUSTMENT_BY_MAGNITUDE[event.magnitude.value]
+        weighted[event.sentiment.value] += weight
+        horizon[event.horizon.value] += 1
+        net_pct += _contribution(event)
+    gross_weight = sum(weighted.values())
+    dominant: OverlayTiltEvent | None = None
+    if events:
+        heaviest = max(events, key=lambda event: ADJUSTMENT_BY_MAGNITUDE[event.magnitude.value])
+        dominant = OverlayTiltEvent(
+            event_type=heaviest.event_type,
+            sentiment=heaviest.sentiment,
+            magnitude=heaviest.magnitude,
+            rationale=heaviest.rationale,
+        )
+    return OverlayTilt(
+        net_pct=net_pct,
+        clamped=abs(net_pct) > MAX_ADJUSTMENT_PCT,
+        ratio=0.0 if gross_weight == 0 else net_pct / gross_weight,
+        side=_tilt_side(net_pct),
+        weighted=weighted,
+        n_events=len(events),
+        n_neutral=sum(1 for event in events if event.sentiment is Sentiment.NEUTRAL),
+        consensus=None if gross_weight == 0 else max(weighted.values()) / gross_weight,
+        horizon=horizon,
+        dominant=dominant,
+        capped_events=capped_events,
+    )
+
+
+def _tilt_side(net_pct: float) -> Literal["long", "short", "neutral"]:
+    """El lado declarado por el lote, con la banda muerta **inclusiva** (#161)."""
+    if abs(net_pct) <= TILT_DEADBAND_PCT:
+        return "neutral"
+    return "long" if net_pct > 0 else "short"
 
 
 def _contribution(event: NewsEvent) -> float:
@@ -123,6 +256,10 @@ def overlay_from_extraction(
     events = extraction.events
     chosen = extraction.prompt_hash if prompt_hash is None else prompt_hash
     vetoing = tuple(event for event in events if _is_vetoing(event))
+    # El sesgo se calcula **siempre**, tambien cuando el overlay veta (#161): la variante «con
+    # overlay» del diario declara el lote aunque su efecto sea NOTHING, y el informe puede
+    # mostrar los dos ejes por separado (estado/veto y tilt).
+    tilt = tilt_from_events(events, capped_events=extraction.capped_events)
     if vetoing:
         return OverlayDecision(
             state=OverlayState.VETO,
@@ -132,6 +269,7 @@ def overlay_from_extraction(
                 for event in vetoing
             ),
             prompt_hash=chosen,
+            tilt=tilt,
         )
     total = sum(_contribution(event) for event in events)
     return OverlayDecision(
@@ -139,13 +277,18 @@ def overlay_from_extraction(
         adjustment_pct=max(-MAX_ADJUSTMENT_PCT, min(MAX_ADJUSTMENT_PCT, total)),
         reasons=tuple(f"{event.event_type.value}/{event.sentiment.value}" for event in events),
         prompt_hash=chosen,
+        tilt=tilt,
     )
 
 
 def disabled_overlay(
     state: OverlayState, *, reasons: Sequence[str] = (), prompt_hash: str | None = None
 ) -> OverlayDecision:
-    """Una decisión **desactivada**: ajuste 0 y motivo. El pipeline sigue sin overlay."""
+    """Una decisión **desactivada**: ajuste 0 y motivo. El pipeline sigue sin overlay.
+
+    ``tilt`` queda ``None`` y **no** se rellena con un lote vacío: sin extracción no hay lote que
+    describir, y publicar ceros fingiría una medición que no existió (#161).
+    """
     if state is OverlayState.APPLIED or state is OverlayState.VETO:
         raise ValueError(f"disabled_overlay: {state.value!r} no es un estado desactivado")
     return OverlayDecision(
