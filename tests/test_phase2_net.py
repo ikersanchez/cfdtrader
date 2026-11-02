@@ -120,6 +120,11 @@ RETIRED_BY_LATER_DELIVERIES: Final[frozenset[str]] = frozenset(
         # #148 (entrega posterior) anade el dato **declarado** del pre-mercado del ES en
         # `decision/`: es posterior a esta entrega y no toca este modulo, el mismo criterio.
         "src/cfdtrader/decision/premarket.py",
+        # #161 (entrega posterior) publica el sesgo del lote (tilt) en `OverlayDecision`: toca
+        # `decision/overlay.py`, no el gate ni el camino diario, y no altera este informe. Sin
+        # esta acotacion la guarda leeria ese cambio legitimo como «esta entrega toco el
+        # camino diario», el mismo criterio que #137/#108/#113.
+        "src/cfdtrader/decision/overlay.py",
     }
 )
 
