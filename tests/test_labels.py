@@ -1588,35 +1588,108 @@ def test_the_run_declares_the_follow_up_issues_of_the_limitations(run: LabelsRun
 REPOSITORY_DATA = Path(__file__).resolve().parents[1] / "data"
 
 
+def _live_intraday_counts(store: Store) -> dict[str, object]:
+    """Recuentos del intradia **vivo**, recomputados de `raw` en la misma corrida (#163).
+
+    No es una segunda implementacion de la cobertura: es la lectura independiente contra la que
+    se contrasta la que publica el informe, para que el test no fije un total que caduque con la
+    proxima ingesta (`_docs/process.md`, «Regeneration after an ingest», regla 1).
+    """
+    frame = store.sql(
+        "SELECT count(*) AS bars, "  # noqa: S608 - `SERIES_ID` es una constante del test
+        "count(DISTINCT (as_of AT TIME ZONE 'America/New_York')::date) AS sessions, "
+        "min(as_of) AS first, max(as_of) AS last "
+        "FROM raw.market_intraday "
+        f"WHERE series_id = '{SERIES_ID}' AND interval = '5m' "
+        "AND open IS NOT NULL AND high IS NOT NULL AND low IS NOT NULL AND close IS NOT NULL"
+    )
+    row = frame.row(0, named=True)
+    return {
+        "bars": int(str(row["bars"])),
+        "sessions": int(str(row["sessions"])),
+        "first": cast("datetime", row["first"]),
+        "last": cast("datetime", row["last"]),
+    }
+
+
+def _live_daily_sessions(store: Store) -> int:
+    """Sesiones diarias de la serie en `raw.market_daily` (recuento vivo, no un literal)."""
+    frame = store.sql(
+        "SELECT count(*) AS sessions FROM raw.market_daily "  # noqa: S608 - constante del test
+        f"WHERE series_id = '{SERIES_ID}'"
+    )
+    return int(str(frame.get_column("sessions").to_list()[0]))
+
+
 @pytest.mark.skipif(
     not (REPOSITORY_DATA / "raw" / "market_daily").is_dir(),
     reason="no hay almacen real en data/ (es gitignored)",
 )
 def test_the_real_store_reproduces_the_declared_coverage() -> None:
-    """A17/A33 sobre el almacen real, **sin escribir nada** (solo lectura)."""
-    result = label_history(store=Store(REPOSITORY_DATA), now=datetime(2026, 9, 18, tzinfo=UTC))
+    """A17/A33 sobre el almacen real, **sin escribir nada** (solo lectura).
+
+    Los recuentos del almacen **vivo** no se fijan (#135, `_docs/process.md` regla 1): el test
+    comprueba las **identidades** que publica el informe y, cuando necesita un numero, lo
+    recomputa del propio almacen en la misma corrida.
+    """
+    store = Store(REPOSITORY_DATA)
+    result = label_history(store=store, now=datetime(2026, 9, 18, tzinfo=UTC))
     coverage = _dict(result.inputs["intraday_coverage"])
     sigma = _dict(result.inputs["sigma"])
-    # Recuentos del almacen **vivo**: avanzan con cada ingesta posterior al ultimo refresco
-    # declarado (#45, 2026-10-05, ver #135) y se re-baselinan aqui con el de **2026-10-10**
-    # (re-ingesta de #151: +1 sesion diaria e intradia con el cierre por mercado).
-    assert _number(coverage["sessions"]) == 76
-    assert "2026-06-24" in str(coverage["first_bar_utc"])
+    sample = result.sample
+    reasons = _dict(sample["reasons"])
+    clean = _dict(result.inputs["clean_sample"])
+
+    # Identidad del intradia: las sesiones etiquetadas son las ordenadas con intradia mas las
+    # que caen al respaldo diario. Es del informe, no un total de la muestra viva.
+    labelled = _number(sample["labelled"])
+    with_intraday = _number(coverage["ordered_with_intraday"])
+    with_fallback = _number(coverage["ordered_with_fallback"])
+    assert labelled > 0
+    assert labelled == with_intraday + with_fallback
+    assert _number(coverage["fallback_share"]) == with_fallback / labelled
+
+    # Los recuentos de cobertura salen del almacen de la misma corrida, no de una constante.
+    live = _live_intraday_counts(store)
+    assert _number(coverage["sessions"]) == int(str(live["sessions"]))
+    assert _number(coverage["bars"]) == int(str(live["bars"]))
+    assert datetime.fromisoformat(str(coverage["first_bar_utc"])) == live["first"]
+    assert datetime.fromisoformat(str(coverage["last_bar_utc"])) == live["last"]
+    assert _number(coverage["stored_daily_sessions"]) == _live_daily_sessions(store)
+    # La muestra de #7 y el bloque de cobertura publican la **misma** sesion con OHLC: se exige
+    # que coincidan, en vez de re-fijar otro total del almacen vivo.
+    assert _number(clean["sessions"]) == _number(coverage["daily_sessions_with_ohlc"])
+
+    # A10: ninguna barra a las 08:45 ET. Es una invariante de la fuente, no un total que crezca.
     assert _number(coverage["bars_at_0845_et"]) == 0
-    assert _number(coverage["stored_daily_sessions"]) == 5477
-    assert _number(_dict(_dict(result.sample["reasons"])[REASON_NO_FORECAST])["count"]) == 505
+
+    # Identidad de la region: etiquetadas + no etiquetadas (con sus motivos) = sesiones de la
+    # region. Y la muestra limpia de #52 es la region sin las sesiones con el `open` repetido,
+    # asi que se cierra con los motivos que el propio informe publica.
+    unlabelled_total = _number(sample["unlabelled_total"])
+    assert _number(sample["region_sessions"]) == labelled + unlabelled_total
+    assert unlabelled_total == sum(_number(_dict(detail)["count"]) for detail in reasons.values())
+    assert _number(clean["clean_sessions"]) == labelled + sum(
+        _number(_dict(reasons[reason])["count"])
+        for reason in (
+            REASON_CALENDAR_NO_SESSION,
+            REASON_NULL_OHLC,
+            REASON_NO_FORECAST,
+            REASON_SESSION_NOT_CLOSED,
+        )
+    )
+
     assert _number(sigma["warmup_sessions"]) == MIN_TRAIN
     assert result.forecast_candidate == "garch"
-    assert 0.97 < _number(result.sample["fallback_share"]) < 0.99
-    assert _number(result.sample["labelled"]) > 2600
+    assert _number(sigma["sessions_with_forecast"]) > 0
     assert len(result.limitations) >= 7
-    # Recuento del almacen **vivo**: se actualiza con el refresco de #45 (2026-10-05, ver #135)
-    # y con la re-ingesta del 2026-10-10 de #151 (+1 sesion).
-    assert _number(_dict(result.inputs["clean_sample"])["clean_sessions"]) == 3209
-    # A6/A7 sobre el almacen real: el `open` diario **es** el *print* de la subasta.
+
+    # A6/A7 sobre el almacen real: el `open` diario **es** el *print* de la subasta. El numero
+    # de sesiones comparadas no se fija: se acota por las que tienen cobertura intradia.
     auction = _dict(_dict(report_payload(result)["entry_price"])["auction_verification"])
+    compared = _number(auction["sessions_compared"])
     assert auction["status"] == "ok"
-    assert _number(auction["sessions_compared"]) == 60
-    assert _number(auction["identical"]) == 60
+    assert 0 < compared <= with_intraday
+    assert _number(auction["identical"]) == compared
     assert _number(auction["max_abs_diff_bp"]) == 0.0
     assert auction["mismatches"] == []
