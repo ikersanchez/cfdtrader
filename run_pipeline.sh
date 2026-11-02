@@ -4,10 +4,11 @@
 #
 # Un solo comando para: ingerir, regenerar los artefactos, capturar el
 # pre-mercado del ES, emitir la pista del día, evaluar la valla de cartera,
-# publicar la tarjeta de operación, aplicar la puerta del paper y, al final,
-# imprimir el REPORTE FINAL con la decisión: (1) la publicada SIN overlay
-# (LONG/SHORT, probabilidad, corte del tier A, EV, stop/objetivo, coste, tamaño)
-# y (2) la variante CON overlay (que puede convertirla en NOTHING por veto).
+# publicar la tarjeta de operación, aplicar la puerta del paper, rellenar la
+# atribución por agente y, al final, imprimir el REPORTE FINAL con la decisión:
+# (1) la publicada SIN overlay (LONG/SHORT, probabilidad, corte del tier A, EV,
+# stop/objetivo, coste, tamaño) y (2) la variante CON overlay (que puede
+# convertirla en NOTHING por veto).
 #
 # Uso:
 #   bash run_pipeline.sh                 # pipeline completo (1ª vez / tras ingesta)
@@ -139,6 +140,10 @@ step "7/8 puerta del paper" uv run python -m cfdtrader.analysis.paper_trading \
     --reference-artifact "$R/pipeline_backtest_2026-09-23.json" \
     --reports-dir "$R" \
     --as-of "$(date -u +%Y-%m-%d)T22:00:00+00:00"
+
+# ── 7b. Atribución por agente (#162) — tilt (#161) + serie de paper (#45) ────
+step "7b/8 atribución por agente" uv run python -m cfdtrader.journal.attribution \
+    --data-root data --journal-root journal
 
 # ── 8. REPORTE FINAL DE LA DECISIÓN ──────────────────────────────────────────
 echo

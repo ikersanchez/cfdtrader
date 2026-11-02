@@ -15,15 +15,20 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - solo para el tipado estático
+    from cfdtrader.journal import attribution as attribution
     from cfdtrader.journal import decision_log as decision_log
 
-__all__ = ["decision_log"]
+__all__ = ["attribution", "decision_log"]
 
 
 def __getattr__(name: str) -> Any:
-    """Reexporta ``decision_log`` la primera vez que se pide el atributo (PEP 562)."""
+    """Reexporta los modulos del diario la primera vez que se piden (PEP 562)."""
     if name == "decision_log":
         import cfdtrader.journal.decision_log as module
+
+        return module
+    if name == "attribution":
+        import cfdtrader.journal.attribution as module
 
         return module
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -299,6 +299,25 @@ Divergencia `> 2σ` obliga a **auditar antes de operar**.
 > minoría: llegar a `N ≥ 30` es cosa de **meses**, no de semanas. Es una consecuencia
 > **pre-registrada** del diseño, no un defecto; forzar el ritmo sería mover la portería (§11.6).
 
+## 4 bis. Atribución por agente (#162)
+
+La puerta del *paper* deja la serie de resultados; la atribución la convierte en post-mortem. El
+comando rellena `journal.attribution` (`trade_date`, `agent`, `would_have_won`, `evidence`) con el
+**tilt** del overlay de noticias (#161) y el resultado de la sesión:
+
+```bash
+uv run python -m cfdtrader.journal.attribution \
+    --data-root data --journal-root journal
+```
+
+- Solo escribe sesiones con **las dos** piezas: tilt en `journal.agent_signals` y resultado
+  recomputable en la serie de *paper*. Las que no las tienen se declaran **omitidas** con su motivo.
+- El diario es *append-only*: una identidad `(trade_date, agent)` ya escrita **no se reescribe**.
+  Las filas anteriores a #161 no traen tilt y no se rellenan hacia atrás.
+- No cambia el gate, ni `journal.decisions`, ni los prompts; el tilt **no** tiene autoridad sobre
+  la recomendación (§19.19). Un tilt `neutral` deja `would_have_won = null`.
+- `--dry-run` calcula las filas y no escribe.
+
 ## Checklist de la sesión
 
 1. `git rev-parse HEAD` limpio y `uv sync` al día.
@@ -306,5 +325,6 @@ Divergencia `> 2σ` obliga a **auditar antes de operar**.
 3. Regeneración (§2) con `rc=0`.
 4. `run_daily` (§3) con `rc=0` y una fila nueva en `journal/decisions/`.
 5. `paper_trading` (§4) y lectura del `state` del veredicto.
-6. La decisión **se ejecuta a mano** (o no): el sistema **no** coloca órdenes. Con `tier B` (o un
+6. `journal.attribution` (§4 bis): rellena el post-mortem del tilt, sin reescribir filas.
+7. La decisión **se ejecuta a mano** (o no): el sistema **no** coloca órdenes. Con `tier B` (o un
    `bloqueo`), la salida es `NOTHING`.
