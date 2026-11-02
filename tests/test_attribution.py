@@ -187,6 +187,15 @@ def test_162_the_package_reexports_the_module() -> None:
     assert "attribution" in package.__all__
 
 
+def test_162_the_pipeline_runs_the_attribution_after_the_paper() -> None:
+    """El paso operativo existe y va **despues** de la puerta del paper (#162)."""
+    pipeline = (Path(__file__).resolve().parents[1] / "run_pipeline.sh").read_text(encoding="utf-8")
+
+    paper = pipeline.index("cfdtrader.analysis.paper_trading")
+    attribution_step = pipeline.index("cfdtrader.journal.attribution")
+    assert paper < attribution_step
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # El juicio por agente y la evidencia publicada
 # ─────────────────────────────────────────────────────────────────────────────
